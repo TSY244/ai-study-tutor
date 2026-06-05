@@ -1,6 +1,9 @@
 # AI 学习助教 (ai-study-tutor)
 
-一个由 AI 驱动的全链路学习工具。支持 YouTube / B站 视频链接和本地文件导入，自动生成教师教纲、学生笔记，附带 AI 出题、终端答题、错题归档、成绩统计、总结测评。
+[![Python](https://img.shields.io/badge/python-3.11+-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+AI 驱动的全链路学习工具。支持 YouTube / B站 视频链接和本地文件导入，一键生成教师教纲 + 学生笔记，附带 AI 出题、终端答题、自动判分、错题归档、成绩统计、AI 总结测评。**导入 → 笔记 → 出题 → 考试 → 批改 → 错题复习，全自动闭环。**
 
 ## 安装
 
