@@ -1,0 +1,9 @@
+openai>=1.35.0
+pydantic>=2.7.0
+pypdf>=4.2.0
+python-docx>=1.1.0
+yt-dlp>=2024.0
+SpeechRecognition>=3.10.0
+pydub>=0.25.0
+python-dotenv>=1.0.0
+pytest>=8.2.0

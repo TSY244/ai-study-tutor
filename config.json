@@ -1,0 +1,20 @@
+{
+  "ai_config": {
+    "default_provider": "deepseek",
+    "providers": {
+      "deepseek": {
+        "api_key": "替换为你的API Key",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-v4-pro"
+      }
+    },
+    "max_token": 4096
+  },
+  "default_course_path": "./course",
+  "score_rule": {
+    "choice": 2,
+    "judge": 1,
+    "short_answer": 5
+  },
+  "download_sub_only": true
+}

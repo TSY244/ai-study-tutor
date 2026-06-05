@@ -1,0 +1,36 @@
+[project]
+name = "ai-study-tutor"
+version = "0.1.0"
+description = "A local AI study tutor CLI that turns learning materials into lessons, quizzes, grading feedback, weaknesses, retests, and reports."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.35.0",
+    "pydantic>=2.7.0",
+    "pypdf>=4.2.0",
+    "python-docx>=1.1.0",
+    "yt-dlp>=2024.0",
+    "SpeechRecognition>=3.10.0",
+    "pydub>=0.25.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+exclude = ["materials*", "workspace*", "tests*", "tutor*"]
