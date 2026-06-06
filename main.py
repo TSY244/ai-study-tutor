@@ -30,48 +30,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.config_loader import Config, ConfigError, get_config
-from src.ai_adapter.claude_api import AIAPIError
-from src.ai_adapter.factory import get_ai
-from src.extraction_runner import (
-    ExtractionError,
-    build_extraction_prompt,
-    run_extraction,
-    verify_output,
-)
-from src.course_build import build_doc, regenerate_notes
+from src.storage import Storage, StorageError
 from src.exam_logic import (
-    build_quiz,
     export_merged_md,
-    fix_wrong_analysis,
     get_scores,
     list_wrong_questions,
     record_score,
     run_cli_quiz,
 )
-from src.summary_check import evaluate_summary
-from src.storage import Storage, StorageError
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _get_ai_and_storage(model_override: str | None = None):
-    """Return (ai_adapter, storage, cfg) with --model override support."""
-    try:
-        cfg = get_config()
-    except ConfigError as e:
-        print(f"配置错误：{e}")
-        sys.exit(1)
-
-    provider_cfg = cfg.provider_config(model_override=model_override)
-    # Build resolved ai_config with env var overrides applied
-    resolved_ai_config = dict(cfg.ai_config)
-    resolved_ai_config["providers"] = {cfg.default_provider: provider_cfg}
-    ai = get_ai(cfg.default_provider, resolved_ai_config)
-    storage = Storage(cfg.course_path)
-    return ai, storage, cfg
-
 
 def _ensure_lesson_exists(storage, subject, lesson):
     if not storage.lesson_exists(subject, lesson):
@@ -123,44 +94,53 @@ def cmd_init(args):
 
 
 def _run_extraction(source_desc: str, subject: str, lesson: int, name: str, args):
-    """Shared logic: call local claude CLI, verify output."""
-    _, storage, cfg = _get_ai_and_storage(model_override=args.model)
-    provider_cfg = cfg.provider_config(model_override=args.model)
-    lesson_dir = storage.ensure_lesson_dir(subject, lesson)
+    """Queue an extraction task for Claude Code Agent."""
+    from src.agent_runner import (
+        queue_extraction_task,
+        print_pending_summary,
+    )
+    from src.storage import Storage
+    from src.config_loader import get_config
 
-    # --model is required
-    model = getattr(args, 'model', None)
-    if not model:
-        model = provider_cfg.get("model", "")
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
+    lesson_dir = storage.ensure_lesson_dir(subject, lesson)
+    (lesson_dir / "teacher_notes").mkdir(parents=True, exist_ok=True)
+    (lesson_dir / "student_notes").mkdir(parents=True, exist_ok=True)
+
+    model = getattr(args, 'model', None) or cfg.provider_config().get("model", "")
     if not model:
         print("错误：必须通过 --model 指定模型，或在 config.json 中配置 model 字段。")
         sys.exit(1)
 
-    prompt = build_extraction_prompt(source_desc, subject, lesson, name)
+    source_text = ""
+    if getattr(args, 'source_text', None):
+        source_text = args.source_text
+        raw_path = storage.raw_text_path(subject, lesson)
+        storage.save_text(raw_path, source_text)
 
-    try:
-        run_extraction(
-            prompt=prompt,
-            output_dir=lesson_dir,
-            model=model,
-            api_key=provider_cfg.get("api_key", ""),
-            base_url=provider_cfg.get("base_url"),
-            timeout=900,
-        )
-    except ExtractionError as e:
-        print(f"\n❌ 提取失败：{e}")
-        sys.exit(1)
+    task_id = queue_extraction_task(
+        source_desc=source_desc,
+        subject=subject,
+        lesson=lesson,
+        name=name,
+        output_dir=lesson_dir,
+        model=model,
+        source_text=source_text,
+    )
 
-    # Verify output
-    status = verify_output(lesson_dir)
-    if status["teacher_notes"] and status["student_notes"]:
-        print(f"\n✅ 课程已生成：{subject} / 第{lesson}课：{name}")
-        print(f"   教师教纲：{storage.teacher_notes_path(subject, lesson)}")
-        print(f"   学生笔记：{storage.student_notes_path(subject, lesson)}")
-    else:
-        missing = [k for k, v in status.items() if not v]
-        print(f"\n⚠️  部分文件未生成（缺失：{missing}）。")
-        print(f"   输出目录：{lesson_dir}")
+    print(f"\n✅ 提取任务已排队：{task_id}")
+    print(f"   科目：{subject} / 第{lesson}课：{name}")
+    print(f"   输出目录：{lesson_dir}")
+    print()
+    print("   ╔══════════════════════════════════════════════════════╗")
+    print("   ║  📋 请在 Claude Code 中说：                         ║")
+    print("   ║     「处理所有待处理的学习任务」                    ║")
+    print("   ║  处理完成后运行以下命令查看结果：                   ║")
+    print(f"   ║     python main.py --learn --subject {subject} --lesson {lesson}  ║")
+    print("   ╚══════════════════════════════════════════════════════╝")
+    print()
+    print_pending_summary()
 
 
 def cmd_load_url(args):
@@ -222,7 +202,11 @@ def cmd_load_source_text(args):
 
 def cmd_subject_list(args):
     """List all subjects."""
-    _, storage, _ = _get_ai_and_storage()
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subjects = storage.list_subjects()
     if not subjects:
         print("暂无课程。请先导入素材：python main.py --load-url ...")
@@ -235,7 +219,11 @@ def cmd_subject_list(args):
 
 def cmd_lessons(args):
     """List lessons for a subject."""
-    _, storage, _ = _get_ai_and_storage()
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lessons = storage.list_lessons(subject)
     if not lessons:
@@ -253,7 +241,11 @@ def cmd_lessons(args):
 
 def cmd_learn(args):
     """View notes and optionally raw files."""
-    _, storage, _ = _get_ai_and_storage()
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
     _ensure_lesson_exists(storage, subject, lesson)
@@ -282,24 +274,53 @@ def cmd_learn(args):
 
 
 def cmd_exam_new(args):
-    """Generate new AI exam paper."""
-    ai, storage, _ = _get_ai_and_storage(model_override=args.model)
+    """Queue AI exam generation task."""
+    from src.agent_runner import queue_quiz_gen_task
+    from src.storage import Storage
+    from src.config_loader import get_config
+    import os as _os
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
     num = int(args.num) if args.num else 10
     _ensure_lesson_exists(storage, subject, lesson)
 
-    print(f"🤖 AI（{ai.model}）正在生成 {num} 道试题...")
-    quiz = build_quiz(subject, lesson, "markdown", ai, storage, question_count=num)
-    print(f"✅ 试卷已生成：{quiz.id}")
-    print(f"   题目数：{len(quiz.questions)}")
-    print(f"   试卷文件：{storage.exam_dir(subject, lesson) / (quiz.id + '.json')}")
-    print(f"   下一步：python main.py --exam --subject {subject} --lesson {lesson}")
+    model = getattr(args, 'model', None) or cfg.provider_config().get("model", "")
+    exam_dir = storage.exam_dir(subject, lesson)
+
+    # Gather lesson content
+    lesson_content = ""
+    student_path = storage.student_notes_path(subject, lesson)
+    if student_path.exists():
+        lesson_content = storage.read_text(student_path)
+
+    task_id = queue_quiz_gen_task(
+        subject=subject,
+        lesson=lesson,
+        lesson_content=lesson_content,
+        output_dir=exam_dir,
+        question_count=num,
+        model=model,
+    )
+
+    print(f"✅ 出题任务已排队：{task_id}")
+    print(f"   题目数：{num}")
+    print()
+    print("   ╔══════════════════════════════════════════════════════╗")
+    print("   ║  📋 请在 Claude Code 中说：                         ║")
+    print("   ║     「处理所有待处理的学习任务」                    ║")
+    print("   ╚══════════════════════════════════════════════════════╝")
 
 
 def cmd_exam(args):
     """Terminal interactive exam."""
-    ai, storage, _ = _get_ai_and_storage()
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
     _ensure_lesson_exists(storage, subject, lesson)
@@ -327,21 +348,47 @@ def cmd_exam(args):
 
 
 def cmd_exam_review(args):
-    """Mixed review exam combining old wrong questions."""
-    ai, storage, _ = _get_ai_and_storage(model_override=args.model)
+    """Queue mixed review exam task."""
+    from src.agent_runner import queue_quiz_gen_task
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
     _ensure_lesson_exists(storage, subject, lesson)
 
-    print("🤖 正在生成混合复习试卷...")
-    quiz = build_quiz(subject, lesson, "markdown", ai, storage, retest=True)
-    print(f"✅ 复习试卷已生成：{quiz.id}（{len(quiz.questions)} 题）")
-    print(f"   下一步：python main.py --exam --subject {subject} --lesson {lesson}")
+    model = getattr(args, 'model', None) or cfg.provider_config().get("model", "")
+    exam_dir = storage.exam_dir(subject, lesson)
+
+    lesson_content = ""
+    student_path = storage.student_notes_path(subject, lesson)
+    if student_path.exists():
+        lesson_content = storage.read_text(student_path)
+
+    task_id = queue_quiz_gen_task(
+        subject=subject, lesson=lesson,
+        lesson_content=lesson_content,
+        output_dir=exam_dir, question_count=8,
+        model=model, retest=True,
+    )
+
+    print(f"✅ 复习出题任务已排队：{task_id}")
+    print()
+    print("   ╔══════════════════════════════════════════════════════╗")
+    print("   ║  📋 请在 Claude Code 中说：                         ║")
+    print("   ║     「处理所有待处理的学习任务」                    ║")
+    print("   ╚══════════════════════════════════════════════════════╝")
 
 
 def cmd_wrong_list(args):
     """List wrong questions for a lesson."""
-    _, storage, _ = _get_ai_and_storage()
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
 
@@ -359,20 +406,51 @@ def cmd_wrong_list(args):
 
 
 def cmd_fix_wrong(args):
-    """AI generate detailed fix/wrong analysis."""
-    ai, storage, _ = _get_ai_and_storage(model_override=args.model)
+    """Queue AI wrong-question analysis task."""
+    from src.agent_runner import queue_fix_wrong_task
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
     _ensure_lesson_exists(storage, subject, lesson)
 
-    print("🤖 正在生成错题解析...")
-    analysis = fix_wrong_analysis(subject, lesson, ai, storage)
-    print(analysis)
+    wrong_list = list_wrong_questions(subject, lesson, storage)
+    if not wrong_list:
+        print("该课时暂无错题！🎉")
+        return
+
+    model = getattr(args, 'model', None) or cfg.provider_config().get("model", "")
+    # Gather course content for context
+    course_content = ""
+    student_path = storage.student_notes_path(subject, lesson)
+    if student_path.exists():
+        course_content = storage.read_text(student_path)
+
+    # Queue one task per wrong question (batch them)
+    for i, wq in enumerate(wrong_list):
+        output_dir = storage.wrong_questions_dir(subject, lesson)
+        task_id = queue_fix_wrong_task(
+            subject, lesson, wq, course_content, output_dir, model,
+        )
+        print(f"  [{i+1}/{len(wrong_list)}] 错题解析任务已排队：{task_id}")
+
+    print()
+    print("   ╔══════════════════════════════════════════════════════╗")
+    print("   ║  📋 请在 Claude Code 中说：                         ║")
+    print("   ║     「处理所有待处理的学习任务」                    ║")
+    print("   ╚══════════════════════════════════════════════════════╝")
 
 
 def cmd_score(args):
     """Show historical scores."""
-    _, storage, _ = _get_ai_and_storage()
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
 
@@ -388,8 +466,13 @@ def cmd_score(args):
 
 
 def cmd_summarize(args):
-    """AI evaluate student's self-summary."""
-    ai, storage, _ = _get_ai_and_storage(model_override=args.model)
+    """Queue AI summary evaluation task."""
+    from src.agent_runner import queue_summarize_task
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
     student_input = args.input
@@ -398,22 +481,35 @@ def cmd_summarize(args):
         print("错误：请通过 --input 提供你的总结文本。")
         sys.exit(1)
 
-    print("🤖 正在评估你的总结...")
-    result = evaluate_summary(subject, lesson, student_input, ai, storage)
+    _ensure_lesson_exists(storage, subject, lesson)
 
-    print(f"\n📊 总结评估结果：{subject} 第{lesson}课\n")
-    print(f"  准确度：{result.get('accuracy_score', 'N/A')}%")
-    print(f"  完整度：{result.get('completeness_score', 'N/A')}%")
-    print(f"  总体评价：{result.get('overall_assessment', 'N/A')}")
-    print(f"  你的优势：{result.get('strengths', [])}")
-    print(f"  理解偏差：{result.get('key_misunderstandings', [])}")
-    print(f"  遗漏概念：{result.get('missing_concepts', [])}")
-    print(f"  改进建议：{result.get('suggestions', [])}")
+    model = getattr(args, 'model', None) or cfg.provider_config().get("model", "")
+
+    course_content = ""
+    student_path = storage.student_notes_path(subject, lesson)
+    if student_path.exists():
+        course_content = storage.read_text(student_path)
+
+    output_dir = storage.lesson_dir(subject, lesson)
+    task_id = queue_summarize_task(
+        subject, lesson, student_input, course_content, output_dir, model,
+    )
+
+    print(f"✅ 评估任务已排队：{task_id}")
+    print()
+    print("   ╔══════════════════════════════════════════════════════╗")
+    print("   ║  📋 请在 Claude Code 中说：                         ║")
+    print("   ║     「处理所有待处理的学习任务」                    ║")
+    print("   ╚══════════════════════════════════════════════════════╝")
 
 
 def cmd_export_md(args):
     """Export merged notes as Markdown."""
-    _, storage, _ = _get_ai_and_storage()
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
     _ensure_lesson_exists(storage, subject, lesson)
@@ -425,7 +521,11 @@ def cmd_export_md(args):
 
 def cmd_delete_subject(args):
     """Delete a subject by ID number or name."""
-    _, storage, _ = _get_ai_and_storage()
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subjects = storage.list_subjects()
     if not subjects:
         print("暂无科目。")
@@ -460,7 +560,11 @@ def cmd_delete_subject(args):
 
 def cmd_delete_lesson(args):
     """Delete a lesson by ID number or name."""
-    _, storage, _ = _get_ai_and_storage()
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson_str = args.lesson
 
@@ -501,15 +605,43 @@ def cmd_delete_lesson(args):
 
 
 def cmd_fix_doc(args):
-    """Re-generate notes with AI."""
-    ai, storage, _ = _get_ai_and_storage(model_override=args.model)
+    """Queue note regeneration task."""
+    from src.agent_runner import queue_regenerate_task
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
     _ensure_lesson_exists(storage, subject, lesson)
 
-    print(f"🤖 AI（{ai.model}）正在重新生成笔记...")
-    regenerate_notes(subject, lesson, ai, storage)
-    print(f"✅ 笔记已重新生成：{subject} 第{lesson}课")
+    model = getattr(args, 'model', None) or cfg.provider_config().get("model", "")
+
+    source_text = ""
+    raw_path = storage.raw_text_path(subject, lesson)
+    if raw_path.exists():
+        source_text = storage.read_text(raw_path)
+    else:
+        student_path = storage.student_notes_path(subject, lesson)
+        if student_path.exists():
+            source_text = storage.read_text(student_path)
+
+    name = f"第{lesson}课"
+    info_path = storage.info_path(subject, lesson)
+    if info_path.exists():
+        info_data = storage.read_json(info_path)
+        name = info_data.get("name", name)
+
+    output_dir = storage.lesson_dir(subject, lesson)
+    task_id = queue_regenerate_task(subject, lesson, name, source_text, output_dir, model)
+
+    print(f"✅ 重新生成任务已排队：{task_id}")
+    print()
+    print("   ╔══════════════════════════════════════════════════════╗")
+    print("   ║  📋 请在 Claude Code 中说：                         ║")
+    print("   ║     「处理所有待处理的学习任务」                    ║")
+    print("   ╚══════════════════════════════════════════════════════╝")
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +651,7 @@ def cmd_fix_doc(args):
 def main():
     try:
         _main()
-    except (ConfigError, AIAPIError, ExtractionError, StorageError) as e:
+    except (ConfigError, StorageError) as e:
         print(f"错误：{e}")
         sys.exit(1)
     except FileNotFoundError as e:

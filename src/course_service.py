@@ -1,6 +1,7 @@
 """Backend service layer — all business logic, no user I/O.
 
 The frontend (interactive.py / main.py CLI) calls these functions.
+AI tasks are delegated to Claude Code Agent via src/agent_runner.py.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ def svc() -> "CourseService":
 
 
 class CourseService:
-    """Stateless service that wraps Storage + extraction + exam logic."""
+    """Stateless service that wraps Storage + agent task delegation."""
 
     def __init__(self) -> None:
         cfg = get_config()
@@ -73,9 +74,9 @@ class CourseService:
     def delete_lesson(self, subject: str, lesson: int) -> bool:
         return self.storage.delete_lesson(subject, lesson)
 
-    # ── Import ──
+    # ── Import (via Claude Code Agent) ──
 
-    def import_lesson(
+    def queue_import_lesson(
         self,
         subject: str,
         lesson: int,
@@ -83,89 +84,105 @@ class CourseService:
         source_flag: str,  # "--load-url" / "--load-video" / "--source-text"
         source_value: str,
         model: str = "deepseek-v4-pro",
-    ) -> int:
-        """Run claude extraction. Returns exit code."""
-        import subprocess, sys
-        from pathlib import Path
+    ) -> str:
+        """Queue a lesson extraction task for Claude Code Agent. Returns task_id.
 
-        project_root = Path(__file__).resolve().parent.parent
+        The task will be processed by Claude Code Agent (the current session).
+        After queuing, the caller should tell the user to ask Claude Code to
+        process pending tasks.
+        """
+        from .agent_runner import (
+            queue_extraction_task,
+            print_pending_summary,
+        )
+
         # Ensure output dirs exist
         lesson_dir = self.storage.ensure_lesson_dir(subject, lesson)
         (lesson_dir / "teacher_notes").mkdir(parents=True, exist_ok=True)
         (lesson_dir / "student_notes").mkdir(parents=True, exist_ok=True)
 
-        # Load auth from Claude Code settings
-        auth_token = ""
-        base_url = ""
-        claude_settings = Path.home() / ".claude" / "settings.json"
-        if claude_settings.exists():
-            import json
-            env_data = json.loads(claude_settings.read_text()).get("env", {})
-            auth_token = env_data.get("ANTHROPIC_AUTH_TOKEN", "")
-            base_url = env_data.get("ANTHROPIC_BASE_URL", "")
-
-        # Fall back to config.json
-        if not auth_token:
-            provider_cfg = self.cfg.provider_config()
-            auth_token = provider_cfg.get("api_key", "")
-        if not base_url:
-            provider_cfg = self.cfg.provider_config()
-            base_url = provider_cfg.get("base_url", "")
-
-        # Build prompt
-        from .extraction_runner import build_extraction_prompt
-        source_desc = f"素材：{source_value}"
+        # Build source description
         if source_flag == "--load-url":
             source_desc = (
-                f"从视频链接提取知识：{source_value}\n"
-                "先用 yt-dlp 获取字幕。无字幕则用 WebFetch + WebSearch。"
+                f"从视频链接提取知识：{source_value}\n\n"
+                f"先用 yt-dlp 获取该视频的中文字幕。如果视频有中文字幕（人工/AI），下载字幕文本；"
+                f"如果没有中文字幕，尝试获取英文字幕然后翻译；"
+                f"如果完全没有字幕，尝试下载视频的元数据和描述信息，结合 WebFetch 访问视频页面获取简介。"
             )
         elif source_flag == "--load-video":
-            source_desc = f"从本地文件提取知识：{source_value}"
+            source_desc = f"从本地文件提取知识：\n  - 素材文件：{source_value}\n  请使用 Read 工具读取文件内容。如果是视频/音频，使用 ffmpeg 或 yt-dlp 提取音频/字幕。"
         elif source_flag == "--source-text":
             raw_path = self.storage.raw_text_path(subject, lesson)
             self.storage.save_text(raw_path, source_value)
-            source_desc = f"文本已保存在 {raw_path}，请 Read 后生成笔记。"
+            source_desc = f"文本已保存在 {raw_path}，请使用 Read 工具读取后生成笔记。"
+        else:
+            source_desc = f"素材：{source_value}"
 
-        prompt = build_extraction_prompt(source_desc, subject, lesson, name)
-        # Replace /output/ with actual path
-        prompt = prompt.replace("/output/", str(lesson_dir) + "/")
+        source_text = source_value if source_flag == "--source-text" else ""
 
-        env = __import__("os").environ.copy()
-        env["ANTHROPIC_AUTH_TOKEN"] = auth_token
-        if base_url:
-            env["ANTHROPIC_BASE_URL"] = base_url
+        task_id = queue_extraction_task(
+            source_desc=source_desc,
+            subject=subject,
+            lesson=lesson,
+            name=name,
+            output_dir=lesson_dir,
+            model=model,
+            source_text=source_text,
+        )
 
-        clean_model = __import__("re").sub(r"\[\d+m\]$", "", model)
-
-        cmd = [
-            "claude", "--model", clean_model,
-            "-p", prompt,
-            "--allowedTools", "Bash,Read,Write,WebFetch,WebSearch",
-        ]
-
-        proc = subprocess.Popen(cmd, env=env, cwd=str(lesson_dir))
-        proc.wait()
-        return proc.returncode
+        return task_id
 
     def verify_import(self, subject: str, lesson: int) -> dict[str, bool]:
-        from .extraction_runner import verify_output, normalize_output
+        """Check if lesson import completed successfully."""
+        from .agent_runner import verify_extraction_output, normalize_output
+
         lesson_dir = self.storage.lesson_dir(subject, lesson)
         normalize_output(lesson_dir)
-        return verify_output(lesson_dir)
+        return verify_extraction_output(lesson_dir)
+
+    def has_pending_tasks(self) -> bool:
+        from .agent_runner import get_pending_count
+        return get_pending_count() > 0
 
     # ── Exam ──
 
-    def generate_exam(self, subject: str, lesson: int, num: int, model: str) -> int:
-        import subprocess, sys
-        project_root = Path(__file__).resolve().parent.parent
-        proc = subprocess.Popen([
-            sys.executable, str(project_root / "main.py"),
-            "--exam-new", "--subject", subject, "--lesson", str(lesson),
-            "--num", str(num), "--model", model,
-        ])
-        proc.wait()
-        return proc.returncode
+    def queue_exam_generation(
+        self, subject: str, lesson: int, num: int, model: str
+    ) -> str:
+        """Queue a quiz generation task. Returns task_id."""
+        from .agent_runner import queue_quiz_gen_task
+
+        lesson_dir = self.storage.lesson_dir(subject, lesson)
+        exam_dir = self.storage.exam_dir(subject, lesson)
+
+        # Gather lesson content
+        lesson_content = ""
+        student_path = self.storage.student_notes_path(subject, lesson)
+        if student_path.exists():
+            lesson_content = self.storage.read_text(student_path)
+        else:
+            raw_path = self.storage.raw_text_path(subject, lesson)
+            if raw_path.exists():
+                lesson_content = self.storage.read_text(raw_path)
+
+        # Gather weaknesses
+        weaknesses: list[dict[str, Any]] = []
+        try:
+            from .memory import course_weaknesses
+            weaknesses = course_weaknesses(self.storage, subject, lesson)
+        except Exception:
+            pass
+
+        task_id = queue_quiz_gen_task(
+            subject=subject,
+            lesson=lesson,
+            lesson_content=lesson_content,
+            output_dir=exam_dir,
+            question_count=num,
+            weaknesses=weaknesses,
+            model=model,
+        )
+        return task_id
 
     # ── Wrong questions ──
 

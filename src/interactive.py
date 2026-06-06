@@ -132,6 +132,12 @@ def menu_main(svc: CourseService):
         banner("科目列表")
         subs = svc.list_subjects()
 
+        # Pending tasks indicator
+        from .agent_runner import get_pending_count
+        pending = get_pending_count()
+        if pending:
+            show(f"{Yw}📋 {pending} 个待处理 AI 任务 — 在 Claude Code 中请求处理{R}\n")
+
         if not subs:
             show(f"{D}暂无科目，请先创建。{R}\n")
 
@@ -341,7 +347,7 @@ def _add_lesson(svc: CourseService, subj: str):
     name = ask("课时名称", f"第{ln}课")
 
     print(f"\n  {B}素材来源：{R}")
-    print(f"    {Gn}1{R}  视频链接（YouTube / B站）← 自动下载字幕")
+    print(f"    {Gn}1{R}  视频链接（YouTube / B站）← Claude Code 自动获取")
     print(f"    {Gn}2{R}  本地文件")
     print(f"    {Gn}3{R}  直接粘贴文本")
     st = ask("选择", "1")
@@ -379,17 +385,13 @@ def _add_lesson(svc: CourseService, subj: str):
     show(f"素材：{Gn}{value[:70]}{'...' if len(value) > 70 else ''}{R}")
     show(f"模型：{Gn}{model}{R}")
     sep()
-    if not confirm("确认开始导入？"):
+    if not confirm("确认排队导入任务？"):
         show("已取消。"); wait(); return
 
-    print(f"\n  {Cy}🤖 启动 claude --model {model} ...{R}\n")
-    rc = svc.import_lesson(subj, ln, name, flag, value, model)
-    if rc == 0:
-        result = svc.verify_import(subj, ln)
-        if result["teacher_notes"] and result["student_notes"]:
-            ok(f"生成完成：{subj} / 第{ln}课 · {name}")
-    else:
-        warn(f"claude 退出码 {rc}，请检查输出。")
+    task_id = svc.queue_import_lesson(subj, ln, name, flag, value, model)
+    ok(f"任务已排队（{task_id}）")
+    show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
+    show(f"处理完成后返回此菜单，按 {Gn}{ln}VS{R} 查看学生笔记。")
     wait()
 
 def _view_student_notes(svc: CourseService, subj: str, ln: int):
@@ -464,39 +466,61 @@ def _summarize(svc: CourseService, subj: str, ln: int):
     text = "\n".join(lines)
     if not text.strip():
         err("内容不能为空。"); wait(); return
-    print(f"\n  {Cy}🤖 AI 正在评估...{R}\n")
-    import subprocess, sys
-    subprocess.Popen([
-        sys.executable, str(PROJECT_ROOT / "main.py"),
-        "--summarize", "--subject", subj, "--lesson", str(ln),
-        "--input", text, "--model", model,
-    ]).wait()
+
+    from .agent_runner import queue_summarize_task
+
+    # Gather course content
+    course_content = ""
+    student_path = svc.storage.student_notes_path(subj, ln)
+    if student_path.exists():
+        course_content = svc.storage.read_text(student_path)
+
+    output_dir = svc.storage.lesson_dir(subj, ln)
+    task_id = queue_summarize_task(subj, ln, text, course_content, output_dir, model)
+    ok(f"评估任务已排队（{task_id}）")
+    show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
     wait()
 
 def _doc_ops(svc: CourseService, subj: str, ln: int):
     banner(f"📤 文档操作 → {subj} · {svc.lesson_name(subj, ln)}")
     print(f"    {Gn}1{R}  导出合并 Markdown")
-    print(f"    {Gn}2{R}  AI 重新生成笔记")
+    print(f"    {Gn}2{R}  AI 重新生成笔记（Claude Code Agent）")
     ch = ask("选择", "1")
-    import subprocess, sys
     if ch == "1":
+        import subprocess, sys
         subprocess.Popen([
             sys.executable, str(PROJECT_ROOT / "main.py"),
             "--export-md", "--subject", subj, "--lesson", str(ln),
         ]).wait()
     elif ch == "2":
         model = ask("AI 模型", "deepseek-v4-pro")
-        subprocess.Popen([
-            sys.executable, str(PROJECT_ROOT / "main.py"),
-            "--fix-doc", "--subject", subj, "--lesson", str(ln), "--model", model,
-        ]).wait()
+        from .agent_runner import queue_regenerate_task
+
+        # Gather source text
+        source_text = ""
+        raw_path = svc.storage.raw_text_path(subj, ln)
+        if raw_path.exists():
+            source_text = svc.storage.read_text(raw_path)
+        else:
+            student_path = svc.storage.student_notes_path(subj, ln)
+            if student_path.exists():
+                source_text = svc.storage.read_text(student_path)
+
+        output_dir = svc.storage.lesson_dir(subj, ln)
+        task_id = queue_regenerate_task(
+            subj, ln, svc.lesson_name(subj, ln),
+            source_text, output_dir, model,
+        )
+        ok(f"重新生成任务已排队（{task_id}）")
+        show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
     wait()
 
 def _exam_new(svc: CourseService, subj: str, ln: int):
     num = ask("题目数量", "10")
     model = ask("AI 模型", "deepseek-v4-pro")
-    print(f"\n  {Cy}🤖 正在生成 {num} 道试题...{R}\n")
-    svc.generate_exam(subj, ln, int(num), model)
+    task_id = svc.queue_exam_generation(subj, ln, int(num), model)
+    ok(f"出题任务已排队（{task_id}）")
+    show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
     wait()
 
 def _exam_take(svc: CourseService, subj: str, ln: int):
@@ -509,11 +533,9 @@ def _exam_take(svc: CourseService, subj: str, ln: int):
 
 def _exam_review(svc: CourseService, subj: str, ln: int):
     model = ask("AI 模型", "deepseek-v4-pro")
-    import subprocess, sys
-    subprocess.Popen([
-        sys.executable, str(PROJECT_ROOT / "main.py"),
-        "--exam-review", "--subject", subj, "--lesson", str(ln), "--model", model,
-    ]).wait()
+    task_id = svc.queue_exam_generation(subj, ln, 8, model)
+    ok(f"复习出题任务已排队（{task_id}）")
+    show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
     wait()
 
 def _exam_wrong(svc: CourseService, subj: str, ln: int):
