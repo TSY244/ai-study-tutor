@@ -1,9 +1,18 @@
-"""Prompt templates for AI interactions (Claude format)."""
+"""Prompt templates for AI interactions (Claude format).
+
+All quiz-generation prompts now include the question-generation policy
+directives from src/question_policy.py so the AI respects cognitive-level
+distribution, difficulty distribution, mastery-driven adaptation, and
+generation constraints.
+"""
 
 from __future__ import annotations
 
 import json
 from typing import Any
+
+# Re‑export for convenience
+from .question_policy import build_policy_context
 
 JSON_SYSTEM = (
     "你必须遵守：\n"
@@ -71,14 +80,13 @@ def lesson_prompt(
     return system, user
 
 
-def quiz_prompt(
-    chapter_content: str,
-    lesson_markdown: str,
-    weaknesses: list[dict[str, Any]],
-    question_count: int = 10,
-) -> tuple[str, str]:
-    """Return (system, user_prompt) for generating a quiz."""
-    schema = {
+# ---------------------------------------------------------------------------
+# Quiz generation prompts
+# ---------------------------------------------------------------------------
+
+def _quiz_json_schema() -> dict[str, Any]:
+    """Return the expected quiz JSON schema (shared by quiz_prompt & retest_prompt)."""
+    return {
         "quiz_title": "章节测试标题",
         "questions": [
             {
@@ -91,19 +99,175 @@ def quiz_prompt(
                 "tested_concepts": ["概念"],
                 "difficulty": "easy",
                 "score": 5,
+                "cognitive_level": "recall",
             }
         ],
     }
+
+
+def quiz_prompt(
+    chapter_content: str,
+    lesson_markdown: str,
+    weaknesses: list[dict[str, Any]],
+    *,
+    question_count: int = 8,
+    cognitive_dist: dict[str, int] | None = None,
+    difficulty_dist: dict[str, int] | None = None,
+    mastery: float = 0.0,
+    consecutive_stats: dict[str, int] | None = None,
+) -> tuple[str, str]:
+    """Return (system, user_prompt) for generating a quiz.
+
+    Includes the full question-generation policy from question_policy.py.
+    """
+    # ── Build policy block ──
+    from .models import CognitiveLevel
+
+    # Convert string-keyed dist to CognitiveLevel-keyed for build_policy_context
+    level_dist: dict[CognitiveLevel, int] = {}
+    if cognitive_dist:
+        for k, v in cognitive_dist.items():
+            try:
+                level_dist[CognitiveLevel(k)] = v
+            except ValueError:
+                pass
+
+    diff_dist = difficulty_dist or {
+        "easy": max(1, int(question_count * 0.20)),
+        "medium": max(1, int(question_count * 0.50)),
+        "hard": max(1, int(question_count * 0.20)),
+        "challenge": max(1, int(question_count * 0.10)),
+    }
+
+    # Normalize difficulty_dist to sum to question_count
+    diff_sum = sum(diff_dist.values())
+    if diff_sum != question_count:
+        from .question_policy import determine_difficulty_distribution
+        diff_dist = determine_difficulty_distribution(question_count)
+
+    policy_text = build_policy_context(
+        cognitive_dist=level_dist,
+        difficulty_dist=diff_dist,
+        question_count=question_count,
+        mastery=mastery,
+        weaknesses=weaknesses,
+    )
+
+    # ── Consecutive stats ──
+    stats_text = ""
+    if consecutive_stats:
+        cc = consecutive_stats.get("consecutive_correct", 0)
+        ce = consecutive_stats.get("consecutive_wrong", 0)
+        stats_text = f"\n上次答题统计：连续正确 {cc} 题，连续错误 {ce} 题。\n"
+
+    # ── System prompt ──
+    system = (
+        JSON_SYSTEM
+        + "\n\n"
+        + "## 题目生成策略（系统指令 — 必须严格遵守）\n\n"
+        + "你是专业的学习测评设计专家。你必须严格按照下面的策略生成题目，"
+        + "不得自行决定题目数量、难度分布或认知层次比例。\n\n"
+        + policy_text
+    )
+
+    # ── User prompt ──
     user = (
-        f"请生成 {question_count} 道章节考试题。题型需覆盖 single_choice、multiple_choice、"
-        "true_false、short_answer、case_analysis。每题必须有 tested_concepts 和 score。\n"
-        f"JSON Schema 示例：\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
-        f"历史薄弱点：\n{json.dumps(weaknesses, ensure_ascii=False, indent=2)}\n\n"
+        f"请严格按照上述策略生成 {question_count} 道章节考试题。\n\n"
+        "要求：\n"
+        f"1. 认知层次分布严格按上表执行（每道题标注 cognitive_level）\n"
+        f"2. 难度分布严格按上表执行，顺序递增\n"
+        f"3. 题型覆盖 single_choice、multiple_choice、true_false、short_answer、case_analysis\n"
+        f"4. 每题必须有 tested_concepts、score、difficulty、cognitive_level\n"
+        f"5. 不直接复制资料原文\n\n"
+        f"JSON Schema 示例：\n{json.dumps(_quiz_json_schema(), ensure_ascii=False, indent=2)}\n\n"
+        f"历史薄弱点：\n{json.dumps(weaknesses, ensure_ascii=False, indent=2)}\n"
+        f"{stats_text}\n"
         f"章节资料：\n{trim_text(chapter_content, 16000)}\n\n"
         f"教学文案：\n{trim_text(lesson_markdown, 12000)}"
     )
-    return JSON_SYSTEM, user
+    return system, user
 
+
+def retest_prompt(
+    chapter_content: str,
+    weaknesses: list[dict[str, Any]],
+    previous_quiz: dict[str, Any] | None,
+    previous_feedback: dict[str, Any] | None,
+    *,
+    question_count: int = 8,
+    cognitive_dist: dict[str, int] | None = None,
+    difficulty_dist: dict[str, int] | None = None,
+    mastery: float = 0.0,
+    consecutive_stats: dict[str, int] | None = None,
+) -> tuple[str, str]:
+    """Return (system, user_prompt) for generating a retest / review quiz.
+
+    Retest prompts focus more heavily on previously-wrong concepts and use
+    higher-level cognitive levels to verify deep understanding.
+    """
+    from .models import CognitiveLevel
+
+    level_dist: dict[CognitiveLevel, int] = {}
+    if cognitive_dist:
+        for k, v in cognitive_dist.items():
+            try:
+                level_dist[CognitiveLevel(k)] = v
+            except ValueError:
+                pass
+
+    diff_dist = difficulty_dist or {
+        "easy": max(1, int(question_count * 0.10)),
+        "medium": max(1, int(question_count * 0.50)),
+        "hard": max(1, int(question_count * 0.25)),
+        "challenge": max(1, int(question_count * 0.15)),
+    }
+
+    diff_sum = sum(diff_dist.values())
+    if diff_sum != question_count:
+        from .question_policy import determine_difficulty_distribution
+        # For retest, bias slightly harder
+        diff_dist = determine_difficulty_distribution(question_count)
+        # Shift: move 10% from easy to hard
+        shift = max(1, question_count // 10)
+        diff_dist["easy"] = max(0, diff_dist.get("easy", 0) - shift)
+        diff_dist["hard"] = diff_dist.get("hard", 0) + shift
+
+    policy_text = build_policy_context(
+        cognitive_dist=level_dist,
+        difficulty_dist=diff_dist,
+        question_count=question_count,
+        mastery=mastery,
+        weaknesses=weaknesses,
+    )
+
+    system = (
+        JSON_SYSTEM
+        + "\n\n"
+        + "## 二次考试策略（系统指令 — 必须严格遵守）\n\n"
+        + "你是专业的学习测评设计专家。这是二次考试（retest），你必须：\n"
+        + "1. 不重复原题，换角度考察同一概念\n"
+        + "2. 重点围绕历史薄弱点出题\n"
+        + "3. 增加案例分析和解释题\n"
+        + "4. 严格遵循下面的策略\n\n"
+        + policy_text
+    )
+
+    user = (
+        f"请生成 {question_count} 道二次考试题。\n\n"
+        "要求：不重复原题，换角度考察同一概念，重点围绕历史薄弱点，增加案例题和解释题。\n"
+        "输出格式与普通试题生成相同：包含 quiz_title 和 questions。\n\n"
+        f"JSON Schema 示例：\n{json.dumps(_quiz_json_schema(), ensure_ascii=False, indent=2)}\n\n"
+        f"章节资料：\n{trim_text(chapter_content, 16000)}\n\n"
+        f"历史薄弱点：\n{json.dumps(weaknesses, ensure_ascii=False, indent=2)}\n\n"
+        f"上次试题：\n{json.dumps(previous_quiz or {}, ensure_ascii=False, indent=2)}\n\n"
+        f"上次批阅反馈：\n{json.dumps(previous_feedback or {}, ensure_ascii=False, indent=2)}"
+    )
+    return system, user
+
+
+# ---------------------------------------------------------------------------
+# Grading
+# ---------------------------------------------------------------------------
 
 def grade_prompt(quiz: dict[str, Any], answers: list[dict[str, str]]) -> tuple[str, str]:
     """Return (system, user_prompt) for grading."""
@@ -140,27 +304,9 @@ def grade_prompt(quiz: dict[str, Any], answers: list[dict[str, str]]) -> tuple[s
     return JSON_SYSTEM, user
 
 
-def retest_prompt(
-    chapter_content: str,
-    weaknesses: list[dict[str, Any]],
-    previous_quiz: dict[str, Any] | None,
-    previous_feedback: dict[str, Any] | None,
-    question_count: int = 8,
-) -> tuple[str, str]:
-    """Return (system, user_prompt) for generating a retest."""
-    user = (
-        f"请生成 {question_count} 道二次考试题。要求：不重复原题，换角度考察同一概念，"
-        "重点围绕历史薄弱点，增加案例题和解释题。\n"
-        "输出格式与普通试题生成相同：包含 quiz_title 和 questions。\n\n"
-        f"章节资料：\n{trim_text(chapter_content, 16000)}\n\n"
-        f"历史薄弱点：\n{json.dumps(weaknesses, ensure_ascii=False, indent=2)}\n\n"
-        f"上次试题：\n{json.dumps(previous_quiz or {}, ensure_ascii=False, indent=2)}\n\n"
-        f"上次批阅反馈：\n{json.dumps(previous_feedback or {}, ensure_ascii=False, indent=2)}"
-    )
-    return JSON_SYSTEM, user
-
-
-# --- New prompts for teacher/student notes and summary check ---
+# ---------------------------------------------------------------------------
+# Teacher / student notes
+# ---------------------------------------------------------------------------
 
 def teacher_notes_prompt(raw_text: str, subject: str, lesson_name: str) -> tuple[str, str]:
     """Generate teacher outline/syllabus."""

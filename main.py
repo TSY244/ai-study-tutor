@@ -32,9 +32,14 @@ load_dotenv()
 from src.config_loader import Config, ConfigError, get_config
 from src.storage import Storage, StorageError
 from src.exam_logic import (
+    assemble_quiz,
     export_merged_md,
+    get_latest_quiz,
     get_scores,
+    list_all_questions,
+    list_historical_quizzes,
     list_wrong_questions,
+    load_quiz_by_id,
     record_score,
     run_cli_quiz,
 )
@@ -95,10 +100,7 @@ def cmd_init(args):
 
 def _run_extraction(source_desc: str, subject: str, lesson: int, name: str, args):
     """Queue an extraction task for Claude Code Agent."""
-    from src.agent_runner import (
-        queue_extraction_task,
-        print_pending_summary,
-    )
+    from src.agent_runner import queue_extraction_task
     from src.storage import Storage
     from src.config_loader import get_config
 
@@ -133,14 +135,20 @@ def _run_extraction(source_desc: str, subject: str, lesson: int, name: str, args
     print(f"   科目：{subject} / 第{lesson}课：{name}")
     print(f"   输出目录：{lesson_dir}")
     print()
-    print("   ╔══════════════════════════════════════════════════════╗")
-    print("   ║  📋 请在 Claude Code 中说：                         ║")
-    print("   ║     「处理所有待处理的学习任务」                    ║")
-    print("   ║  处理完成后运行以下命令查看结果：                   ║")
-    print(f"   ║     python main.py --learn --subject {subject} --lesson {lesson}  ║")
-    print("   ╚══════════════════════════════════════════════════════╝")
-    print()
-    print_pending_summary()
+
+    from src.agent_runner import process_all_pending_via_claude
+    succeeded, failed = process_all_pending_via_claude(timeout=900)
+
+    if succeeded > 0:
+        print(f"\n   查看结果：python main.py --learn --subject {subject} --lesson {lesson}")
+    elif failed > 0:
+        print()
+        print("   ╔══════════════════════════════════════════════════════╗")
+        print("   ║  📋 自动处理未完成，请在 Claude Code 中说：         ║")
+        print("   ║     「处理所有待处理的学习任务」                    ║")
+        print(f"   ║  处理完成后运行：                                   ║")
+        print(f"   ║     python main.py --learn --subject {subject} --lesson {lesson}  ║")
+        print("   ╚══════════════════════════════════════════════════════╝")
 
 
 def cmd_load_url(args):
@@ -274,48 +282,39 @@ def cmd_learn(args):
 
 
 def cmd_exam_new(args):
-    """Queue AI exam generation task."""
-    from src.agent_runner import queue_quiz_gen_task
+    """AI exam generation — automatically invokes Claude Code CLI to process."""
+    from src.course_service import svc
     from src.storage import Storage
     from src.config_loader import get_config
-    import os as _os
+    from src.agent_runner import process_task_via_claude_cli
 
     cfg = get_config()
     storage = Storage(cfg.course_path)
     subject = args.subject
     lesson = int(args.lesson)
-    num = int(args.num) if args.num else 10
+    num = int(args.num) if args.num else None  # None → policy-driven
     _ensure_lesson_exists(storage, subject, lesson)
 
     model = getattr(args, 'model', None) or cfg.provider_config().get("model", "")
-    exam_dir = storage.exam_dir(subject, lesson)
 
-    # Gather lesson content
-    lesson_content = ""
-    student_path = storage.student_notes_path(subject, lesson)
-    if student_path.exists():
-        lesson_content = storage.read_text(student_path)
+    # Queue the task
+    task_id = svc().queue_exam_generation(subject, lesson, num, model)
 
-    task_id = queue_quiz_gen_task(
-        subject=subject,
-        lesson=lesson,
-        lesson_content=lesson_content,
-        output_dir=exam_dir,
-        question_count=num,
-        model=model,
-    )
+    # Automatically invoke Claude Code CLI
+    success = process_task_via_claude_cli(task_id)
 
-    print(f"✅ 出题任务已排队：{task_id}")
-    print(f"   题目数：{num}")
-    print()
-    print("   ╔══════════════════════════════════════════════════════╗")
-    print("   ║  📋 请在 Claude Code 中说：                         ║")
-    print("   ║     「处理所有待处理的学习任务」                    ║")
-    print("   ╚══════════════════════════════════════════════════════╝")
+    if success:
+        print(f"\n   开始答题：python main.py --exam --subject {subject} --lesson {lesson}")
+    else:
+        print()
+        print("   ╔══════════════════════════════════════════════════════╗")
+        print("   ║  📋 自动生成未完成，请在 Claude Code 中说：         ║")
+        print("   ║     「处理所有待处理的学习任务」                    ║")
+        print("   ╚══════════════════════════════════════════════════════╝")
 
 
 def cmd_exam(args):
-    """Terminal interactive exam."""
+    """Terminal interactive exam. Supports --quiz-id for historical quizzes."""
     from src.storage import Storage
     from src.config_loader import get_config
 
@@ -325,15 +324,45 @@ def cmd_exam(args):
     lesson = int(args.lesson)
     _ensure_lesson_exists(storage, subject, lesson)
 
-    exam_dir = storage.exam_dir(subject, lesson)
-    quiz_files = sorted(exam_dir.glob("quiz_chapter_*.json"))
-    if not quiz_files:
-        print("未找到试卷。请先生成：python main.py --exam-new --subject <科目> --lesson <编号>")
+    quiz: Quiz | None = None
+
+    if args.quiz_id:
+        # User specified a particular quiz
+        quiz = load_quiz_by_id(subject, lesson, args.quiz_id, storage)
+        if quiz is None:
+            print(f"未找到试卷：{args.quiz_id}")
+            print("使用 --exam-list 查看可用试卷。")
+            sys.exit(1)
+    else:
+        # Default: latest quiz, or let user pick if multiple
+        quizzes = list_historical_quizzes(subject, lesson, storage)
+        if not quizzes:
+            print("未找到试卷。请先生成：python main.py --exam-new --subject <科目> --lesson <编号>")
+            sys.exit(1)
+
+        if len(quizzes) == 1:
+            quiz = load_quiz_by_id(subject, lesson, quizzes[0]["id"], storage)
+        else:
+            # Interactive pick
+            print(f"\n可用试卷：{subject} 第{lesson}课\n")
+            for i, qm in enumerate(quizzes, start=1):
+                src_label = {"regular": "常规", "retest": "复习", "assembled": "组装"}.get(
+                    qm.get("source", ""), qm.get("source", ""))
+                print(f"  {i}. [{src_label}] {qm['title']}（{qm['question_count']} 题）— {qm.get('created_at', '')[:10]}")
+            print()
+            choice = input("选择试卷编号（默认=1）：").strip() or "1"
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(quizzes):
+                    quiz = load_quiz_by_id(subject, lesson, quizzes[idx]["id"], storage)
+            except (ValueError, IndexError):
+                pass
+
+    if quiz is None:
+        print("未能加载试卷。")
         sys.exit(1)
 
     from src.models import Quiz
-    quiz_data = storage.read_json(quiz_files[-1])
-    quiz = Quiz.model_validate(quiz_data)
 
     print(f"\n📝 开始答题：{quiz.title}")
     print(f"   共 {len(quiz.questions)} 题\n")
@@ -347,9 +376,8 @@ def cmd_exam(args):
         print(f"查看错题：python main.py --wrong-list --subject {subject} --lesson {lesson}")
 
 
-def cmd_exam_review(args):
-    """Queue mixed review exam task."""
-    from src.agent_runner import queue_quiz_gen_task
+def cmd_exam_list(args):
+    """List all historical quizzes for a subject/lesson."""
     from src.storage import Storage
     from src.config_loader import get_config
 
@@ -359,27 +387,127 @@ def cmd_exam_review(args):
     lesson = int(args.lesson)
     _ensure_lesson_exists(storage, subject, lesson)
 
-    model = getattr(args, 'model', None) or cfg.provider_config().get("model", "")
-    exam_dir = storage.exam_dir(subject, lesson)
+    quizzes = list_historical_quizzes(subject, lesson, storage)
+    if not quizzes:
+        print(f"暂无试卷：{subject} 第{lesson}课")
+        print("先生成：python main.py --exam-new --subject <科目> --lesson <编号>")
+        return
 
-    lesson_content = ""
-    student_path = storage.student_notes_path(subject, lesson)
-    if student_path.exists():
-        lesson_content = storage.read_text(student_path)
+    src_label = {"regular": "📝常规", "retest": "🔄复习", "assembled": "🧩组装"}
 
-    task_id = queue_quiz_gen_task(
-        subject=subject, lesson=lesson,
-        lesson_content=lesson_content,
-        output_dir=exam_dir, question_count=8,
-        model=model, retest=True,
-    )
+    print(f"\n历史试卷：{subject} 第{lesson}课（共 {len(quizzes)} 份）\n")
+    for i, qm in enumerate(quizzes, start=1):
+        label = src_label.get(qm.get("source", ""), qm.get("source", ""))
+        print(f"  {i}. {label} {qm['title']}")
+        print(f"     ID: {qm['id']}")
+        print(f"     题目数: {qm['question_count']} | 日期: {qm.get('created_at', '?')[:10]}")
+        print()
 
-    print(f"✅ 复习出题任务已排队：{task_id}")
+    print("使用 --quiz-id <ID> 指定试卷：")
+    print(f"  python main.py --exam --subject {subject} --lesson {lesson} --quiz-id <ID>")
+
+
+def cmd_exam_assemble(args):
+    """Manually assemble a quiz from questions across historical quizzes."""
+    from src.storage import Storage
+    from src.config_loader import get_config
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
+    subject = args.subject
+    lesson = int(args.lesson)
+    _ensure_lesson_exists(storage, subject, lesson)
+
+    # List available questions
+    all_qs = list_all_questions(subject, lesson, storage)
+    if not all_qs:
+        print(f"暂无题目：{subject} 第{lesson}课")
+        print("先生成试卷：python main.py --exam-new --subject <科目> --lesson <编号>")
+        return
+
+    # Group by quiz
+    by_quiz: dict[str, list[dict]] = {}
+    for q in all_qs:
+        qid = q.get("_quiz_id", "unknown")
+        by_quiz.setdefault(qid, []).append(q)
+
+    type_label = {
+        "single_choice": "单选", "multiple_choice": "多选", "true_false": "判断",
+        "short_answer": "简答", "case_analysis": "案例分析",
+    }
+
+    print(f"\n可用题目池：{subject} 第{lesson}课（共 {len(all_qs)} 题）\n")
+    print("=" * 70)
+
+    for quiz_id, questions in by_quiz.items():
+        quiz_title = questions[0].get("_quiz_title", quiz_id)
+        print(f"\n📋 [{quiz_id}] {quiz_title}（{len(questions)} 题）")
+        print("-" * 60)
+        for q in questions:
+            tlabel = type_label.get(q.get("type", ""), q.get("type", ""))
+            clabel = q.get("cognitive_level", "") or ""
+            dlabel = q.get("difficulty", "")
+            print(f"  {quiz_id}:{q['id']:4s}  [{tlabel}][{dlabel}][{clabel}] {q.get('question', '')[:60]}")
+        print()
+
+    print("=" * 70)
+    print("\n输入要组装的题目 ID（格式：quiz_id:qid），多个用逗号分隔")
+    print("示例：quiz_chapter_01:q1, quiz_chapter_01:q3, retest_chapter_01_xxx:q2")
+    print("或输入 'all' 选择全部题目")
     print()
-    print("   ╔══════════════════════════════════════════════════════╗")
-    print("   ║  📋 请在 Claude Code 中说：                         ║")
-    print("   ║     「处理所有待处理的学习任务」                    ║")
-    print("   ╚══════════════════════════════════════════════════════╝")
+
+    selection = input("选择题目：").strip()
+    if not selection:
+        print("已取消。")
+        return
+
+    if selection.lower() == "all":
+        qids = [f"{q['_quiz_id']}:{q['id']}" for q in all_qs]
+    else:
+        qids = [s.strip() for s in selection.split(",") if s.strip()]
+
+    title = input("试卷标题（留空=自动生成）：").strip()
+
+    quiz = assemble_quiz(subject, lesson, qids, title, storage)
+    if quiz is None:
+        print("未能匹配任何题目，请检查 ID 格式。")
+        sys.exit(1)
+
+    print(f"\n✅ 组装试卷已生成：{quiz.id}")
+    print(f"   标题：{quiz.title}")
+    print(f"   题目数：{len(quiz.questions)}")
+    print(f"   来源试卷：{', '.join(quiz.source_quizzes)}")
+    print()
+    print(f"   开始答题：python main.py --exam --subject {subject} --lesson {lesson} --quiz-id {quiz.id}")
+
+
+def cmd_exam_review(args):
+    """Mixed review exam — automatically invokes Claude Code CLI to process."""
+    from src.course_service import svc
+    from src.storage import Storage
+    from src.config_loader import get_config
+    from src.agent_runner import process_task_via_claude_cli
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
+    subject = args.subject
+    lesson = int(args.lesson)
+    _ensure_lesson_exists(storage, subject, lesson)
+
+    model = getattr(args, 'model', None) or cfg.provider_config().get("model", "")
+    num = int(args.num) if args.num else None
+
+    task_id = svc().queue_exam_generation(subject, lesson, num, model)
+
+    # Automatically invoke Claude Code CLI
+    success = process_task_via_claude_cli(task_id)
+
+    if not success:
+        print()
+        print("   ╔══════════════════════════════════════════════════════╗")
+        print("   ║  📋 自动生成未完成，请在 Claude Code 中说：         ║")
+        print("   ║     「处理所有待处理的学习任务」                    ║")
+        print("   ╚══════════════════════════════════════════════════════╝")
 
 
 def cmd_wrong_list(args):
@@ -438,10 +566,34 @@ def cmd_fix_wrong(args):
         print(f"  [{i+1}/{len(wrong_list)}] 错题解析任务已排队：{task_id}")
 
     print()
-    print("   ╔══════════════════════════════════════════════════════╗")
-    print("   ║  📋 请在 Claude Code 中说：                         ║")
-    print("   ║     「处理所有待处理的学习任务」                    ║")
-    print("   ╚══════════════════════════════════════════════════════╝")
+    from src.agent_runner import process_all_pending_via_claude
+    succeeded, failed = process_all_pending_via_claude()
+
+    if failed > 0:
+        print()
+        print("   ╔══════════════════════════════════════════════════════╗")
+        print("   ║  📋 部分任务未完成，请在 Claude Code 中说：         ║")
+        print("   ║     「处理所有待处理的学习任务」                    ║")
+        print("   ╚══════════════════════════════════════════════════════╝")
+
+
+def cmd_process_tasks(args):
+    """Process all pending tasks synchronously using direct AI API."""
+    from src.agent_runner import process_pending_tasks_now, list_pending_tasks
+
+    pending = list_pending_tasks()
+    if not pending:
+        print("✅ 没有待处理的任务。")
+        return
+
+    print(f"\n📋 待处理任务：{len(pending)} 个\n")
+    for i, task in enumerate(pending, 1):
+        print(f"  {i}. [{task.get('task_type', '?')}] {task.get('subject', '')} · {task.get('name', '')}")
+        print(f"     ID: {task['task_id']}")
+
+    print(f"\n⏳ 正在处理...\n")
+    succeeded, failed = process_pending_tasks_now()
+    print(f"\n✅ 处理完毕：成功 {succeeded} 个，失败 {failed} 个")
 
 
 def cmd_score(args):
@@ -497,10 +649,16 @@ def cmd_summarize(args):
 
     print(f"✅ 评估任务已排队：{task_id}")
     print()
-    print("   ╔══════════════════════════════════════════════════════╗")
-    print("   ║  📋 请在 Claude Code 中说：                         ║")
-    print("   ║     「处理所有待处理的学习任务」                    ║")
-    print("   ╚══════════════════════════════════════════════════════╝")
+
+    from src.agent_runner import process_all_pending_via_claude
+    succeeded, failed = process_all_pending_via_claude()
+
+    if failed > 0:
+        print()
+        print("   ╔══════════════════════════════════════════════════════╗")
+        print("   ║  📋 部分任务未完成，请在 Claude Code 中说：         ║")
+        print("   ║     「处理所有待处理的学习任务」                    ║")
+        print("   ╚══════════════════════════════════════════════════════╝")
 
 
 def cmd_export_md(args):
@@ -638,10 +796,16 @@ def cmd_fix_doc(args):
 
     print(f"✅ 重新生成任务已排队：{task_id}")
     print()
-    print("   ╔══════════════════════════════════════════════════════╗")
-    print("   ║  📋 请在 Claude Code 中说：                         ║")
-    print("   ║     「处理所有待处理的学习任务」                    ║")
-    print("   ╚══════════════════════════════════════════════════════╝")
+
+    from src.agent_runner import process_all_pending_via_claude
+    succeeded, failed = process_all_pending_via_claude()
+
+    if failed > 0:
+        print()
+        print("   ╔══════════════════════════════════════════════════════╗")
+        print("   ║  📋 部分任务未完成，请在 Claude Code 中说：         ║")
+        print("   ║     「处理所有待处理的学习任务」                    ║")
+        print("   ╚══════════════════════════════════════════════════════╝")
 
 
 # ---------------------------------------------------------------------------
@@ -717,7 +881,8 @@ def _main():
     parser.add_argument("--model", type=str, help="模型名称（覆盖 config.json，如 deepseek-v4-pro）")
     parser.add_argument("--raw", action="store_true", help="同时显示原始素材")
     parser.add_argument("--input", type=str, help="输入文本（用于 --summarize）")
-    parser.add_argument("--num", type=str, help="题目数量（用于 --exam-new）")
+    parser.add_argument("--num", type=str, help="题目数量（用于 --exam-new，留空自动策略决定）")
+    parser.add_argument("--quiz-id", type=str, help="指定试卷 ID（用于 --exam）")
     parser.add_argument("--old-lesson", type=str, help="混合旧课时的错题（用于 --exam-review）")
     parser.add_argument("--ai-provider", type=str, help="AI 服务商（默认从 config.json 读取）")
 
@@ -728,7 +893,9 @@ def _main():
 
     # --- Exam ---
     parser.add_argument("--exam-new", action="store_true", help="AI 生成新试卷")
-    parser.add_argument("--exam", action="store_true", help="终端交互答题")
+    parser.add_argument("--exam", action="store_true", help="终端交互答题（可选 --quiz-id 指定历史试卷）")
+    parser.add_argument("--exam-list", action="store_true", help="查看历史试卷列表")
+    parser.add_argument("--exam-assemble", action="store_true", help="手动组装试卷（从历史试卷选题）")
     parser.add_argument("--exam-review", action="store_true", help="混合旧题复习考试")
     parser.add_argument("--wrong-list", action="store_true", help="查看错题列表")
     parser.add_argument("--fix-wrong", action="store_true", help="AI 生成错题解析")
@@ -744,6 +911,9 @@ def _main():
     # --- Delete ---
     parser.add_argument("--delete-subject", action="store_true", help="删除整个科目")
     parser.add_argument("--delete-lesson", action="store_true", help="删除指定课时")
+
+    # --- Tasks ---
+    parser.add_argument("--process-tasks", action="store_true", help="同步处理所有待处理任务")
 
     args = parser.parse_args()
 
@@ -787,6 +957,16 @@ def _main():
             print("错误：--exam 需要 --subject 和 --lesson。")
             sys.exit(1)
         cmd_exam(args)
+    elif args.exam_list:
+        if not args.subject or not args.lesson:
+            print("错误：--exam-list 需要 --subject 和 --lesson。")
+            sys.exit(1)
+        cmd_exam_list(args)
+    elif args.exam_assemble:
+        if not args.subject or not args.lesson:
+            print("错误：--exam-assemble 需要 --subject 和 --lesson。")
+            sys.exit(1)
+        cmd_exam_assemble(args)
     elif args.exam_review:
         if not args.subject or not args.lesson:
             print("错误：--exam-review 需要 --subject 和 --lesson。")
@@ -832,6 +1012,8 @@ def _main():
             print("错误：--delete-lesson 需要 --subject 和 --lesson。")
             sys.exit(1)
         cmd_delete_lesson(args)
+    elif args.process_tasks:
+        cmd_process_tasks(args)
     else:
         parser.print_help()
 

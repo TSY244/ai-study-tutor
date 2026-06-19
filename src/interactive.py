@@ -286,9 +286,11 @@ def menu_exam(svc: CourseService, subj: str, ln: int):
 
         mi(1, "生成新试卷",    f"{Gn}已生成{R}" if status["quiz"] else f"{D}未生成{R}")
         mi(2, "开始答题",      "")
-        mi(3, "错题复习考试",  "")
-        mi(4, "查看/解析错题", f"{Rd}{wc} 道{R}" if wc else f"{D}无{R}")
-        mi(5, "查看成绩",      "")
+        mi(3, "历史试卷",      "")
+        mi(4, "组装试卷",      "人工从历史试卷选题")
+        mi(5, "错题复习考试",  "")
+        mi(6, "查看/解析错题", f"{Rd}{wc} 道{R}" if wc else f"{D}无{R}")
+        mi(7, "查看成绩",      "")
         sep(); mi(0, "返回科目"); print()
 
         ch = ask("选择")
@@ -297,9 +299,11 @@ def menu_exam(svc: CourseService, subj: str, ln: int):
         elif ch == "2":
             if not status["quiz"]: warn("请先生成试卷。"); wait(); continue
             _exam_take(svc, subj, ln)
-        elif ch == "3": _exam_review(svc, subj, ln)
-        elif ch == "4": _exam_wrong(svc, subj, ln)
-        elif ch == "5": _exam_score(svc, subj, ln)
+        elif ch == "3": _exam_list(svc, subj, ln)
+        elif ch == "4": _exam_assemble(svc, subj, ln)
+        elif ch == "5": _exam_review(svc, subj, ln)
+        elif ch == "6": _exam_wrong(svc, subj, ln)
+        elif ch == "7": _exam_score(svc, subj, ln)
 
 # ═══════════════════════════════════════════════════════════════
 #  Actions (call service layer)
@@ -390,8 +394,15 @@ def _add_lesson(svc: CourseService, subj: str):
 
     task_id = svc.queue_import_lesson(subj, ln, name, flag, value, model)
     ok(f"任务已排队（{task_id}）")
-    show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
-    show(f"处理完成后返回此菜单，按 {Gn}{ln}VS{R} 查看学生笔记。")
+
+    from src.agent_runner import process_all_pending_via_claude
+    succeeded, failed = process_all_pending_via_claude()
+
+    if succeeded > 0:
+        ok(f"处理完毕！成功 {succeeded} 个任务。按 {Gn}{ln}VS{R} 查看学生笔记。")
+    else:
+        warn("自动处理未完成，任务已保存。")
+        show(f"{Cy}请在 Claude Code 中说「处理所有待处理的学习任务」{R}")
     wait()
 
 def _view_student_notes(svc: CourseService, subj: str, ln: int):
@@ -422,19 +433,23 @@ def _teacher_exam(svc: CourseService, subj: str, ln: int):
         wc = svc.wrong_count(subj, ln)
 
         mi(1, "生成新试卷",      f"{Gn}已生成{R}" if status["quiz"] else f"{D}未生成{R}")
-        mi(2, "错题复习考试",    f"{Rd}{wc} 道错题{R}" if wc else "")
-        mi(3, "查看/解析错题",   f"{Rd}{wc} 道{R}" if wc else f"{D}无{R}")
-        mi(4, "查看成绩",        "")
+        mi(2, "历史试卷",        "")
+        mi(3, "组装试卷",        "人工从历史试卷选题")
+        mi(4, "错题复习考试",    f"{Rd}{wc} 道错题{R}" if wc else "")
+        mi(5, "查看/解析错题",   f"{Rd}{wc} 道{R}" if wc else f"{D}无{R}")
+        mi(6, "查看成绩",        "")
         sep(); mi(0, "返回科目"); print()
 
         ch = ask("选择")
         if ch == "0": break
         elif ch == "1": _exam_new(svc, subj, ln)
-        elif ch == "2":
+        elif ch == "2": _exam_list(svc, subj, ln)
+        elif ch == "3": _exam_assemble(svc, subj, ln)
+        elif ch == "4":
             if wc == 0: warn("暂无错题。"); wait(); continue
             _exam_review(svc, subj, ln)
-        elif ch == "3": _exam_wrong(svc, subj, ln)
-        elif ch == "4": _exam_score(svc, subj, ln)
+        elif ch == "5": _exam_wrong(svc, subj, ln)
+        elif ch == "6": _exam_score(svc, subj, ln)
 
 def _delete_lesson(svc: CourseService, subj: str, lessons: list):
     banner(f"🗑️  删除课时 → {subj}")
@@ -478,7 +493,15 @@ def _summarize(svc: CourseService, subj: str, ln: int):
     output_dir = svc.storage.lesson_dir(subj, ln)
     task_id = queue_summarize_task(subj, ln, text, course_content, output_dir, model)
     ok(f"评估任务已排队（{task_id}）")
-    show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
+
+    from src.agent_runner import process_all_pending_via_claude
+    succeeded, failed = process_all_pending_via_claude()
+
+    if succeeded > 0:
+        ok(f"处理完毕！成功 {succeeded} 个任务。")
+    else:
+        warn("自动处理未完成，任务已保存。")
+        show(f"{Cy}请在 Claude Code 中说「处理所有待处理的学习任务」{R}")
     wait()
 
 def _doc_ops(svc: CourseService, subj: str, ln: int):
@@ -512,15 +535,36 @@ def _doc_ops(svc: CourseService, subj: str, ln: int):
             source_text, output_dir, model,
         )
         ok(f"重新生成任务已排队（{task_id}）")
-        show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
+
+        from src.agent_runner import process_all_pending_via_claude
+        succeeded, failed = process_all_pending_via_claude()
+
+        if succeeded > 0:
+            ok(f"处理完毕！成功 {succeeded} 个任务。按 {Gn}{ln}VS{R} 查看笔记。")
+        else:
+            warn("自动处理未完成，任务已保存。")
+            show(f"{Cy}请在 Claude Code 中说「处理所有待处理的学习任务」{R}")
     wait()
 
 def _exam_new(svc: CourseService, subj: str, ln: int):
-    num = ask("题目数量", "10")
+    """Queue exam generation task — Claude Code CLI processes it automatically."""
+    from src.agent_runner import process_task_via_claude_cli
+
+    num = ask("题目数量（留空=策略自动）", "")
+    num_int = int(num) if num.strip() else None
     model = ask("AI 模型", "deepseek-v4-pro")
-    task_id = svc.queue_exam_generation(subj, ln, int(num), model)
-    ok(f"出题任务已排队（{task_id}）")
-    show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
+
+    task_id = svc.queue_exam_generation(subj, ln, num_int, model)
+
+    # Automatically invoke Claude Code CLI to process the task
+    success = process_task_via_claude_cli(task_id)
+
+    if success:
+        ok("试卷生成完毕！返回菜单后可开始答题。")
+    else:
+        warn("自动生成未完成，任务已保存。")
+        show(f"{Cy}请在 Claude Code 中说「处理所有待处理的学习任务」{R}")
+
     wait()
 
 def _exam_take(svc: CourseService, subj: str, ln: int):
@@ -532,10 +576,22 @@ def _exam_take(svc: CourseService, subj: str, ln: int):
     wait()
 
 def _exam_review(svc: CourseService, subj: str, ln: int):
+    """Queue review exam task — Claude Code CLI processes it automatically."""
+    from src.agent_runner import process_task_via_claude_cli
+
     model = ask("AI 模型", "deepseek-v4-pro")
-    task_id = svc.queue_exam_generation(subj, ln, 8, model)
-    ok(f"复习出题任务已排队（{task_id}）")
-    show(f"{Cy}请切换到 Claude Code 并说「处理所有待处理的学习任务」{R}")
+
+    task_id = svc.queue_exam_generation(subj, ln, None, model)
+
+    # Automatically invoke Claude Code CLI to process the task
+    success = process_task_via_claude_cli(task_id)
+
+    if success:
+        ok("复习试卷生成完毕！")
+    else:
+        warn("自动生成未完成，任务已保存。")
+        show(f"{Cy}请在 Claude Code 中说「处理所有待处理的学习任务」{R}")
+
     wait()
 
 def _exam_wrong(svc: CourseService, subj: str, ln: int):
@@ -565,6 +621,261 @@ def _exam_score(svc: CourseService, subj: str, ln: int):
         "--score", "--subject", subj, "--lesson", str(ln),
     ]).wait()
     wait()
+
+
+def _exam_list(svc: CourseService, subj: str, ln: int):
+    """Browse historical quizzes and select one to take."""
+    from src.exam_logic import list_historical_quizzes, load_quiz_by_id
+
+    quizzes = list_historical_quizzes(subj, ln, svc.storage)
+    if not quizzes:
+        warn("暂无历史试卷。"); wait(); return
+
+    while True:
+        banner(f"📋 历史试卷 → {subj} · {svc.lesson_name(subj, ln)}")
+        src_label = {"regular": "📝常规", "retest": "🔄复习", "assembled": "🧩组装"}
+        for i, qm in enumerate(quizzes, start=1):
+            label = src_label.get(qm.get("source", ""), qm.get("source", ""))
+            show(f"  {Gn}{i}{R}. {label} {qm['title']}")
+            show(f"     ID: {D}{qm['id']}{R} | {qm['question_count']} 题 | {qm.get('created_at', '')[:10]}")
+        print()
+        mi(1, "选择试卷答题")
+        mi(2, "查看试卷详情")
+        sep(); mi(0, "返回"); print()
+
+        ch = ask("选择")
+        if ch == "0": break
+        elif ch == "1":
+            idx_s = ask("试卷编号", "1")
+            try:
+                idx = int(idx_s) - 1
+                if 0 <= idx < len(quizzes):
+                    quiz = load_quiz_by_id(subj, ln, quizzes[idx]["id"], svc.storage)
+                    if quiz:
+                        _run_quiz(subj, ln, quiz)
+                    else:
+                        warn("加载试卷失败。"); wait()
+            except (ValueError, IndexError):
+                warn("无效编号。"); wait()
+        elif ch == "2":
+            idx_s = ask("试卷编号", "1")
+            try:
+                idx = int(idx_s) - 1
+                if 0 <= idx < len(quizzes):
+                    _view_quiz_detail(subj, ln, quizzes[idx], svc)
+            except (ValueError, IndexError):
+                warn("无效编号。"); wait()
+
+
+def _view_quiz_detail(subj: str, ln: int, qmeta: dict, svc: CourseService):
+    """Show detailed view of a quiz."""
+    from src.exam_logic import load_quiz_by_id
+    quiz = load_quiz_by_id(subj, ln, qmeta["id"], svc.storage)
+    if quiz is None:
+        warn("无法加载试卷。"); wait(); return
+
+    type_label = {
+        "single_choice": "单选", "multiple_choice": "多选", "true_false": "判断",
+        "short_answer": "简答", "case_analysis": "案例分析",
+    }
+    diff_emoji = {"easy": "🟢", "medium": "🟡", "hard": "🟠", "challenge": "🔴"}
+
+    banner(f"📄 {quiz.title}")
+    for i, q in enumerate(quiz.questions, start=1):
+        tlabel = type_label.get(q.type.value if hasattr(q.type, 'value') else str(q.type), str(q.type))
+        clabel = q.cognitive_level.value if q.cognitive_level else "?"
+        dlabel = q.difficulty
+        de = diff_emoji.get(dlabel, "")
+        print(f"  {B}{i}.{R} [{tlabel}] {de}{dlabel} [{clabel}]")
+        print(f"     {q.question[:80]}")
+        if q.options:
+            opts = ", ".join(f"{k}={v}" for k, v in list(q.options.items())[:4])
+            print(f"     {D}选项：{opts}{R}")
+        concepts = "、".join(q.tested_concepts[:3])
+        print(f"     {D}概念：{concepts}{R}")
+        print()
+    print(f"  {D}共 {len(quiz.questions)} 题 | 来源：{quiz.source}{R}")
+    wait()
+
+
+def _exam_assemble(svc: CourseService, subj: str, ln: int):
+    """Manually assemble a quiz by picking questions from history."""
+    from src.exam_logic import list_all_questions, list_historical_quizzes, assemble_quiz
+
+    all_qs = list_all_questions(subj, ln, svc.storage)
+    if not all_qs:
+        warn("暂无可用题目。请先生成试卷。"); wait(); return
+
+    # Collect selection
+    selected: list[str] = []  # list of "<quiz_id>:<qid>" keys
+
+    type_label = {
+        "single_choice": "单选", "multiple_choice": "多选", "true_false": "判断",
+        "short_answer": "简答", "case_analysis": "案例分析",
+    }
+
+    while True:
+        banner(f"🧩 组装试卷 → {subj} · {svc.lesson_name(subj, ln)}")
+        show(f"已选：{Gn}{len(selected)}{R} 题")
+
+        # Show questions grouped by quiz
+        by_quiz: dict[str, list[dict]] = {}
+        for q in all_qs:
+            qid = q.get("_quiz_id", "unknown")
+            by_quiz.setdefault(qid, []).append(q)
+
+        # Count per quiz
+        quiz_count = {qid: len(qs) for qid, qs in by_quiz.items()}
+        for qid, count in quiz_count.items():
+            title = by_quiz[qid][0].get("_quiz_title", qid)
+            show(f"  {D}{qid}{R}: {count} 题 — {title}")
+
+        print()
+        mi(1, "按试卷浏览选题")
+        mi(2, "按题号快速选择")
+        mi(3, "选择全部题目")
+        mi(4, "清空已选")
+        mi(5, "确认并生成试卷")
+        sep(); mi(0, "返回"); print()
+
+        ch = ask("选择")
+        if ch == "0":
+            if selected and confirm("放弃已选题目？", default=False):
+                break
+            elif not selected:
+                break
+        elif ch == "1":
+            _assemble_by_quiz(by_quiz, selected)
+        elif ch == "2":
+            qid_input = ask("输入题目 ID（格式：quiz_id:qid，多个逗号分隔）")
+            for part in qid_input.split(","):
+                part = part.strip()
+                if part:
+                    # Check if it exists
+                    matched = False
+                    for q in all_qs:
+                        key = f"{q['_quiz_id']}:{q['id']}"
+                        if key == part or q['id'] == part:
+                            if key not in selected:
+                                selected.append(key)
+                                matched = True
+                            break
+                    if not matched:
+                        warn(f"未找到题目：{part}"); wait()
+        elif ch == "3":
+            for q in all_qs:
+                key = f"{q['_quiz_id']}:{q['id']}"
+                if key not in selected:
+                    selected.append(key)
+            ok(f"已选择全部 {len(all_qs)} 题"); wait()
+        elif ch == "4":
+            selected.clear()
+            ok("已清空。"); wait()
+        elif ch == "5":
+            if not selected:
+                warn("请至少选择一道题目。"); wait(); continue
+            title = ask("试卷标题（留空=自动）")
+            quiz = assemble_quiz(subj, ln, selected, title, svc.storage)
+            if quiz is None:
+                warn("组装失败，请检查题目 ID。"); wait()
+            else:
+                ok(f"试卷已生成：{quiz.id}（{len(quiz.questions)} 题）")
+                if confirm("立即开始答题？"):
+                    _run_quiz(subj, ln, quiz)
+                break
+    # end while
+
+
+def _assemble_by_quiz(by_quiz: dict[str, list[dict]], selected: list[str]):
+    """Interactive question picker grouped by source quiz."""
+    while True:
+        banner("🧩 按试卷选题")
+        quiz_ids = list(by_quiz.keys())
+        for i, qid in enumerate(quiz_ids, start=1):
+            qs = by_quiz[qid]
+            title = qs[0].get("_quiz_title", qid)
+            show(f"  {Gn}{i}{R}. {qid} — {title}（{len(qs)} 题）")
+        sep(); mi(0, "返回"); print()
+
+        ch = ask("选择试卷")
+        if ch == "0": break
+        try:
+            idx = int(ch) - 1
+            if 0 <= idx < len(quiz_ids):
+                _pick_questions(quiz_ids[idx], by_quiz[quiz_ids[idx]], selected)
+            else:
+                warn("无效编号。"); wait()
+        except (ValueError, IndexError):
+            warn("无效输入。"); wait()
+
+
+def _pick_questions(quiz_id: str, questions: list[dict], selected: list[str]):
+    """Pick individual questions from one quiz."""
+    type_label = {"single_choice": "单选", "multiple_choice": "多选",
+                  "true_false": "判断", "short_answer": "简答", "case_analysis": "案例分析"}
+
+    while True:
+        banner(f"🧩 选题 → {quiz_id}")
+        for i, q in enumerate(questions, start=1):
+            key = f"{quiz_id}:{q['id']}"
+            mark = f"{Gn}✓{R}" if key in selected else " "
+            tlabel = type_label.get(q.get("type", ""), q.get("type", ""))
+            show(f"  {Gn}{i}{R}. {mark} [{tlabel}][{q.get('difficulty', '')}] {q.get('question', '')[:60]}")
+
+        print()
+        mi(1, "切换选中/取消")
+        mi(2, "全选此试卷")
+        mi(3, "取消全选此试卷")
+        sep(); mi(0, "返回"); print()
+
+        ch = ask("选择")
+        if ch == "0": break
+        elif ch == "1":
+            idx_s = ask("题目编号（多个逗号分隔）")
+            for part in idx_s.split(","):
+                try:
+                    idx = int(part.strip()) - 1
+                    if 0 <= idx < len(questions):
+                        key = f"{quiz_id}:{questions[idx]['id']}"
+                        if key in selected:
+                            selected.remove(key)
+                        else:
+                            selected.append(key)
+                except (ValueError, IndexError):
+                    pass
+        elif ch == "2":
+            for q in questions:
+                key = f"{quiz_id}:{q['id']}"
+                if key not in selected:
+                    selected.append(key)
+        elif ch == "3":
+            for q in questions:
+                key = f"{quiz_id}:{q['id']}"
+                if key in selected:
+                    selected.remove(key)
+
+
+def _run_quiz(subj: str, ln: int, quiz):
+    """Run a quiz via the CLI path."""
+    import subprocess, sys
+    from src.storage import Storage
+    from src.config_loader import get_config
+    from src.exam_logic import run_cli_quiz, record_score
+
+    cfg = get_config()
+    storage = Storage(cfg.course_path)
+
+    print(f"\n📝 开始答题：{quiz.title}")
+    print(f"   共 {len(quiz.questions)} 题\n")
+    attempt_path, auto_score, wrong_answers = run_cli_quiz(storage, subj, quiz)
+
+    total_possible = sum(q.score for q in quiz.questions)
+    record_score(subj, ln, auto_score, total_possible, storage)
+
+    if wrong_answers:
+        print(f"\n错题数：{len(wrong_answers)}")
+    wait()
+
 
 # ═══════════════════════════════════════════════════════════════
 #  Entry

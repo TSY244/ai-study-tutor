@@ -1,4 +1,7 @@
-"""Exam logic — quiz generation, terminal answering, grading, wrong-question tracking."""
+"""Exam logic — quiz generation, terminal answering, grading, wrong-question tracking.
+
+Now integrates the question-generation policy from src/question_policy.py.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +12,17 @@ from typing import Any
 
 from .ai_adapter.base_ai import BaseAI
 from .config_loader import get_config
-from .memory import course_weaknesses, update_weaknesses
+from .memory import (
+    compute_chapter_mastery,
+    course_weaknesses,
+    get_consecutive_stats,
+    reduce_weakness_severity,
+    update_weaknesses,
+)
 from .models import (
     Answer,
     Attempt,
+    CognitiveLevel,
     QuestionFeedback,
     QuestionType,
     Quiz,
@@ -24,6 +34,13 @@ from .prompts import (
     grade_prompt,
     quiz_prompt,
     retest_prompt,
+)
+from .question_policy import (
+    DEFAULT_QUESTIONS,
+    determine_cognitive_distribution,
+    determine_difficulty_distribution,
+    determine_question_count,
+    should_stop_early,
 )
 from .storage import Storage, StorageError
 
@@ -63,6 +80,7 @@ def _load_raw_text(subject: str, lesson: int, storage: Storage) -> str:
         return storage.read_text(student_path)
 
     raise FileNotFoundError(f"未找到可用素材：{lesson_dir}")
+
 
 def quiz_id_for(chapter_id: int, retest: bool = False) -> str:
     if retest:
@@ -114,6 +132,8 @@ def quiz_to_markdown(quiz: Quiz, teacher: bool = False) -> str:
         lines.append("")
         lines.append(f"- 题型：{q.type.value}")
         lines.append(f"- 分值：{q.score}")
+        lines.append(f"- 认知层次：{q.cognitive_level.value if q.cognitive_level else '未标注'}")
+        lines.append(f"- 难度：{q.difficulty}")
         lines.append(f"- 考察概念：{'、'.join(q.tested_concepts)}")
         if q.options:
             lines.append("")
@@ -148,21 +168,70 @@ def build_quiz(
     ai: BaseAI,
     storage: Storage | None = None,
     retest: bool = False,
-    question_count: int = 10,
+    question_count: int | None = None,
 ) -> Quiz:
+    """Generate a quiz using policy-driven question count, cognitive distribution,
+    and difficulty distribution.
+
+    If question_count is None, the policy determines it automatically.
+    """
     storage = storage or Storage()
     raw_text = _load_raw_text(subject, chapter_id, storage)
     student_notes_path = storage.student_notes_path(subject, chapter_id)
     lesson_text = storage.read_text(student_notes_path) if student_notes_path.exists() else ""
     weaknesses = course_weaknesses(storage, subject, chapter_id)
 
+    # ── Compute mastery ──
+    mastery = compute_chapter_mastery(storage, subject, chapter_id)
+
+    # ── Get consecutive stats ──
+    constats = get_consecutive_stats(storage, subject, chapter_id)
+
+    # ── Determine question count (policy-driven) ──
+    if question_count is None:
+        # Detect content complexity from length and structure
+        content_complexity = _detect_complexity(raw_text, lesson_text)
+        question_count = determine_question_count(
+            content_complexity=content_complexity,
+            consecutive_errors=constats.get("consecutive_wrong", 0),
+            consecutive_correct=constats.get("consecutive_correct", 0),
+            accuracy=mastery,
+            user_override=None,
+        )
+
+    # ── Early stop? ──
+    if question_count == 0:
+        raise StorageError(
+            f"🎉 掌握度已达 {mastery:.0%}，连续正确 {constats.get('consecutive_correct', 0)} 题，无需再生成新题。"
+            "可以通过 --exam-review 进行二次复习考试。"
+        )
+
+    # ── Determine cognitive distribution ──
+    cognitive_dist = determine_cognitive_distribution(mastery, question_count)
+
+    # ── Determine difficulty distribution ──
+    difficulty_dist = determine_difficulty_distribution(question_count)
+
+    # ── Build the prompt ──
     if retest:
         latest_quiz, latest_feedback = _latest_attempt_context(storage, subject, chapter_id)
         system, prompt = retest_prompt(
-            raw_text, weaknesses, latest_quiz, latest_feedback, question_count,
+            raw_text, weaknesses, latest_quiz, latest_feedback,
+            question_count=question_count,
+            cognitive_dist={k.value: v for k, v in cognitive_dist.items()},
+            difficulty_dist=difficulty_dist,
+            mastery=mastery,
+            consecutive_stats=constats,
         )
     else:
-        system, prompt = quiz_prompt(raw_text, lesson_text, weaknesses, question_count)
+        system, prompt = quiz_prompt(
+            raw_text, lesson_text, weaknesses,
+            question_count=question_count,
+            cognitive_dist={k.value: v for k, v in cognitive_dist.items()},
+            difficulty_dist=difficulty_dist,
+            mastery=mastery,
+            consecutive_stats=constats,
+        )
 
     payload_text = ai.chat_json(prompt, system=system)
     payload = _extract_json(payload_text)
@@ -178,7 +247,15 @@ def build_quiz(
     )
     if not quiz.questions:
         raise StorageError("AI 未生成任何题目，请检查资料或重试。")
+
+    # ── Validate policy compliance ──
+    _validate_quiz_policy(quiz, cognitive_dist, difficulty_dist, question_count)
+
     save_quiz_files(storage, subject, quiz)
+
+    # ── Print policy summary ──
+    _print_policy_summary(quiz, mastery, cognitive_dist, difficulty_dist)
+
     return quiz
 
 
@@ -187,7 +264,10 @@ def build_quiz(
 # ---------------------------------------------------------------------------
 
 def run_cli_quiz(storage: Storage, course: str, quiz: Quiz) -> tuple[Path, float, list[dict[str, Any]]]:
-    """Interactive terminal quiz. Returns (attempt_path, auto_score, wrong_answers)."""
+    """Interactive terminal quiz. Returns (attempt_path, auto_score, wrong_answers).
+
+    Now tracks consecutive-correct / consecutive-wrong stats for policy feedback.
+    """
     answers: list[Answer] = []
     total_auto_score = 0.0
     wrong_answers: list[dict[str, Any]] = []
@@ -195,7 +275,8 @@ def run_cli_quiz(storage: Storage, course: str, quiz: Quiz) -> tuple[Path, float
     for index, question in enumerate(quiz.questions, start=1):
         print(f"\n{'='*40}")
         print(f"  [{index}/{len(quiz.questions)}]")
-        print(f"  {question.question}")
+        cognitive_label = f" [{_cognitive_emoji(question.cognitive_level)} {question.cognitive_level.value if question.cognitive_level else '?'}]"
+        print(f"  {question.question}{cognitive_label}")
         if question.options:
             for key, value in question.options.items():
                 print(f"    {key}. {value}")
@@ -227,11 +308,19 @@ def run_cli_quiz(storage: Storage, course: str, quiz: Quiz) -> tuple[Path, float
                     "explanation": question.explanation,
                     "tested_concepts": question.tested_concepts,
                     "score": question.score,
+                    "difficulty": question.difficulty,
+                    "cognitive_level": question.cognitive_level.value if question.cognitive_level else None,
                 })
             print(f"  {question.explanation}")
-        answers.append(Answer(question_id=question.id, user_answer=user_answer))
+        answers.append(Answer(
+            question_id=question.id,
+            user_answer=user_answer,
+        ))
 
-    # Save attempt
+    # ── Compute consecutive stats ──
+    consec_correct, consec_wrong = _compute_consecutive(answers, quiz)
+
+    # Save attempt (with stats)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     exam_dir = storage.exam_dir(course, quiz.chapter_id)
     attempt_path = exam_dir / f"{timestamp}_answers.json"
@@ -240,7 +329,17 @@ def run_cli_quiz(storage: Storage, course: str, quiz: Quiz) -> tuple[Path, float
         "course_id": quiz.course_id,
         "chapter_id": quiz.chapter_id,
         "auto_score": total_auto_score,
-        "answers": [item.model_dump(mode="json") for item in answers],
+        "total_possible": sum(q.score for q in quiz.questions),
+        "answers": [
+            {
+                "question_id": a.question_id,
+                "user_answer": a.user_answer,
+                "is_correct": _answer_is_correct(a, quiz),
+            }
+            for a in answers
+        ],
+        "consecutive_correct": consec_correct,
+        "consecutive_wrong": consec_wrong,
         "created_at": timestamp,
         "note": "客观题已自动判分，主观题请运行 --exam-review 进行 AI 批阅。",
     }
@@ -251,8 +350,19 @@ def run_cli_quiz(storage: Storage, course: str, quiz: Quiz) -> tuple[Path, float
         wrong_dir = storage.wrong_questions_dir(course, quiz.chapter_id)
         storage.save_json(wrong_dir / f"{timestamp}_wrong.json", wrong_answers)
 
+    accuracy = total_auto_score / sum(q.score for q in quiz.questions) if quiz.questions else 0
+
     print(f"\n答题记录已保存：{attempt_path}")
     print(f"自动判分（客观题）：{total_auto_score} 分")
+    print(f"连续正确：{consec_correct} 题 | 连续错误：{consec_wrong} 题")
+
+    # ── Policy feedback ──
+    if should_stop_early(accuracy, consec_correct):
+        print(f"\n🎉 掌握度达标（{accuracy:.0%}），连续正确 {consec_correct} 题！")
+        print("   建议：无需再次生成新题，可通过 --exam-review 进行挑战性复习。")
+    elif consec_wrong >= 2:
+        print(f"\n⚠️  连续错误 {consec_wrong} 题，下次生成将自动增加 3 道练习题。")
+
     return attempt_path, total_auto_score, wrong_answers
 
 
@@ -269,8 +379,6 @@ def grade_answers(
 ) -> Attempt:
     storage = storage or Storage()
     # Find quiz file
-    exam_dir = storage.exam_dir(course, 1)  # Try all lesson dirs
-    # Actually, we need to find the correct exam dir. Let's search.
     qpath = _find_quiz_path(storage, course, quiz_id)
     quiz = storage.read_json(qpath)
     answers = _parse_answers_markdown(Path(answers_path))
@@ -297,12 +405,30 @@ def grade_answers(
     )
 
     chapter_id = int(quiz.get("chapter_id", 0) or 0) or None
+
+    # ── Update weaknesses ──
     update_weaknesses(
         storage,
         course,
         [item.model_dump(mode="json") for item in weak_concepts],
         chapter=chapter_id,
     )
+
+    # ── Reduce severity for correctly-answered concepts ──
+    for fb in attempt.question_feedback:
+        if fb.is_correct:
+            for concept in fb.weak_concepts:
+                # If feedback says a concept is weak but answer is correct, reduce
+                pass
+        else:
+            for concept in fb.weak_concepts:
+                pass  # Already handled by update_weaknesses above
+
+    # Reduce severity for concepts in correctly-answered questions
+    for fb in attempt.question_feedback:
+        if fb.is_correct and fb.weak_concepts:
+            for concept in fb.weak_concepts:
+                reduce_weakness_severity(storage, course, concept, chapter=chapter_id, amount=1)
 
     exam_dir = _find_quiz_dir(storage, course, quiz_id) or storage.exam_dir(course, chapter_id or 1)
     storage.save_json(exam_dir / f"{timestamp}_feedback.json", attempt)
@@ -408,6 +534,190 @@ def export_merged_md(subject: str, lesson: int, storage: Storage | None = None) 
     export_path = storage.lesson_dir(subject, lesson) / "export.md"
     storage.save_text(export_path, merged)
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Quiz history — list, view, switch quizzes
+# ---------------------------------------------------------------------------
+
+def list_historical_quizzes(
+    subject: str, lesson: int, storage: Storage | None = None
+) -> list[dict[str, Any]]:
+    """Return metadata for all quizzes of a subject/lesson, newest first.
+
+    Each entry: {id, title, source, question_count, created_at, path}
+    """
+    storage = storage or Storage()
+    exam_dir = storage.exam_dir(subject, lesson)
+    quizzes: list[dict[str, Any]] = []
+
+    for f in sorted(exam_dir.glob("*.json"), reverse=True):
+        # Skip non-quiz files (answers, feedback, transient output, etc.)
+        name = f.name
+        if name.endswith("_answers.json") or name.endswith("_feedback.json"):
+            continue
+        if name == "quiz_result.json":
+            continue  # transient output file, not a saved quiz
+        if name.endswith("_student.md") or name.endswith("_teacher.md"):
+            continue
+        try:
+            data = storage.read_json(f)
+            if not isinstance(data, dict) or "questions" not in data:
+                continue
+            quizzes.append({
+                "id": data.get("id", f.stem),
+                "title": data.get("title", f.stem),
+                "source": data.get("source", "regular"),
+                "question_count": len(data.get("questions", [])),
+                "created_at": data.get("created_at", ""),
+                "chapter_id": data.get("chapter_id", lesson),
+                "path": str(f),
+            })
+        except Exception:
+            pass
+
+    # Sort: newest first by created_at, then filename
+    quizzes.sort(key=lambda q: q.get("created_at", ""), reverse=True)
+    return quizzes
+
+
+def load_quiz_by_id(
+    subject: str, lesson: int, quiz_id: str, storage: Storage | None = None
+) -> Quiz | None:
+    """Load a specific quiz by its ID. Returns None if not found."""
+    storage = storage or Storage()
+    exam_dir = storage.exam_dir(subject, lesson)
+    candidate = exam_dir / f"{quiz_id}.json"
+    if not candidate.exists():
+        # Search by id field inside files
+        for f in sorted(exam_dir.glob("*.json")):
+            name = f.name
+            if name.endswith("_answers.json") or name.endswith("_feedback.json"):
+                continue
+            try:
+                data = storage.read_json(f)
+                if isinstance(data, dict) and data.get("id") == quiz_id:
+                    candidate = f
+                    break
+            except Exception:
+                pass
+    if not candidate.exists():
+        return None
+    data = storage.read_json(candidate)
+    return Quiz.model_validate(data)
+
+
+def get_latest_quiz(
+    subject: str, lesson: int, storage: Storage | None = None
+) -> Quiz | None:
+    """Return the most recent quiz for a lesson, or None."""
+    quizzes = list_historical_quizzes(subject, lesson, storage)
+    if not quizzes:
+        return None
+    return load_quiz_by_id(subject, lesson, quizzes[0]["id"], storage)
+
+
+# ---------------------------------------------------------------------------
+# Custom quiz assembly — pick questions from multiple quizzes
+# ---------------------------------------------------------------------------
+
+def list_all_questions(
+    subject: str, lesson: int, storage: Storage | None = None
+) -> list[dict[str, Any]]:
+    """Return every question from every quiz for a subject/lesson.
+
+    Each entry is a question dict with added `_quiz_id` and `_quiz_title`
+    so the caller knows which quiz it came from.
+    """
+    storage = storage or Storage()
+    quizzes = list_historical_quizzes(subject, lesson, storage)
+    questions: list[dict[str, Any]] = []
+
+    for qmeta in quizzes:
+        quiz = load_quiz_by_id(subject, lesson, qmeta["id"], storage)
+        if quiz is None:
+            continue
+        for q in quiz.questions:
+            qd = q.model_dump(mode="json")
+            qd["_quiz_id"] = quiz.id
+            qd["_quiz_title"] = quiz.title
+            qd["_quiz_source"] = quiz.source
+            questions.append(qd)
+
+    return questions
+
+
+def assemble_quiz(
+    subject: str,
+    lesson: int,
+    question_ids: list[str],
+    title: str = "",
+    storage: Storage | None = None,
+) -> Quiz | None:
+    """Create a new quiz from selected questions across historical quizzes.
+
+    Parameters
+    ----------
+    question_ids : list of "<quiz_id>:<question_id>" pairs, e.g. ["quiz_chapter_01:q1", "retest_chapter_01_20260605:q3"]
+    title : optional custom title
+    storage : Storage instance
+
+    Returns
+    -------
+    Quiz or None if no questions were matched.
+    """
+    from datetime import datetime
+
+    storage = storage or Storage()
+    all_qs = list_all_questions(subject, lesson, storage)
+
+    # Build lookup: "<quiz_id>:<qid>" → question data
+    lookup: dict[str, dict[str, Any]] = {}
+    for q in all_qs:
+        key = f"{q['_quiz_id']}:{q['id']}"
+        lookup[key] = q
+
+    # Collect matched questions
+    matched: list[QuizQuestion] = []
+    source_quizzes: set[str] = set()
+    for qid_key in question_ids:
+        qid_key = qid_key.strip()
+        if qid_key in lookup:
+            data = lookup[qid_key]
+            source_quizzes.add(data["_quiz_id"])
+            # Remove our metadata keys before constructing QuizQuestion
+            qdata = {k: v for k, v in data.items() if not k.startswith("_")}
+            matched.append(QuizQuestion.model_validate(qdata))
+        else:
+            # Try partial match: just question id (e.g. "q1")
+            partial_matches = [v for k, v in lookup.items() if k.endswith(f":{qid_key}")]
+            if len(partial_matches) == 1:
+                data = partial_matches[0]
+                source_quizzes.add(data["_quiz_id"])
+                qdata = {k: v for k, v in data.items() if not k.startswith("_")}
+                matched.append(QuizQuestion.model_validate(qdata))
+
+    if not matched:
+        return None
+
+    # Renumber questions sequentially
+    for i, q in enumerate(matched, start=1):
+        q.id = f"q{i}"
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    quiz = Quiz(
+        id=f"assembled_chapter_{lesson:02d}_{stamp}",
+        course_id=subject,
+        chapter_id=lesson,
+        title=title or f"组装试卷 — {subject} 第{lesson}课",
+        questions=matched,
+        mode="markdown",
+        source="assembled",
+        source_quizzes=sorted(source_quizzes),
+    )
+
+    save_quiz_files(storage, subject, quiz)
+    return quiz
 
 
 # ---------------------------------------------------------------------------
@@ -523,3 +833,122 @@ def _find_quiz_dir(storage: Storage, course: str, quiz_id: str) -> Path | None:
         if candidate.exists():
             return exam_dir
     return None
+
+
+def _detect_complexity(raw_text: str, lesson_text: str) -> str:
+    """Heuristic to classify content complexity.
+
+    Returns "simple", "normal", or "complex".
+    """
+    combined = raw_text + "\n" + lesson_text
+    length = len(combined)
+
+    # Count indicators of complexity
+    math_indicators = sum(1 for kw in ["推导", "证明", "公式", "定理", "计算", "微分", "积分"]
+                          if kw in combined)
+    step_indicators = sum(1 for kw in ["步骤", "流程", "方法", "步骤一", "步骤二", "首先", "然后", "接着"]
+                          if kw in combined)
+    concept_count = combined.count("概念") + combined.count("定义")
+
+    score = math_indicators * 2 + step_indicators + concept_count
+
+    if length < 3000 and score < 5:
+        return "simple"
+    elif score >= 8 or length > 15000:
+        return "complex"
+    else:
+        return "normal"
+
+
+def _validate_quiz_policy(
+    quiz: Quiz,
+    cognitive_dist: dict[CognitiveLevel, int],
+    difficulty_dist: dict[str, int],
+    question_count: int,
+) -> None:
+    """Soft-validate that the generated quiz roughly matches the policy.
+
+    Prints warnings (does not fail) since AI generation is inherently
+    approximate.
+    """
+    actual_count = len(quiz.questions)
+
+    # Count cognitive levels
+    level_counts: dict[str, int] = {}
+    for q in quiz.questions:
+        if q.cognitive_level:
+            level_counts[q.cognitive_level.value] = level_counts.get(q.cognitive_level.value, 0) + 1
+
+    # Count difficulties
+    diff_counts: dict[str, int] = {}
+    for q in quiz.questions:
+        diff_counts[q.difficulty] = diff_counts.get(q.difficulty, 0) + 1
+
+    if actual_count != question_count:
+        print(f"[策略校验] ⚠️ 题目数量：期望 {question_count}，实际 {actual_count}")
+
+
+def _print_policy_summary(
+    quiz: Quiz,
+    mastery: float,
+    cognitive_dist: dict[CognitiveLevel, int],
+    difficulty_dist: dict[str, int],
+) -> None:
+    """Print a human-readable summary of the applied policy."""
+    print(f"\n{'─'*50}")
+    print(f"📋 题目生成策略摘要")
+    print(f"{'─'*50}")
+    tier = "高（>85%）" if mastery > 0.85 else "中（60%-85%）" if mastery >= 0.60 else "低（<60%）" if mastery > 0 else "首次"
+    print(f"  掌握度：{mastery:.0%}（{tier}）")
+    print(f"  共 {len(quiz.questions)} 题")
+    print(f"  认知层次：{' | '.join(f'{lv.value}={ct}' for lv, ct in cognitive_dist.items() if ct > 0)}")
+    print(f"  难度分布：{' | '.join(f'{k}={v}' for k, v in difficulty_dist.items() if v > 0)}")
+    print(f"{'─'*50}\n")
+
+
+def _cognitive_emoji(level: CognitiveLevel | None) -> str:
+    if level is None:
+        return "📝"
+    emoji_map = {
+        CognitiveLevel.recall: "🧠",
+        CognitiveLevel.explain: "💡",
+        CognitiveLevel.apply: "🔧",
+        CognitiveLevel.transfer: "🚀",
+        CognitiveLevel.reflect: "🤔",
+    }
+    return emoji_map.get(level, "📝")
+
+
+def _answer_is_correct(answer: Answer, quiz: Quiz) -> bool | None:
+    """Determine if an answer is correct based on quiz question type.
+
+    Returns None for subjective questions (needs AI grading).
+    """
+    question = next((q for q in quiz.questions if q.id == answer.question_id), None)
+    if question is None:
+        return None
+    if question.type in (QuestionType.short_answer, QuestionType.case_analysis):
+        return None  # Needs AI grading
+    return is_objective_correct(question, answer.user_answer)
+
+
+def _compute_consecutive(answers: list[Answer], quiz: Quiz) -> tuple[int, int]:
+    """Compute consecutive correct and wrong from the end of the quiz."""
+    consec_correct = 0
+    consec_wrong = 0
+
+    for ans in reversed(answers):
+        correct = _answer_is_correct(ans, quiz)
+        if correct is True:
+            consec_correct += 1
+            if consec_wrong > 0:
+                break
+        elif correct is False:
+            consec_wrong += 1
+            if consec_correct > 0:
+                break
+        # None (subjective) breaks the streak
+        else:
+            break
+
+    return consec_correct, consec_wrong

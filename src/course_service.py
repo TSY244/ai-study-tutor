@@ -2,6 +2,9 @@
 
 The frontend (interactive.py / main.py CLI) calls these functions.
 AI tasks are delegated to Claude Code Agent via src/agent_runner.py.
+
+Question-generation now routes through the policy engine
+(src/question_policy.py) to ensure learning-science-backed defaults.
 """
 
 from __future__ import annotations
@@ -147,10 +150,20 @@ class CourseService:
     # ── Exam ──
 
     def queue_exam_generation(
-        self, subject: str, lesson: int, num: int, model: str
+        self, subject: str, lesson: int, num: int | None = None, model: str = ""
     ) -> str:
-        """Queue a quiz generation task. Returns task_id."""
+        """Queue a quiz generation task. Returns task_id.
+
+        If `num` is None, the policy engine determines the question count
+        automatically based on mastery and content complexity.
+        """
         from .agent_runner import queue_quiz_gen_task
+        from .memory import compute_chapter_mastery, course_weaknesses, get_consecutive_stats
+        from .question_policy import (
+            determine_cognitive_distribution,
+            determine_difficulty_distribution,
+            determine_question_count,
+        )
 
         lesson_dir = self.storage.lesson_dir(subject, lesson)
         exam_dir = self.storage.exam_dir(subject, lesson)
@@ -168,19 +181,56 @@ class CourseService:
         # Gather weaknesses
         weaknesses: list[dict[str, Any]] = []
         try:
-            from .memory import course_weaknesses
             weaknesses = course_weaknesses(self.storage, subject, lesson)
         except Exception:
             pass
+
+        # ── Compute policy parameters ──
+        mastery = 0.0
+        try:
+            mastery = compute_chapter_mastery(self.storage, subject, lesson)
+        except Exception:
+            pass
+
+        constats: dict[str, int] = {"consecutive_correct": 0, "consecutive_wrong": 0, "total_answered": 0}
+        try:
+            constats = get_consecutive_stats(self.storage, subject, lesson)
+        except Exception:
+            pass
+
+        # Determine question count
+        if num is not None:
+            question_count = num
+        else:
+            question_count = determine_question_count(
+                content_complexity=_detect_lesson_complexity(lesson_content),
+                consecutive_errors=constats.get("consecutive_wrong", 0),
+                consecutive_correct=constats.get("consecutive_correct", 0),
+                accuracy=mastery,
+            )
+
+        # Determine distributions
+        cognitive_dist = determine_cognitive_distribution(mastery, question_count)
+        difficulty_dist = determine_difficulty_distribution(question_count)
+
+        # ── Print policy summary for user ──
+        self._print_policy_info(
+            subject, lesson, question_count, mastery,
+            cognitive_dist, difficulty_dist, constats,
+        )
 
         task_id = queue_quiz_gen_task(
             subject=subject,
             lesson=lesson,
             lesson_content=lesson_content,
             output_dir=exam_dir,
-            question_count=num,
+            question_count=question_count,
             weaknesses=weaknesses,
             model=model,
+            cognitive_distribution={k.value: v for k, v in cognitive_dist.items()},
+            difficulty_distribution=difficulty_dist,
+            mastery=mastery,
+            consecutive_stats=constats,
         )
         return task_id
 
@@ -192,3 +242,51 @@ class CourseService:
             return len(list_wrong_questions(subject, lesson, self.storage))
         except Exception:
             return 0
+
+    # ── Policy info ──
+
+    def _print_policy_info(
+        self,
+        subject: str,
+        lesson: int,
+        question_count: int,
+        mastery: float,
+        cognitive_dist,
+        difficulty_dist,
+        constats: dict[str, int],
+    ) -> None:
+        """Print a summary of the applied policy to the user."""
+        tier = (
+            "高（>85%）" if mastery > 0.85
+            else "中（60%-85%）" if mastery >= 0.60
+            else "低（<60%）" if mastery > 0
+            else "首次练习"
+        )
+        print(f"\n{'─'*50}")
+        print(f"📋 题目生成策略：{subject} 第{lesson}课")
+        print(f"{'─'*50}")
+        print(f"  掌握度：{mastery:.0%}（{tier}）")
+        print(f"  上次统计：连续正确 {constats.get('consecutive_correct', 0)} 题，"
+              f"连续错误 {constats.get('consecutive_wrong', 0)} 题")
+        print(f"  本次生成：{question_count} 题")
+        print(f"  认知层次：{' | '.join(f'{lv.value}={ct}' for lv, ct in cognitive_dist.items() if ct > 0)}")
+        print(f"  难度分布：{' | '.join(f'{k}={v}' for k, v in difficulty_dist.items() if v > 0)}")
+        print(f"{'─'*50}")
+
+
+def _detect_lesson_complexity(content: str) -> str:
+    """Quick heuristic for content complexity level."""
+    if not content:
+        return "normal"
+    length = len(content)
+    math_kw = sum(1 for kw in ["推导", "证明", "公式", "定理", "计算", "微分", "积分"]
+                  if kw in content)
+    step_kw = sum(1 for kw in ["步骤", "流程", "方法"]
+                  if kw in content)
+    concept_kw = content.count("概念") + content.count("定义")
+    score = math_kw * 2 + step_kw + concept_kw
+    if length < 3000 and score < 5:
+        return "simple"
+    elif score >= 8 or length > 15000:
+        return "complex"
+    return "normal"

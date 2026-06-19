@@ -261,11 +261,56 @@ def build_quiz_gen_prompt(
     subject: str,
     lesson: int,
     lesson_content: str,
-    question_count: int = 10,
+    question_count: int = 8,
     weaknesses: list[dict[str, Any]] | None = None,
+    *,
+    cognitive_distribution: dict[str, int] | None = None,
+    difficulty_distribution: dict[str, int] | None = None,
+    mastery: float = 0.0,
+    consecutive_stats: dict[str, int] | None = None,
+    retest: bool = False,
 ) -> str:
-    """Build prompt for quiz generation task."""
-    weaknesses_str = json.dumps(weaknesses or [], ensure_ascii=False, indent=2)
+    """Build prompt for quiz generation task.
+
+    Includes the full question-generation policy from question_policy.py.
+    """
+    from .models import CognitiveLevel
+    from .question_policy import build_policy_context, determine_difficulty_distribution
+
+    # ── Resolve difficulty distribution ──
+    diff_dist = difficulty_distribution
+    if diff_dist is None:
+        diff_dist = determine_difficulty_distribution(question_count)
+    diff_sum = sum(diff_dist.values())
+    if diff_sum != question_count:
+        diff_dist = determine_difficulty_distribution(question_count)
+
+    # ── Resolve cognitive distribution ──
+    level_dist: dict[CognitiveLevel, int] = {}
+    if cognitive_distribution:
+        for k, v in cognitive_distribution.items():
+            try:
+                level_dist[CognitiveLevel(k)] = v
+            except ValueError:
+                pass
+
+    # ── Build policy text ──
+    policy_text = build_policy_context(
+        cognitive_dist=level_dist,
+        difficulty_dist=diff_dist,
+        question_count=question_count,
+        mastery=mastery,
+        weaknesses=weaknesses,
+    )
+
+    # ── Stats text ──
+    stats_text = ""
+    if consecutive_stats:
+        cc = consecutive_stats.get("consecutive_correct", 0)
+        ce = consecutive_stats.get("consecutive_wrong", 0)
+        stats_text = f"\n上次答题统计：连续正确 {cc} 题，连续错误 {ce} 题。\n"
+
+    # ── Schema ──
     schema = {
         "quiz_title": "章节测试标题",
         "questions": [
@@ -279,22 +324,39 @@ def build_quiz_gen_prompt(
                 "tested_concepts": ["概念"],
                 "difficulty": "easy",
                 "score": 5,
+                "cognitive_level": "recall",
             }
         ],
     }
-    return f"""请生成 {question_count} 道章节考试题。
 
-题型需覆盖 single_choice、multiple_choice、true_false、short_answer、case_analysis。
-每题必须有 tested_concepts 和 score。
+    mode = "二次考试（retest）" if retest else "章节测试"
+    retest_note = (
+        "\n特殊要求：不重复原题，换角度考察同一概念，重点围绕历史薄弱点，增加案例题和解释题。"
+        if retest else ""
+    )
+
+    weaknesses_str = json.dumps(weaknesses or [], ensure_ascii=False, indent=2)
+
+    return f"""请严格按照下面的题目生成策略，生成 {question_count} 道{mode}题。
+{retest_note}
+
+要求：
+1. 认知层次分布严格按策略表执行（每道题标注 cognitive_level）
+2. 难度分布严格按策略表执行，顺序递增
+3. 题型覆盖 single_choice、multiple_choice、true_false、short_answer、case_analysis
+4. 每题必须有 tested_concepts、score、difficulty、cognitive_level
+5. 不直接复制资料原文
 
 必须输出严格 JSON（不要 Markdown 代码块，不要额外解释）。
+
+{policy_text}
 
 JSON Schema：
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 
 历史薄弱点：
 {weaknesses_str}
-
+{stats_text}
 课程内容：
 {lesson_content[:24000]}"""
 
@@ -384,13 +446,25 @@ def queue_quiz_gen_task(
     lesson: int,
     lesson_content: str,
     output_dir: Path,
-    question_count: int = 10,
+    question_count: int = 8,
     weaknesses: list[dict[str, Any]] | None = None,
     model: str = "",
     retest: bool = False,
+    *,
+    cognitive_distribution: dict[str, int] | None = None,
+    difficulty_distribution: dict[str, int] | None = None,
+    mastery: float = 0.0,
+    consecutive_stats: dict[str, int] | None = None,
 ) -> str:
     """Queue a quiz generation task. Returns task_id."""
-    prompt = build_quiz_gen_prompt(subject, lesson, lesson_content, question_count, weaknesses)
+    prompt = build_quiz_gen_prompt(
+        subject, lesson, lesson_content, question_count, weaknesses,
+        cognitive_distribution=cognitive_distribution,
+        difficulty_distribution=difficulty_distribution,
+        mastery=mastery,
+        consecutive_stats=consecutive_stats,
+        retest=retest,
+    )
     task = create_task(
         task_type=TaskType.EXAM_REVIEW if retest else TaskType.QUIZ_GEN,
         prompt=prompt,
@@ -400,7 +474,12 @@ def queue_quiz_gen_task(
         output_files=["quiz_result.json"],
         output_format="json",
         model=model,
-        system_prompt="你必须返回严格 JSON，不要 Markdown 代码块，不要额外解释。只能基于用户提供的学习资料生成内容。",
+        system_prompt=(
+            "你必须返回严格 JSON，不要 Markdown 代码块，不要额外解释。"
+            "只能基于用户提供的学习资料生成内容。"
+            "注意：JSON 中所有中文引号必须使用弯引号 “（U+201C）和 ”（U+201D），"
+            "严禁在中文文本中使用 ASCII 直双引号，否则 JSON 会解析失败。"
+        ),
     )
     return task["task_id"]
 
@@ -548,3 +627,659 @@ def print_pending_summary() -> None:
         print(f"     输出: {task.get('output_dir', '')}")
     print()
     print("  在 Claude Code 中说「处理所有待处理的学习任务」即可开始。")
+
+
+# ---------------------------------------------------------------------------
+# JSON repair — Claude Code sometimes uses ASCII " in Chinese text
+# ---------------------------------------------------------------------------
+
+def _repair_json_chinese_quotes(text: str) -> str:
+    """Replace ASCII double-quotes used as Chinese quotation marks with curly quotes.
+
+    Scans for "..." patterns where the content contains CJK characters and
+    replaces the surrounding ASCII quotes with “ (U+201C) and ” (U+201D).
+    """
+    import re as _re
+
+    result = list(text)
+    i = 0
+    while i < len(text):
+        if text[i] != '"':
+            i += 1
+            continue
+
+        # Skip JSON structural quotes (adjacent to JSON syntax chars)
+        before = text[i - 1] if i > 0 else ' '
+        after = text[i + 1] if i + 1 < len(text) else ' '
+
+        if before in ':{}[] \t\r\n' or after in ':{}[], \t\r\n':
+            i += 1
+            continue
+
+        # Find matching close quote
+        j = i + 1
+        while j < len(text) and text[j] != '"':
+            j += 1
+
+        if j >= len(text):
+            i += 1
+            continue
+
+        inner = text[i + 1:j]
+        has_cjk = bool(_re.search(r'[一-鿿　-〿＀-￯]', inner))
+
+        if has_cjk:
+            result[i] = '“'  # "
+            result[j] = '”'  # "
+
+        i = j + 1
+
+    return ''.join(result)
+
+
+def _repair_and_validate_json(path: str) -> bool:
+    """Try to repair Chinese quotes in a JSON file. Returns True if valid after repair."""
+    import json as _json
+
+    p = Path(path)
+    if not p.exists():
+        return False
+
+    raw = p.read_text(encoding="utf-8")
+    try:
+        _json.loads(raw)
+        return True  # Already valid
+    except _json.JSONDecodeError:
+        pass
+
+    # Try repairing
+    repaired = _repair_json_chinese_quotes(raw)
+    if repaired == raw:
+        return False  # No changes made, still broken
+
+    try:
+        _json.loads(repaired)
+        p.write_text(repaired, encoding="utf-8")
+        return True
+    except _json.JSONDecodeError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Automatic task processing via Claude Code CLI (no manual intervention)
+# ---------------------------------------------------------------------------
+
+def process_task_via_claude_cli(task_id: str, timeout: int = 300) -> bool:
+    """Process a pending task by invoking Claude Code CLI as a subprocess.
+
+    This is the primary automated path — it calls `claude -p` to process the
+    task file, showing progress to the user while waiting.  No manual
+    "处理所有待处理的学习任务" step is needed.
+
+    Returns True if the task was processed successfully.
+    """
+    import subprocess
+    import threading
+    import time
+
+    task_path = PENDING_DIR / f"{task_id}.json"
+    if not task_path.exists():
+        print(f"   ⚠️  任务文件不存在：{task_path}")
+        return False
+
+    task = json.loads(task_path.read_text(encoding="utf-8"))
+    subject = task.get("subject", "")
+    lesson = task.get("lesson", 1)
+    output_dir = task.get("output_dir", "")
+
+    # Build instruction for Claude Code
+    quiz_id = f"quiz_chapter_{lesson:02d}_{task_id[-6:]}"
+    instruction = (
+        f"请处理任务文件 {task_path}。"
+        f"读取该 JSON 文件，按照其中的 prompt 字段生成试卷题目。"
+        f"将生成的试卷 JSON 保存到 {output_dir}/{quiz_id}.json。"
+        f"试卷 JSON 必须包含字段：\"id\": \"{quiz_id}\", \"course_id\": \"{subject}\", "
+        f"\"chapter_id\": {lesson}, \"title\": \"{subject}·第{lesson}课 章节测试\"。"
+        f"必须严格按照 prompt 中的策略（认知层次、难度分布、题型分布）执行。"
+        f"输出严格 JSON，不使用 Markdown 代码块。"
+        f"中文引号必须使用弯引号 “ 和 ”，严禁使用 ASCII 直双引号 \"。"
+    )
+
+    # Find claude CLI
+    claude_bin = None
+    for candidate in [
+        "/Users/august/.local/bin/claude",
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+    ]:
+        if Path(candidate).exists():
+            claude_bin = candidate
+            break
+
+    if claude_bin is None:
+        # Try PATH
+        import shutil
+        found = shutil.which("claude")
+        if found:
+            claude_bin = found
+
+    if claude_bin is None:
+        print("   ⚠️  未找到 Claude Code CLI，无法自动生成。")
+        return False
+
+    # Progress display
+    print(f"\n   🤖 正在启动 Claude Code 生成试卷...")
+    print(f"   科目：{subject}  课时：第{lesson}课")
+    print(f"   ⏳", end="", flush=True)
+
+    stop_spinner = threading.Event()
+    start_time = time.time()
+
+    def spinner():
+        chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        i = 0
+        while not stop_spinner.is_set():
+            elapsed = int(time.time() - start_time)
+            print(f"\r   ⏳ {chars[i % len(chars)]}  生成中...（{elapsed} 秒）", end="", flush=True)
+            i += 1
+            time.sleep(0.15)
+        # Clear spinner line on stop
+        elapsed = int(time.time() - start_time)
+        print(f"\r   {' ' * 40}", end="\r")
+
+    spinner_thread = threading.Thread(target=spinner, daemon=True)
+    spinner_thread.start()
+
+    try:
+        result = subprocess.run(
+            [
+                claude_bin,
+                "-p",
+                "--permission-mode", "acceptEdits",
+                "--output-format", "text",
+                instruction,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(PROJECT_ROOT),
+            env={**dict(os.environ), "NO_COLOR": "1"},
+        )
+    except subprocess.TimeoutExpired:
+        stop_spinner.set()
+        spinner_thread.join(timeout=0.5)
+        print(f"\r   ⚠️  生成超时（{timeout} 秒），任务仍在排队。")
+        return False
+    finally:
+        stop_spinner.set()
+        spinner_thread.join(timeout=0.5)
+
+    elapsed = int(time.time() - start_time)
+    print(f"\r   ⏱️  用时 {elapsed} 秒。", flush=True)
+
+    if result.returncode != 0:
+        print(f"   ⚠️  Claude Code 返回错误（exit code: {result.returncode}）")
+        if result.stderr:
+            print(f"   {result.stderr[:200]}")
+        return False
+
+    # Check if output was generated
+    output_dir_path = Path(output_dir)
+    quiz_id = f"quiz_chapter_{lesson:02d}_{task_id[-6:]}"
+    result_path = output_dir_path / f"{quiz_id}.json"
+
+    # Also check quiz_result.json (fallback name)
+    fallback_path = output_dir_path / "quiz_result.json"
+    if not result_path.exists() and fallback_path.exists():
+        # Rename fallback to proper name
+        fallback_path.rename(result_path)
+        print(f"   📄 已重命名 quiz_result.json → {quiz_id}.json")
+
+    if result_path.exists():
+        # Repair Chinese ASCII quotes if needed (common Claude Code issue)
+        repaired = _repair_and_validate_json(str(result_path))
+        if repaired:
+            # Ensure the quiz has proper id field
+            try:
+                data = json.loads(result_path.read_text(encoding="utf-8"))
+                if "id" not in data or data.get("id") != quiz_id:
+                    data["id"] = quiz_id
+                    data["course_id"] = data.get("course_id", subject)
+                    data["chapter_id"] = data.get("chapter_id", lesson)
+                    if "title" not in data:
+                        data["title"] = f"{subject}·第{lesson}课 章节测试"
+                    result_path.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    print(f"   📝 已修正试卷元数据")
+                q_count = len(data.get("questions", []))
+                print(f"   ✅ 试卷已生成：{quiz_id}（{q_count} 题）")
+            except Exception as e:
+                print(f"   ⚠️  试卷元数据修正失败：{e}")
+        else:
+            print(f"   ⚠️  试卷 JSON 格式有问题，但文件已保存。请手动检查。")
+
+        # Also repair any sibling quiz files
+        for sibling in output_dir_path.glob(f"quiz_chapter_{lesson:02d}_*.json"):
+            _repair_and_validate_json(str(sibling))
+
+        mark_completed(task_id)
+        return True
+
+    print(f"   ⚠️  Claude Code 执行完成，但未找到输出文件。")
+    print(f"   输出内容：{result.stdout[:300] if result.stdout else '(空)'}")
+    return False
+
+
+def process_all_pending_via_claude(timeout: int = 600) -> tuple[int, int]:
+    """Process ALL pending tasks by invoking Claude Code CLI.
+
+    Used after queuing fix_wrong, summarize, regenerate, or extraction tasks.
+    Returns (succeeded, failed).
+    """
+    import subprocess
+    import threading
+    import time
+
+    pending = list_pending_tasks()
+    if not pending:
+        return (0, 0)
+
+    task_list = "\n".join(
+        f"  - {t['task_id']} [{t.get('task_type', '?')}] {t.get('subject', '')} 第{t.get('lesson', 0)}课"
+        for t in pending
+    )
+
+    instruction = (
+        f"请处理以下 {len(pending)} 个待处理任务。\n\n"
+        f"{task_list}\n\n"
+        f"任务文件在 {PENDING_DIR} 目录下。对每个任务：\n"
+        f"1. 读取任务 JSON 文件\n"
+        f"2. 按照其中的 prompt 和 system_prompt 执行\n"
+        f"3. 将结果保存到 output_dir 指定的路径\n"
+        f"4. 完成后用 Write 工具标记完成状态\n\n"
+        f"注意：所有 JSON 输出中，中文引号必须使用弯引号 \" 和 \"，"
+        f"严禁使用 ASCII 直双引号，否则 JSON 会解析失败。"
+    )
+
+    # Find claude CLI
+    import shutil
+    claude_bin = shutil.which("claude")
+    if claude_bin is None:
+        for candidate in [
+            "/Users/august/.local/bin/claude",
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+        ]:
+            if Path(candidate).exists():
+                claude_bin = candidate
+                break
+
+    if claude_bin is None:
+        print("   ⚠️  未找到 Claude Code CLI。")
+        return (0, len(pending))
+
+    print(f"\n   🤖 正在调用 Claude Code 处理 {len(pending)} 个任务...")
+    for t in pending:
+        ttype = t.get("task_type", "?")
+        subj = t.get("subject", "")
+        ln = t.get("lesson", 0)
+        print(f"      [{ttype}] {subj} 第{ln}课")
+    print(f"   ⏳", end="", flush=True)
+
+    # Spinner with elapsed time
+    stop_spinner = threading.Event()
+    start_time = time.time()
+
+    def spinner():
+        chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        i = 0
+        while not stop_spinner.is_set():
+            elapsed = int(time.time() - start_time)
+            print(f"\r   ⏳ {chars[i % len(chars)]}  处理中...（{elapsed} 秒）", end="", flush=True)
+            i += 1
+            time.sleep(0.15)
+        elapsed = int(time.time() - start_time)
+        print(f"\r   {' ' * 40}", end="\r")
+
+    spinner_thread = threading.Thread(target=spinner, daemon=True)
+    spinner_thread.start()
+
+    try:
+        result = subprocess.run(
+            [
+                claude_bin,
+                "-p",
+                "--permission-mode", "acceptEdits",
+                "--output-format", "text",
+                instruction,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(PROJECT_ROOT),
+            env={**dict(os.environ), "NO_COLOR": "1"},
+        )
+    except subprocess.TimeoutExpired:
+        stop_spinner.set()
+        spinner_thread.join(timeout=0.5)
+        elapsed = int(time.time() - start_time)
+        print(f"\r   ⚠️  处理超时（{elapsed} 秒），部分任务可能未完成。")
+        return (0, len(pending))
+    finally:
+        stop_spinner.set()
+        spinner_thread.join(timeout=0.5)
+
+    elapsed = int(time.time() - start_time)
+    print(f"\r   ⏱️  用时 {elapsed} 秒。", flush=True)
+
+    # Check results and mark completed tasks
+    succeeded = 0
+    failed = 0
+    still_pending = list_pending_tasks()
+
+    for task in still_pending:
+        ttype = task.get("task_type", "")
+        output_dir = Path(task.get("output_dir", ""))
+        output_files = task.get("output_files", [])
+
+        # Check if output was generated
+        any_output = False
+        for of in output_files:
+            if (output_dir / of).exists():
+                any_output = True
+                break
+
+        # For quiz_gen, check quiz files
+        if not any_output and ttype in ("quiz_gen", "exam_review"):
+            lesson = task.get("lesson", 1)
+            for candidate in output_dir.glob(f"quiz_chapter_{lesson:02d}_*.json"):
+                if candidate.name != "quiz_result.json":
+                    _repair_and_validate_json(str(candidate))
+                    any_output = True
+
+        # For fix_wrong, check markdown output
+        if not any_output and ttype == "fix_wrong":
+            if (output_dir / "fix_analysis.md").exists():
+                any_output = True
+
+        if any_output:
+            mark_completed(task["task_id"])
+            succeeded += 1
+        else:
+            failed += 1
+
+    print(f"   ✅ 成功 {succeeded} 个，失败 {failed} 个")
+    return (succeeded, failed)
+
+
+# ---------------------------------------------------------------------------
+# Synchronous task processing (direct AI API — requires valid API key)
+# ---------------------------------------------------------------------------
+
+def process_pending_tasks_now(
+    storage=None,
+    ai_provider: str | None = None,
+    model: str | None = None,
+) -> tuple[int, int]:
+    """Process ALL pending tasks immediately using the direct AI adapter.
+
+    This eliminates the need for the user to manually tell Claude Code
+    to process tasks.  Called automatically from cmd_exam_new / cmd_exam_review.
+
+    Returns (succeeded, failed).
+    """
+    from .config_loader import get_config
+    from .ai_adapter.factory import get_ai
+
+    pending = list_pending_tasks()
+    if not pending:
+        return (0, 0)
+
+    cfg = get_config()
+    succeeded = 0
+    failed = 0
+
+    from .ai_adapter.claude_api import AIAPIError
+
+    for task in pending:
+        task_id = task["task_id"]
+        ttype = task.get("task_type", "")
+        try:
+            _process_single_task(task, cfg, ai_provider, model)
+            mark_completed(task_id)
+            succeeded += 1
+        except AIAPIError as exc:
+            # API key missing / config error — leave pending for Claude Code
+            failed += 1
+            task["error"] = str(exc)
+        except Exception as exc:
+            mark_completed(task_id, error=str(exc))
+            failed += 1
+            task["error"] = str(exc)
+
+    return (succeeded, failed)
+
+
+def process_task_now(
+    task_id_or_type: str,
+    storage=None,
+    ai_provider: str | None = None,
+    model: str | None = None,
+) -> bool:
+    """Process a single pending task synchronously.
+
+    Parameters
+    ----------
+    task_id_or_type : task_id (full) or task_type (e.g. "quiz_gen") to
+                      process the first pending task of that type.
+
+    Returns True on success, False on failure.
+    """
+    from .config_loader import get_config
+    from .ai_adapter.factory import get_ai
+
+    pending = list_pending_tasks()
+    task = None
+
+    # Match by exact ID first
+    for t in pending:
+        if t["task_id"] == task_id_or_type or t["task_id"].startswith(task_id_or_type):
+            task = t
+            break
+
+    # Match by task type
+    if task is None:
+        for t in pending:
+            if t.get("task_type") == task_id_or_type:
+                task = t
+                break
+
+    if task is None:
+        return False
+
+    from .ai_adapter.claude_api import AIAPIError
+
+    cfg = get_config()
+    try:
+        _process_single_task(task, cfg, ai_provider, model)
+        mark_completed(task["task_id"])
+        return True
+    except AIAPIError:
+        # API key missing — leave pending for Claude Code
+        return False
+    except Exception as exc:
+        # Non-API errors (bad JSON, etc.) — leave pending for Claude Code to retry.
+        # Record the error for debugging but keep the task in the pending queue.
+        print(f"   ⚠️  同步处理失败：{exc}")
+        task["error"] = str(exc)
+        task_path = PENDING_DIR / f"{task['task_id']}.json"
+        if task_path.exists():
+            task_path.write_text(
+                json.dumps(task, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        return False
+
+
+def _process_single_task(
+    task: dict[str, Any],
+    cfg,
+    ai_provider: str | None = None,
+    model: str | None = None,
+) -> None:
+    """Process one task using the direct AI API."""
+    from .ai_adapter.factory import get_ai
+
+    ttype = task.get("task_type", "")
+    output_dir = Path(task.get("output_dir", "."))
+
+    provider = ai_provider or cfg.default_provider
+    # get_ai expects the full ai_config (with "providers" key), not provider-level cfg
+    ai = get_ai(provider, cfg.ai_config)
+
+    if ttype in (TaskType.QUIZ_GEN, TaskType.EXAM_REVIEW):
+        _process_quiz_gen_task(task, ai, output_dir)
+    elif ttype == TaskType.FIX_WRONG:
+        _process_fix_wrong_task(task, ai, output_dir)
+    elif ttype == TaskType.SUMMARIZE:
+        _process_summarize_task(task, ai, output_dir)
+    elif ttype == TaskType.EXTRACTION:
+        _process_extraction_task(task, ai, output_dir)
+    elif ttype == TaskType.REGENERATE:
+        _process_extraction_task(task, ai, output_dir)
+    elif ttype == TaskType.CUSTOM:
+        _process_custom_task(task, ai, output_dir)
+    else:
+        raise ValueError(f"不支持的任务类型：{ttype}")
+
+
+def _process_quiz_gen_task(task: dict[str, Any], ai, output_dir: Path) -> None:
+    """Process a quiz_gen / exam_review task — call AI, parse JSON, save files."""
+    from .prompts import build_policy_context
+    from .question_policy import (
+        determine_cognitive_distribution,
+        determine_difficulty_distribution,
+    )
+    from .models import Quiz, QuizQuestion
+
+    prompt = task.get("prompt", "")
+    system_prompt = task.get("system_prompt", "你必须返回严格 JSON，不要 Markdown 代码块，不要额外解释。")
+    lesson = task.get("lesson", 1)
+
+    print(f"   🤖 正在向 AI 发送请求（{task.get('subject', '')} 第{lesson}课）...")
+    payload_text = ai.chat_json(prompt, system=system_prompt)
+    print(f"   📥 AI 响应已收到，正在解析试卷...")
+
+    # Extract JSON
+    import re as _re
+    cleaned = payload_text.strip()
+    fence = _re.search(r"```(?:json)?\s*(.*?)```", cleaned, _re.S | _re.I)
+    if fence:
+        cleaned = fence.group(1).strip()
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        starts = [i for i in [cleaned.find("{"), cleaned.find("[")] if i >= 0]
+        if not starts:
+            raise ValueError(f"AI 输出中未找到 JSON。内容：{payload_text[:200]}")
+        start = min(starts)
+        end = max(cleaned.rfind("}"), cleaned.rfind("]"))
+        if end < start:
+            raise ValueError("AI 输出中的 JSON 不完整。")
+        payload = json.loads(cleaned[start : end + 1])
+
+    quiz = Quiz(
+        id=f"quiz_chapter_{lesson:02d}",
+        course_id=task.get("subject", ""),
+        chapter_id=lesson,
+        title=str(payload.get("quiz_title") or f"第 {lesson} 课测试"),
+        questions=[QuizQuestion.model_validate(item) for item in payload.get("questions", [])],
+        mode="markdown",
+        source="regular",
+    )
+
+    if not quiz.questions:
+        raise ValueError("AI 未生成任何题目。")
+
+    # Save quiz files
+    from .storage import Storage
+    from .exam_logic import save_quiz_files, quiz_to_markdown
+
+    storage = Storage()
+    save_quiz_files(storage, task.get("subject", ""), quiz)
+
+    # Also save to the expected task output path
+    result_path = output_dir / "quiz_result.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(
+        json.dumps(quiz.model_dump(mode="json"), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    print(f"✅ 试卷已生成：{quiz.id}（{len(quiz.questions)} 题）")
+
+
+def _process_fix_wrong_task(task: dict[str, Any], ai, output_dir: Path) -> None:
+    """Process a fix_wrong task."""
+    prompt = task.get("prompt", "")
+    system_prompt = task.get("system_prompt", "")
+    analysis = ai.chat(prompt, system=system_prompt)
+
+    out_path = output_dir / "fix_analysis.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(analysis, encoding="utf-8")
+    print(f"✅ 错题解析已保存：{out_path}")
+
+
+def _process_summarize_task(task: dict[str, Any], ai, output_dir: Path) -> None:
+    """Process a summarize task."""
+    import re as _re
+
+    prompt = task.get("prompt", "")
+    system_prompt = task.get("system_prompt", "你必须返回严格 JSON。")
+    payload_text = ai.chat_json(prompt, system=system_prompt)
+
+    cleaned = payload_text.strip()
+    fence = _re.search(r"```(?:json)?\s*(.*?)```", cleaned, _re.S | _re.I)
+    if fence:
+        cleaned = fence.group(1).strip()
+
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = min(cleaned.find("{"), cleaned.find("["))
+        end = max(cleaned.rfind("}"), cleaned.rfind("]"))
+        payload = json.loads(cleaned[start : end + 1])
+
+    out_path = output_dir / "summary_result.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(f"✅ 评估结果已保存：{out_path}")
+
+
+def _process_extraction_task(task: dict[str, Any], ai, output_dir: Path) -> None:
+    """Process an extraction task — this is complex and best left to Claude Code Agent.
+
+    Falls back gracefully with a message.
+    """
+    raise ValueError(
+        "提取任务需要 Claude Code Agent 的多工具能力（Read/Write/Bash/WebFetch），"
+        "请说「处理所有待处理的学习任务」来手动触发。"
+    )
+
+
+def _process_custom_task(task: dict[str, Any], ai, output_dir: Path) -> None:
+    """Process a generic custom task."""
+    prompt = task.get("prompt", "")
+    system_prompt = task.get("system_prompt", "")
+    response = ai.chat(prompt, system=system_prompt)
+
+    out_path = output_dir / "custom_result.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(response, encoding="utf-8")
+    print(f"✅ 结果已保存：{out_path}")

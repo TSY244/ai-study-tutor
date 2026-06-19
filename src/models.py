@@ -45,6 +45,15 @@ class QuestionType(str, Enum):
     case_analysis = "case_analysis"
 
 
+class CognitiveLevel(str, Enum):
+    """Cognitive level taxonomy matching learning science (Bloom's revised)."""
+    recall = "recall"       # 回忆 — single_choice, true_false
+    explain = "explain"     # 理解 — short_answer
+    apply = "apply"         # 应用 — short_answer, case_analysis
+    transfer = "transfer"   # 迁移 — case_analysis
+    reflect = "reflect"     # 反思 — short_answer, case_analysis
+
+
 class QuizQuestion(BaseModel):
     id: str
     type: QuestionType
@@ -55,6 +64,7 @@ class QuizQuestion(BaseModel):
     tested_concepts: list[str] = Field(default_factory=list)
     difficulty: str = "easy"
     score: float = 5
+    cognitive_level: CognitiveLevel | None = None
 
 
 class Quiz(BaseModel):
@@ -65,7 +75,8 @@ class Quiz(BaseModel):
     questions: list[QuizQuestion]
     created_at: str = Field(default_factory=now_iso)
     mode: str = "markdown"
-    source: Literal["regular", "retest"] = "regular"
+    source: Literal["regular", "retest", "assembled"] = "regular"
+    source_quizzes: list[str] = Field(default_factory=list)  # quiz IDs this was assembled from
 
 
 class Answer(BaseModel):
