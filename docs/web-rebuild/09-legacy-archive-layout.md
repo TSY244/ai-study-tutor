@@ -19,7 +19,7 @@ ai-study-tutor/
 │       ├── .python-version
 │       ├── src/
 │       ├── tests/
-│       ├── tools/tmp_validate.py
+│       ├── tools/
 │       ├── pyproject.toml
 │       ├── requirements.txt
 │       ├── uv.lock
@@ -40,7 +40,7 @@ ai-study-tutor/
 
 ## 3. 迁移规则
 
-- `main.py`、`process_tasks.py`、`tutor.sh`、`Dockerfile`、`.env.example`、`.python-version`、`src/`、`tests/`、Python 打包/锁定文件及旧 README 统一迁入 `legacy/python/`；一次性 `tmp_validate.py` 迁入 `legacy/python/tools/`。
+- `main.py`、`process_tasks.py`、`tutor.sh`、`Dockerfile`、`.env.example`、`.python-version`、`src/`、`tests/`、Python 打包/锁定文件及旧 README 统一迁入 `legacy/python/`（一次性 `tmp_validate.py` 已删除，不再归档）。
 - `legacy/python/config.example.json` 必须由固定、安全模板新建，不能读取或复制 `config.json`。根 `config.json` 移入被忽略的 `legacy-data/private/python-config.json`，保留本机旧版可用性但不进入提交；旧版运行时显式设置 `TUTOR_CONFIG=../../legacy-data/private/python-config.json`。
 - `course/`、`.tasks/`、`workspace/`、`materials/` 迁入 `legacy-data/`。它们是迁移输入而非新系统运行目录；其中可能包含个人学习材料或历史任务，后续默认不提交新增内容。
 - `.pytest_cache/`、`__pycache__/`、`ai_study_tutor.egg-info/` 等缓存/构建产物删除，不归档。
