@@ -1,4 +1,4 @@
-"""Generate the frozen golden fixtures under testdata/legacy-fixtures/.
+"""Generate the frozen golden fixtures under backend/testdata/legacy-fixtures/.
 
 The golden JSON files freeze the CURRENT deterministic behaviour of the
 legacy Python implementation (question policy, objective grading, weakness
@@ -8,7 +8,7 @@ tracking, mastery). They are the shared behaviour baseline consumed by:
 - the future Go implementation in internal/quiz/policy etc. (B4 parity)
 
 Re-run this script ONLY when a behaviour change is intentional and reviewed
-(see testdata/legacy-fixtures/README.md). Never read legacy-data/ here:
+(see backend/testdata/legacy-fixtures/README.md). Never read legacy-data/ here:
 every case below is synthetic and desensitized.
 
 Usage (from legacy/python/):
@@ -28,7 +28,7 @@ from src import exam_logic, memory, question_policy  # noqa: E402
 from src.models import CognitiveLevel  # noqa: E402
 from src.storage import Storage  # noqa: E402
 
-FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "testdata" / "legacy-fixtures"
+FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "backend" / "testdata" / "legacy-fixtures"
 
 COURSE = "demo-calculus"
 CHAPTER = 1

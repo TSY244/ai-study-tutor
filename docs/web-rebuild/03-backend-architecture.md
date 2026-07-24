@@ -60,13 +60,13 @@ Worker 默认并发为 1。代码允许配置并发，但增加并发前必须�
 按业务能力组织代码，不使用一个巨型 `service` 或 `handler` 包：
 
 ```text
-cmd/
+backend/cmd/
 ├── api/main.go
 ├── worker/main.go
 ├── migrate/main.go
 └── legacy-import/main.go
 
-internal/
+backend/internal/
 ├── course/
 │   ├── entity.go
 │   ├── repository.go

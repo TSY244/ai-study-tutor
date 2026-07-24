@@ -31,9 +31,10 @@ ai-study-tutor/
 │   ├── workspace/
 │   └── materials/
 │   └── private/python-config.json  # 本地忽略，不提交
-├── apps/web/                    # 未来 React 前端
+├── frontend/                    # 未来 React 前端
 ├── api/                         # 未来发布 OpenAPI 契约
-├── cmd/ internal/ db/ deploy/   # 未来 Go 与 Docker 实现
+├── backend/                     # 未来 Go 实现（cmd/ internal/）
+├── db/ deploy/                  # 未来数据库与 Docker 实现
 ├── .gitignore
 └── README.md                    # 新 Web 重构入口
 ```

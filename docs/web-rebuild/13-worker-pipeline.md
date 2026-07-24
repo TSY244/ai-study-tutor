@@ -4,7 +4,7 @@
 Job kind/stage 表、素材错误码、外部工具契约与演示数据。架构规则以
 `03-backend-architecture.md` §7/§8 为准；本文记录**已实现**的行为。
 
-## 1. Runner 编排（internal/worker）
+## 1. Runner 编排（backend/internal/worker）
 
 - `Runner.Run` 常驻循环 / `RunOnce` 单次领取（测试与一次性运行用）。
 - 领取：`job.Repository.Claim`（Business Gate shared lock + `FOR UPDATE
@@ -70,7 +70,7 @@ fLaC/OggS，audio/video 结合扩展名区分）、合法 UTF-8 文本兜底为
   `pdf/v1`（外部 `pdftotext -layout -enc UTF-8 <in> -`）、
   `subtitle/v1`（URL 字幕清洗）、`whisper/v1`、`media/v1`。
 - 规范化 `norm/v1`：与 legacy `clean_text` 逐字节一致（golden fixture
-  `testdata/legacy-fixtures/text-processing.golden.json` 冻结，期望值经
+  `backend/testdata/legacy-fixtures/text-processing.golden.json` 冻结，期望值经
   legacy Python 运行时实际核对）。
 - 分块 `chunk/v1`：按空行段落贪心装箱，目标 1200 rune，超长段落按
   rune 边界硬切；同一输入逐字节可复现。**chunk 不落库**：Job result

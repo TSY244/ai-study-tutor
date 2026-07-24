@@ -49,7 +49,7 @@ restart policy 的恢复路径。
 
 ## 前端容器接口
 
-- 只构建并提供 `apps/web/dist`；不提供独立前端宿主机端口。
+- 只构建并提供 `frontend/dist`；不提供独立前端宿主机端口。
 - 浏览器经 `http://127.0.0.1:${APP_PORT}` 访问同源 REST 和 SSE：
   `/api/v1/*`、`/healthz`、`/readyz`、`/api/v1/jobs/stream`。
 - Caddy 代理 SSE 时已禁用缓冲；客户端应按 OpenAPI 使用 `Last-Event-ID` 重连。

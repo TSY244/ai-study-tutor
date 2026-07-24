@@ -31,6 +31,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+          cache-dependency-path: backend/go.sum
 
       # 集成测试使用嵌入式 PostgreSQL 二进制（无需 Docker），缓存避免每次下载。
       - name: Cache embedded-postgres binaries

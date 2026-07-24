@@ -1,10 +1,10 @@
 """Golden-fixture driven regression tests for the legacy deterministic rules.
 
-Fixtures live at the repository root in testdata/legacy-fixtures/ and freeze
+Fixtures live at the backend/testdata/legacy-fixtures/ and freeze
 the CURRENT behaviour of question policy, objective grading, weakness
 tracking and mastery. The same JSON files are the parity target for the Go
 migration (B4), so expectations are only changed intentionally — see
-testdata/legacy-fixtures/README.md.
+backend/testdata/legacy-fixtures/README.md.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from src import exam_logic, memory, question_policy  # noqa: E402
 from src.models import Attempt, CognitiveLevel, LessonInfo, Quiz, QuizQuestion, Weakness  # noqa: E402
 from src.storage import Storage, slugify  # noqa: E402
 
-FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "testdata" / "legacy-fixtures"
+FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "backend" / "testdata" / "legacy-fixtures"
 COURSE_FIXTURE = FIXTURE_ROOT / "course-minimal"
 
 

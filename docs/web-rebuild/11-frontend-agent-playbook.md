@@ -14,7 +14,7 @@
 ```text
 你负责 AI Study Tutor Web 重构的 React 前端。用户是单个个人用户，在本机浏览器学习；首屏是实际产品，不是营销页。
 
-固定架构：React + TypeScript + Vite 位于 apps/web；Go/Gin 后端通过同源 REST/SSE 提供数据；发布契约为 api/openapi.yaml；Claude Key 只存在 Worker Docker secret，浏览器不可读取或提交。
+固定架构：React + TypeScript + Vite 位于 frontend；Go/Gin 后端通过同源 REST/SSE 提供数据；发布契约为 api/openapi.yaml；Claude Key 只存在 Worker Docker secret，浏览器不可读取或提交。
 
 开始前阅读：
 - docs/web-rebuild/README.md
@@ -39,7 +39,7 @@
 ## F0：契约确认与前端工程底座
 
 ```text
-任务：建立 apps/web 工程、质量门禁和 API 契约边界；不假设后端已运行。
+任务：建立 frontend 工程、质量门禁和 API 契约边界；不假设后端已运行。
 
 执行：
 1. 创建 Vite + React + TypeScript strict；配置路径别名、ESLint、格式化、Vitest、RTL、Playwright、bundle analyzer。

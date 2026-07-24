@@ -1,7 +1,7 @@
 # 领域决策记录
 
 本文记录各后端阶段在冻结 legacy 行为基线与落地设计时作出的显式决策。
-golden 夹具（`testdata/legacy-fixtures/`）如实冻结 legacy 现状；本文是
+golden 夹具（`backend/testdata/legacy-fixtures/`）如实冻结 legacy 现状；本文是
 目标系统与基线之间所有**有意差异**的唯一清单，每条都有对应测试断言。
 未列入本文的行为默认与 golden 一致。
 
@@ -15,7 +15,7 @@ golden 夹具（`testdata/legacy-fixtures/`）如实冻结 legacy 现状；本�
   “多选题比较规范化集合，不能受顺序影响”）。
 - 兼容影响：旧数据中因乱序/重复被判错的多选作答不会改判（历史 Attempt 的
   判定已持久化）；新作答按集合判分。Go golden 测试对 quirk 用例显式登记
-  目标期望值（`internal/attempt/grading_golden_test.go` 的 `quirkTarget`），
+  目标期望值（`backend/internal/attempt/grading_golden_test.go` 的 `quirkTarget`），
   不是悄悄“修正” golden。
 
 ## D2 低掌握度迁移题约束冲突的解决（03 §10.1 v2）

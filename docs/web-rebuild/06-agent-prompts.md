@@ -86,7 +86,7 @@
 执行：
 1. 运行并记录当前 Python 测试基线。
 2. 为出题数量、认知层次、客观题评分、连续答对/答错、薄弱点更新建立可移植的 JSON golden fixtures。
-3. 为一套最小课程数据建立脱敏 legacy fixture，放入受版本控制的 `testdata/legacy-fixtures/`，包含课程、课时、规范 `raw/`、历史 `raw_src/` 变体、笔记、试卷、作答、`wrong_questions/`、反馈、scores.json 和 weaknesses.json。
+3. 为一套最小课程数据建立脱敏 legacy fixture，放入受版本控制的 `backend/testdata/legacy-fixtures/`，包含课程、课时、规范 `raw/`、历史 `raw_src/` 变体、笔记、试卷、作答、`wrong_questions/`、反馈、scores.json 和 weaknesses.json。
 4. 校对 docs/web-rebuild/openapi.yaml 与 04-api-contract.md；实现确定性的 OpenAPI 生成步骤，把 `x-common-response-headers` 展开到每个 Response 后生成 `api/openapi.yaml`。服务端和前端代码生成只读取展开产物，CI 校验所有响应都有 `X-Request-ID`。
 5. 创建 Makefile 的 verify-docs、verify-openapi 和 test-legacy 入口。
 
@@ -108,8 +108,8 @@
 任务：创建可编译、可测试的 Go 模块化单体骨架，不实现完整业务。
 
 执行：
-1. 创建 go.mod、cmd/api、cmd/worker、cmd/migrate、cmd/legacy-import。
-2. 创建 internal/platform/config、httpserver、database、logging、clock、id。
+1. 创建 backend/go.mod、backend/cmd/api、backend/cmd/worker、backend/cmd/migrate、backend/cmd/legacy-import。
+2. 创建 backend/internal/platform/config、httpserver、database、logging、clock、id。
 3. 实现配置读取：普通配置来自环境变量，secret 支持 *_FILE；环境变量优先于文件。
 4. 实现 /healthz 和 /readyz。healthz 只说明进程存活；readyz 检查数据库和迁移版本，不检查 Claude。
 5. 统一 Problem Details 错误模型、request_id、panic recovery、访问日志、Host/Origin 校验、超时和 body 大小限制；默认同源且不启用通配 CORS。
@@ -250,7 +250,7 @@
 任务：在 Worker 中实现 Anthropic Claude Provider，并把结构化结果接入阶段 5 已稳定的领域接口。
 
 执行：
-1. 定义 internal/ai Provider 接口和 Anthropic adapter；领域模块不依赖供应商 SDK 类型。
+1. 定义 backend/internal/ai Provider 接口和 Anthropic adapter；领域模块不依赖供应商 SDK 类型。
 2. API Key 仅从 ANTHROPIC_API_KEY_FILE/ANTHROPIC_API_KEY 读取，部署默认使用文件；API 进程不能读取。缺失/空 Key 只降级 AI 能力。
 3. 实现 claude_connectivity_test、lesson_import/lesson_regenerate、quiz_generate/review_quiz_generate、attempt_grade、wrong_answer_analyze、summary_evaluate handlers。
 4. lesson extraction 基于标准化文本生成 teacher_outline、student_notes 和结构化元数据；大素材先分块提取事实再受控合并。
@@ -297,7 +297,7 @@
 ```text
 任务：实现 05-deployment-operations.md 的个人电脑部署方案。
 
-前置条件：前端开发已交付可构建的 `apps/web`。若尚未交付，只完成 API/Worker/Tools/Compose 基础设施并明确阻塞 Web 镜像与浏览器 E2E，不生成临时页面冒充前端成果。
+前置条件：前端开发已交付可构建的 `frontend/`。若尚未交付，只完成 API/Worker/Tools/Compose 基础设施并明确阻塞 Web 镜像与浏览器 E2E，不生成临时页面冒充前端成果。
 
 执行：
 1. 创建 API、Worker、Web 多阶段 Dockerfile；运行时非 root，固定基础镜像主版本。

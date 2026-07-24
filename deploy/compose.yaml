@@ -36,7 +36,7 @@ services:
   migrate:
     image: ai-study-tutor-api:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.api
       target: runtime
     entrypoint: ["/app/migrate"]
@@ -61,7 +61,7 @@ services:
   api:
     image: ai-study-tutor-api:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.api
       target: runtime
     restart: unless-stopped
@@ -96,7 +96,7 @@ services:
   worker:
     image: ai-study-tutor-worker:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.worker
       target: runtime
     restart: unless-stopped
@@ -144,7 +144,7 @@ services:
     image: ai-study-tutor-web:${APP_VERSION}
     build:
       context: ..
-      dockerfile: apps/web/Dockerfile
+      dockerfile: frontend/Dockerfile
       target: runtime
     restart: unless-stopped
     user: "10001:10001"
@@ -175,7 +175,7 @@ services:
   seed:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [tools]
@@ -201,7 +201,7 @@ services:
   doctor:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [tools]
@@ -230,7 +230,7 @@ services:
   backup:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [tools]
@@ -264,7 +264,7 @@ services:
   restore:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [manual]
@@ -297,7 +297,7 @@ services:
   maintenance-repair:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [manual]
@@ -327,7 +327,7 @@ services:
   legacy-import:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [manual]

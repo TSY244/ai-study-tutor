@@ -72,25 +72,28 @@ API 与 Worker 使用同一 Go 仓库、相同领域模型和 Repository 接口�
 ai-study-tutor/
 ├── api/
 │   └── openapi.yaml                 # 由设计源确定性生成的发布契约，禁止手改
-├── apps/
-│   └── web/                         # React 前端，由前端开发实现
-├── cmd/
-│   ├── api/                         # Gin API 入口
-│   ├── worker/                      # Worker 入口
-│   ├── migrate/                     # 数据库迁移命令
-│   └── legacy-import/               # 旧 course/ 数据导入命令
-├── internal/
-│   ├── course/
-│   ├── lesson/
-│   ├── material/
-│   ├── document/
-│   ├── quiz/
-│   ├── attempt/
-│   ├── mastery/
-│   ├── job/
-│   ├── ai/
-│   ├── filestore/
-│   └── platform/
+├── frontend/                        # React 前端，由前端开发实现
+├── backend/
+│   ├── cmd/
+│   │   ├── api/                     # Gin API 入口
+│   │   ├── worker/                  # Worker 入口
+│   │   ├── migrate/                 # 数据库迁移命令
+│   │   └── legacy-import/           # 旧 course/ 数据导入命令
+│   ├── internal/
+│   │   ├── course/
+│   │   ├── lesson/
+│   │   ├── material/
+│   │   ├── document/
+│   │   ├── quiz/
+│   │   ├── attempt/
+│   │   ├── mastery/
+│   │   ├── job/
+│   │   ├── ai/
+│   │   ├── filestore/
+│   │   └── platform/
+│   ├── Dockerfile.api
+│   ├── Dockerfile.worker
+│   └── Dockerfile.tools
 ├── db/
 │   ├── migrations/
 │   ├── queries/
@@ -102,9 +105,6 @@ ai-study-tutor/
 │   └── scripts/
 ├── docs/web-rebuild/
 ├── legacy/python/                   # 切换期保留当前 Python 代码
-├── Dockerfile.api
-├── Dockerfile.worker
-├── Dockerfile.tools
 └── Makefile
 ```
 

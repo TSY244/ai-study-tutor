@@ -196,7 +196,7 @@ services:
   api:
     image: ai-study-tutor-api:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.api
       target: runtime
     restart: unless-stopped
@@ -237,7 +237,7 @@ services:
   worker:
     image: ai-study-tutor-worker:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.worker
       target: runtime
     restart: unless-stopped
@@ -289,7 +289,7 @@ services:
     image: ai-study-tutor-web:${APP_VERSION}
     build:
       context: ..
-      dockerfile: apps/web/Dockerfile
+      dockerfile: frontend/Dockerfile
       target: runtime
     restart: unless-stopped
     user: "10001:10001"
@@ -317,7 +317,7 @@ services:
   backup:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [tools]
@@ -351,7 +351,7 @@ services:
   restore:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [manual]
@@ -386,7 +386,7 @@ services:
   doctor:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [tools]
@@ -419,7 +419,7 @@ services:
   maintenance-repair:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [manual]
@@ -453,7 +453,7 @@ services:
   legacy-import:
     image: ai-study-tutor-tools:${APP_VERSION}
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile.tools
       target: runtime
     profiles: [manual]
@@ -598,7 +598,7 @@ Tools 镜像不承载常驻 HTTP 服务，不获得 Anthropic secret。`backup` 
 
 ### 7.5 前端 Docker 接口
 
-前端构建产物放入 `apps/web/dist`，由 Caddy 的 `web` 服务在容器内 `:8080`
+前端构建产物放入 `frontend/dist`，由 Caddy 的 `web` 服务在容器内 `:8080`
 提供。前端不得自行发布端口、访问数据库、挂载数据卷或声明 Anthropic secret。
 浏览器只访问同源路径：`/api/v1/*`、`/healthz`、`/readyz` 和
 `/api/v1/jobs/stream`；Caddy 已为 SSE 配置 `flush_interval -1`。前端 Dockerfile

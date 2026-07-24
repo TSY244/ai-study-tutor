@@ -46,7 +46,7 @@
 
 执行：
 1. 在 legacy/python/ 用 `uv run --extra dev pytest -q` 记录当前基线；仅用脱敏 fixture，不读取 legacy-data 真实内容。
-2. 为题量策略、客观判分、薄弱点和掌握度建立 JSON golden fixture；最小脱敏课程 fixture 必须提交到 `testdata/legacy-fixtures/`，不能写入被忽略的 `legacy-data/`。
+2. 为题量策略、客观判分、薄弱点和掌握度建立 JSON golden fixture；最小脱敏课程 fixture 必须提交到 `backend/testdata/legacy-fixtures/`，不能写入被忽略的 `legacy-data/`。
 3. 实现设计源到 api/openapi.yaml 的确定性生成：展开 x-common-response-headers 到所有成功/错误 Response。
 4. 添加 verify-docs、verify-openapi、test-legacy 命令；CI 检查每个发布 Response 含 X-Request-ID，引用可解析，operationId 唯一。
 5. 写明发布 OpenAPI 的生成命令、输入和禁止手改规则。
@@ -61,7 +61,7 @@
 任务：创建可编译的 Go 工程、api/worker/migrate/legacy-import 入口和 HTTP 质量门禁，不实现业务链路。
 
 执行：
-1. 创建 go.mod、cmd/api、cmd/worker、cmd/migrate、cmd/legacy-import，及 internal/platform/{config,httpserver,database,logging,clock,id}。
+1. 创建 backend/go.mod、backend/cmd/api、backend/cmd/worker、backend/cmd/migrate、backend/cmd/legacy-import，及 backend/internal/platform/{config,httpserver,database,logging,clock,id}。
 2. 实现环境变量与 *_FILE secret 读取；Claude Key 缺失是能力降级，不影响 healthz/非 AI 功能。
 3. 实现 /healthz、/readyz、Request ID、Problem Details、panic recovery、结构化日志、Host/Origin 校验、上传大小限制和 SSE 路由例外超时。
 4. Gin 类型不得泄露到 domain/application；时间、ID、配置均可注入测试。
@@ -173,7 +173,7 @@
 任务：实现个人电脑 Compose 部署。前端未交付时只做 API/Worker/Tools，不伪造 Web 页面。
 
 执行：
-1. 创建多阶段 Dockerfile.api、Dockerfile.worker、Dockerfile.tools；运行时非 root、只读 rootfs、最小权限。
+1. 创建多阶段 backend/Dockerfile.api、backend/Dockerfile.worker、backend/Dockerfile.tools；运行时非 root、只读 rootfs、最小权限。
 2. 实现 compose、Caddy、secret 文件、db->migrate->api/worker 启动顺序；只有 Web 映射 127.0.0.1 端口。
 3. 实现 backup、restore、doctor、maintenance-repair、legacy-import profiles；只有 Worker 有 Anthropic secret。
 4. 做空环境启动、重启数据保留、Worker 强杀、维护恢复、备份到空卷恢复、SSE 代理与 secret 泄漏测试。

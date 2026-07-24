@@ -51,12 +51,12 @@ Schema 属性/必需字段/枚举的破坏性变更，并先运行聚焦自测�
 
 ```bash
 make generate-openapi          # 生成 api/openapi.yaml
-cd apps/web && npm run api:gen # 生成 TypeScript Client 与 MSW handlers
+cd frontend && npm run api:gen # 生成 TypeScript Client 与 MSW handlers
 make seed                      # 写入幂等演示数据，默认 API/Worker DB 配置
 ```
 
 SSE 客户端示例位于
-`apps/web/src/api/job-stream.ts`，使用 `fetch` 传输、`Last-Event-ID` 游标、
+`frontend/src/api/job-stream.ts`，使用 `fetch` 传输、`Last-Event-ID` 游标、
 `stream.resync_required` REST 对账和无 `id` 心跳。手工帧示例见
 `api/examples/sse/`。生成脚本会按 `text/event-stream` 媒体类型从 Orval REST
 client/MSW 中排除 SSE 操作，避免把常驻流误生成为一次性 `Promise`；Envelope

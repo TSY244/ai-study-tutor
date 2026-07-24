@@ -55,12 +55,12 @@ flowchart LR
 | `course_service.py` | 课程、课时、导入和组卷编排 | `course`、`lesson`、`material`、`quiz` service | 保留用例语义，移除终端输出和文件细节 |
 | `models.py` | Pydantic 模型 | Go domain types + DB constraints + OpenAPI | 建立字段映射与 golden fixture |
 | `storage.py` | Markdown/JSON 存储 | Repository + file store | Importer 读旧文件；运行时不做双写 |
-| `question_policy.py` | 题量和认知策略 | `internal/quiz/policy` | 表格测试后等价迁移，并处理已知策略矛盾 |
+| `question_policy.py` | 题量和认知策略 | `backend/internal/quiz/policy` | 表格测试后等价迁移，并处理已知策略矛盾 |
 | `exam_logic.py` | 组卷、答题、判分、批阅、导出 | `quiz`、`attempt`、`mastery`、`document`、`job` | 按领域拆分；确定性逻辑先于 AI |
 | `memory.py` | 成绩、薄弱点、掌握度 | `mastery` Repository/Service | 导入历史证据；派生值可重新计算 |
 | `agent_runner.py` | 文件任务队列和 Agent 子进程 | PostgreSQL Job Queue + Worker | 不续跑旧任务；只迁移审计状态 |
 | `material_parse/` | 文档/字幕/音视频解析 | Worker material pipeline | 以安全子进程和 parser 接口重建 |
-| `ai_adapter/`、`prompts.py` | AI 调用和提示词 | `internal/ai` + 版本化 prompts/schemas | 正式路径收敛为 Anthropic Adapter |
+| `ai_adapter/`、`prompts.py` | AI 调用和提示词 | `backend/internal/ai` + 版本化 prompts/schemas | 正式路径收敛为 Anthropic Adapter |
 | `process_tasks.py` | 人工处理/重试任务 | Job API + Worker recovery | 用租约、错误分类和重试替代 |
 
 ## 4. 数据发现与 Manifest

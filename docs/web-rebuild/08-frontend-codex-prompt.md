@@ -7,7 +7,7 @@
 
 ## 目标与边界
 
-- 前端：React + TypeScript + Vite，目录为 apps/web。
+- 前端：React + TypeScript + Vite，目录为 frontend。
 - 后端：Go + Gin；通过同源 REST + SSE 访问，不在浏览器直接访问 Claude。
 - 用户：单用户、本机部署；没有登录、注册、多租户、付费、公开分享或公网模式。
 - API Key：绝不出现在前端环境变量、源码、构建产物、日志、错误提示或浏览器存储中。
@@ -23,7 +23,7 @@
 6. docs/web-rebuild/08-frontend-codex-prompt.md
 7. api/openapi.yaml（发布契约；若尚未由后端生成，阅读 docs/web-rebuild/openapi.yaml 仅作设计参考，并在报告中标记此阻塞）
 
-先运行 git status，保留所有已有用户修改。先检查仓库现状和可用脚本，再决定创建或接入 apps/web；不要重置工作树。
+先运行 git status，保留所有已有用户修改。先检查仓库现状和可用脚本，再决定创建或接入 frontend；不要重置工作树。
 
 ## 技术要求
 
@@ -152,7 +152,7 @@ OpenAPI 定义三类 SSE Envelope，必须分别处理：
 按以下顺序工作：
 
 1. 阅读文档并报告现状、依赖缺口和执行计划。
-2. 搭建 apps/web 基础设施、tokens、路由、Client 生成/替换边界和 MSW。
+2. 搭建 frontend 基础设施、tokens、路由、Client 生成/替换边界和 MSW。
 3. 实现核心课程/任务/阅读/答题/结果流程，再实现辅助页面。
 4. 为每个关键状态添加组件和交互测试；最后做 Playwright、可访问性、窄屏和性能验证。
 5. 不要因为后端暂未实现就改动 OpenAPI 或发明接口；发现缺口时记录具体 use case、期望请求/响应和兼容影响，交给后端评审。

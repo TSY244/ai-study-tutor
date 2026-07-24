@@ -51,14 +51,14 @@ Importer 本身可发布到手工 profile：扫描只读，导入在一个 Postg
 ## 验证记录
 
 ```text
-go test ./internal/legacyimport -count=1 -v
+go test -C backend ./internal/legacyimport -count=1 -v
 PASS: fixture idempotency, incomplete-attempt quarantine, feedback validation,
       empty subject marker, resolution replay, real legacy-data pre-cutover rehearsal
 
-go test ./cmd/legacy-import -count=1
+go test -C backend ./cmd/legacy-import -count=1
 PASS
 
-go run ./cmd/legacy-import scan --source legacy-data --report /private/tmp/ai-study-tutor-legacy-scan.json --fail-on-warning
+go run -C backend ./cmd/legacy-import scan --source legacy-data --report /private/tmp/ai-study-tutor-legacy-scan.json --fail-on-warning
 scan completed; 107 files; 0 scan findings
 ```
 
@@ -67,4 +67,4 @@ scan completed; 107 files; 0 scan findings
 - 4 份缺少主观题参考答案的历史 Quiz 必须由用户选择保留隔离、补充可验证答案，或放弃迁移；不能由 Importer 自动补全。
 - 两个批阅候选和 1 条聚合成绩需人工对账后决定是否保留为隔离审计。resolution 只接受 scanner finding，不会把 runtime quarantine 强行标为成功。
 - 最终切换前需重新运行 scan，因为任何源 hash 变化都会生成新的 Manifest；未重新审核的旧 resolution 不可复用。
-- 本机存在早先测试遗留的嵌入式 PostgreSQL 进程；完整 `make verify` 的 race 阶段在 `internal/quiz` 初始化临时 PostgreSQL 时阻塞。`go vet`、构建、文档/OpenAPI 门禁和全部 legacy-import race/集成测试均已通过。CI/发布机应先清理孤立测试进程或使用受控 PostgreSQL，再将全量 race 结果作为最终发布门禁。
+- 本机存在早先测试遗留的嵌入式 PostgreSQL 进程；完整 `make verify` 的 race 阶段在 `backend/internal/quiz` 初始化临时 PostgreSQL 时阻塞。`go vet`、构建、文档/OpenAPI 门禁和全部 legacy-import race/集成测试均已通过。CI/发布机应先清理孤立测试进程或使用受控 PostgreSQL，再将全量 race 结果作为最终发布门禁。

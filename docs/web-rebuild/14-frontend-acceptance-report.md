@@ -15,20 +15,20 @@
 
 前端与验收：
 
-- `apps/web/e2e/quiz-generation.spec.ts`、`apps/web/e2e/shell.spec.ts`：补齐测验生成/失败重试和窄屏键盘路径。
-- `apps/web/e2e-production/release.spec.ts`、`apps/web/playwright.production.config.ts`：新增真实 Docker/Caddy production E2E 与 axe WCAG 扫描。
-- `apps/web/src/features/quizzes/generate-quiz-button.tsx`、测验路由、缓存失效和 MSW handlers：接入发布契约的测验生成 Job。
-- `apps/web/src/components/app-shell/command-palette.tsx`：修复 `kbd` 颜色对比度。
+- `frontend/e2e/quiz-generation.spec.ts`、`frontend/e2e/shell.spec.ts`：补齐测验生成/失败重试和窄屏键盘路径。
+- `frontend/e2e-production/release.spec.ts`、`frontend/playwright.production.config.ts`：新增真实 Docker/Caddy production E2E 与 axe WCAG 扫描。
+- `frontend/src/features/quizzes/generate-quiz-button.tsx`、测验路由、缓存失效和 MSW handlers：接入发布契约的测验生成 Job。
+- `frontend/src/components/app-shell/command-palette.tsx`：修复 `kbd` 颜色对比度。
 - 各加载态组件/路由：为 `aria-busy` 容器补 `role="status"`。
-- `apps/web/src/features/documents/markdown/markdown-reader.tsx`、`router.tsx`、`vite.config.ts`：重型阅读依赖按路由懒加载并关闭全局预取。
-- `apps/web/package.json`、`package-lock.json`：新增 production 验收/指标命令、axe；固定已修复的 `js-yaml` 传递依赖。
-- `apps/web/scripts/production-bundle-metrics.mjs`：采集真实首屏资源与 gzip 指标。
+- `frontend/src/features/documents/markdown/markdown-reader.tsx`、`router.tsx`、`vite.config.ts`：重型阅读依赖按路由懒加载并关闭全局预取。
+- `frontend/package.json`、`package-lock.json`：新增 production 验收/指标命令、axe；固定已修复的 `js-yaml` 传递依赖。
+- `frontend/scripts/production-bundle-metrics.mjs`：采集真实首屏资源与 gzip 指标。
 
 发布与文档：
 
 - `.dockerignore`：构建上下文从 382 MB 降至 Web 约 0.5-1.7 MB、Go 约 1 MB，并排除 secret/data/node_modules/dist。
-- `apps/web/Dockerfile`、`apps/web/Caddyfile`：非 root Caddy、SPA fallback、同源 REST/SSE、安全 Header、hashed asset 长缓存；移除不需要的 Caddy 低端口 file capability。
-- `Dockerfile.api`、`Dockerfile.worker`：Go 多阶段非 root 镜像；Worker 包含 ffmpeg、pdftotext、yt-dlp。
+- `frontend/Dockerfile`、`frontend/Caddyfile`：非 root Caddy、SPA fallback、同源 REST/SSE、安全 Header、hashed asset 长缓存；移除不需要的 Caddy 低端口 file capability。
+- `backend/Dockerfile.api`、`backend/Dockerfile.worker`：Go 多阶段非 root 镜像；Worker 包含 ffmpeg、pdftotext、yt-dlp。
 - `deploy/compose.yaml`、`.env.example`、`secrets/README.md`、`scripts/init.sh`、`scripts/release-smoke.sh`：可执行单机发布拓扑和检查脚本。
 - `Makefile`、`README.md`、`docs/web-rebuild/05-deployment-operations.md`：接入 docker init/build/up/seed/doctor/smoke/down 命令并更新运行状态。
 

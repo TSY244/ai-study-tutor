@@ -39,20 +39,20 @@ test-legacy:
 	cd legacy/python && TUTOR_CONFIG=config.example.json uv run --extra dev pytest -q
 
 go-build:
-	go build $(GO_PKGS)
+	cd backend && go build $(GO_PKGS)
 
 go-fmt:
-	@test -z "$$(gofmt -l cmd internal)" || { echo "以下文件需要 gofmt："; gofmt -l cmd internal; exit 1; }
+	@test -z "$$(gofmt -l backend/cmd backend/internal)" || { echo "以下文件需要 gofmt："; gofmt -l backend/cmd backend/internal; exit 1; }
 
 go-vet:
-	go vet $(GO_PKGS)
+	cd backend && go vet $(GO_PKGS)
 
 go-test:
-	go test -race $(GO_PKGS)
+	cd backend && go test -race $(GO_PKGS)
 
 # 写入前端联调演示数据（幂等；数据库配置与 api/worker 相同）
 seed:
-	go run ./cmd/seed
+	cd backend && go run ./cmd/seed
 
 verify: verify-docs verify-openapi check-openapi-breaking go-fmt go-vet go-test go-build
 

@@ -7,6 +7,11 @@
 ## 目录
 
 ```text
+backend/           Go 后端（cmd/、internal/、testdata/、go.mod、后端 Dockerfile）
+frontend/          React + TypeScript + Vite 前端
+api/               前后端共享的 OpenAPI 发布契约与示例
+deploy/            Docker Compose 拓扑与运维脚本
+tools/             契约/文档校验脚本
 docs/web-rebuild/  Web 重构产品、前后端、OpenAPI、Docker 与迁移文档
 legacy/python/     归档的旧 Python CLI/TUI 源码与测试
 legacy-data/       旧课程、任务、工作区和本地私密配置的导入源（忽略）
