@@ -1,0 +1,23 @@
+{
+  "quiz_id": "quiz_chapter_01",
+  "course_id": "demo-calculus",
+  "chapter_id": 1,
+  "auto_score": 8,
+  "total_possible": 13,
+  "answers": [
+    {"question_id": "q1", "user_answer": "C", "is_correct": true},
+    {"question_id": "q2", "user_answer": "A,C", "is_correct": true},
+    {"question_id": "q3", "user_answer": "对", "is_correct": true},
+    {"question_id": "q4", "user_answer": "ε 是预先给定的误差范围，δ 是根据 ε 找到的邻域半径。", "is_correct": null}
+  ],
+  "consecutive_correct": 0,
+  "consecutive_wrong": 0,
+  "created_at": "2026-06-01T10:00:00+08:00",
+  "note": "客观题已自动判分，交卷后会默认启动 AI 试卷检测。",
+  "ai_grading": {
+    "status": "completed",
+    "retryable": true,
+    "created_at": "2026-06-01T10:00:30+08:00",
+    "message": "AI 试卷检测完成。"
+  }
+}

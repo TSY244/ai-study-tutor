@@ -1,0 +1,58 @@
+{
+  "id": "20260601_100000",
+  "course_id": "demo-calculus",
+  "quiz_id": "quiz_chapter_01",
+  "answers": [
+    {"question_id": "q1", "user_answer": "C"},
+    {"question_id": "q2", "user_answer": "A,C"},
+    {"question_id": "q3", "user_answer": "对"},
+    {"question_id": "q4", "user_answer": "ε 是预先给定的误差范围，δ 是根据 ε 找到的邻域半径。"}
+  ],
+  "total_score": 11.5,
+  "question_feedback": [
+    {
+      "question_id": "q1",
+      "score": 2,
+      "is_correct": true,
+      "feedback": "代入正确。",
+      "correct_understanding": "连续函数可直接代入求极限。",
+      "weak_concepts": []
+    },
+    {
+      "question_id": "q2",
+      "score": 4,
+      "is_correct": true,
+      "feedback": "判定条件掌握正确。",
+      "correct_understanding": "极限存在与该点是否有定义无关。",
+      "weak_concepts": []
+    },
+    {
+      "question_id": "q3",
+      "score": 2,
+      "is_correct": true,
+      "feedback": "充要条件表述正确。",
+      "correct_understanding": "极限存在 ⟺ 左右极限都存在且相等。",
+      "weak_concepts": []
+    },
+    {
+      "question_id": "q4",
+      "score": 3.5,
+      "is_correct": false,
+      "feedback": "只复述了定义结构，没有说明 δ 依赖于 ε 的选取这一关键点。",
+      "correct_understanding": "对任意 ε > 0，存在（通常依赖于 ε 的）δ > 0，使 0 < |x-a| < δ 时 |f(x)-L| < ε。",
+      "weak_concepts": ["ε-δ 定义"]
+    }
+  ],
+  "feedback": "客观题全对；主观题对 ε-δ 定义的理解停留在记忆层面，建议结合图形重新表述。",
+  "weak_concepts": [
+    {
+      "concept": "ε-δ 定义",
+      "weakness_description": "不能用自己的话解释 ε-δ 定义中 δ 与 ε 的依赖关系",
+      "severity": 3,
+      "evidence": "20260601_100000 试卷 q4 回答停留在记忆层面"
+    }
+  ],
+  "review_plan": ["重读学生笔记的 ε-δ 一节", "一周后做一次复习测验"],
+  "retest_recommended": false,
+  "created_at": "2026-06-01T10:05:00+08:00"
+}

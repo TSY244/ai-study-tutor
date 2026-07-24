@@ -1,0 +1,743 @@
+{
+  "schema_version": 1,
+  "domain": "weakness",
+  "source_module": "legacy/python/src/memory.py",
+  "notes": [
+    "first_seen/last_seen 为墙钟时间，不参与 golden 比较；expect 中省略这两个字段。",
+    "severity=0 因 `int(x or 3)` 被当作缺省 3（legacy 现状，golden 如实冻结）。",
+    "update 命中已存在概念时 mastered 恒重置为 False（legacy 现状）。"
+  ],
+  "id": {
+    "function": "weakness_id(course, chapter, concept)",
+    "cases": [
+      {
+        "name": "basic",
+        "input": {
+          "course": "demo-calculus",
+          "chapter": 1,
+          "concept": "极限"
+        },
+        "expect": "c8c253df4e73"
+      },
+      {
+        "name": "chapter_none",
+        "input": {
+          "course": "demo-calculus",
+          "chapter": null,
+          "concept": "极限"
+        },
+        "expect": "f0327c123520"
+      },
+      {
+        "name": "chapter_zero_same_as_none_legacy_quirk",
+        "input": {
+          "course": "demo-calculus",
+          "chapter": 0,
+          "concept": "极限"
+        },
+        "expect": "f0327c123520"
+      },
+      {
+        "name": "concept_case_and_whitespace_insensitive",
+        "input": {
+          "course": "demo-calculus",
+          "chapter": 1,
+          "concept": "  极限  "
+        },
+        "expect": "c8c253df4e73"
+      },
+      {
+        "name": "different_concept",
+        "input": {
+          "course": "demo-calculus",
+          "chapter": 1,
+          "concept": "连续性"
+        },
+        "expect": "6235c707fd37"
+      },
+      {
+        "name": "different_course",
+        "input": {
+          "course": "demo-linear-algebra",
+          "chapter": 1,
+          "concept": "极限"
+        },
+        "expect": "a0888e299de9"
+      }
+    ]
+  },
+  "update": {
+    "function": "update_weaknesses(storage, course, weak_concepts, chapter)",
+    "batch_defaults": {
+      "course": "demo-calculus",
+      "chapter": 1
+    },
+    "cases": [
+      {
+        "name": "create_new_concept",
+        "input": {
+          "initial_weaknesses": [],
+          "batches": [
+            {
+              "concepts": [
+                {
+                  "concept": "极限",
+                  "severity": 4,
+                  "evidence": "答错选择题",
+                  "weakness_description": "不理解 ε-δ 定义"
+                }
+              ]
+            }
+          ]
+        },
+        "expect": [
+          {
+            "id": "c8c253df4e73",
+            "course": "demo-calculus",
+            "chapter": 1,
+            "concept": "极限",
+            "weakness_description": "不理解 ε-δ 定义",
+            "evidence": "答错选择题",
+            "severity": 4,
+            "review_count": 1,
+            "mastered": false
+          }
+        ]
+      },
+      {
+        "name": "merge_keeps_max_severity_and_appends_evidence",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 4,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            }
+          ],
+          "batches": [
+            {
+              "concepts": [
+                {
+                  "concept": "极限",
+                  "severity": 2,
+                  "evidence": "答错判断题",
+                  "weakness_description": "对 ε-δ 仍不熟练"
+                }
+              ]
+            }
+          ]
+        },
+        "expect": [
+          {
+            "id": "c8c253df4e73",
+            "course": "demo-calculus",
+            "chapter": 1,
+            "concept": "极限",
+            "weakness_description": "对 ε-δ 仍不熟练",
+            "evidence": "答错选择题\n答错判断题",
+            "severity": 4,
+            "review_count": 2,
+            "mastered": false
+          }
+        ]
+      },
+      {
+        "name": "merge_resets_mastered_flag",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 1,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 5,
+              "mastered": true
+            }
+          ],
+          "batches": [
+            {
+              "concepts": [
+                {
+                  "concept": "极限",
+                  "severity": 2,
+                  "evidence": "再次答错",
+                  "weakness_description": ""
+                }
+              ]
+            }
+          ]
+        },
+        "expect": [
+          {
+            "id": "c8c253df4e73",
+            "course": "demo-calculus",
+            "chapter": 1,
+            "concept": "极限",
+            "weakness_description": "不理解 ε-δ 定义",
+            "evidence": "答错选择题\n再次答错",
+            "severity": 2,
+            "review_count": 6,
+            "mastered": false
+          }
+        ]
+      },
+      {
+        "name": "severity_clamped_to_5",
+        "input": {
+          "initial_weaknesses": [],
+          "batches": [
+            {
+              "concepts": [
+                {
+                  "concept": "极限",
+                  "severity": 9
+                }
+              ]
+            }
+          ]
+        },
+        "expect": [
+          {
+            "id": "c8c253df4e73",
+            "course": "demo-calculus",
+            "chapter": 1,
+            "concept": "极限",
+            "weakness_description": "需要复习该概念",
+            "evidence": "",
+            "severity": 5,
+            "review_count": 1,
+            "mastered": false
+          }
+        ]
+      },
+      {
+        "name": "severity_zero_becomes_default_3_legacy_quirk",
+        "input": {
+          "initial_weaknesses": [],
+          "batches": [
+            {
+              "concepts": [
+                {
+                  "concept": "极限",
+                  "severity": 0
+                }
+              ]
+            }
+          ]
+        },
+        "expect": [
+          {
+            "id": "c8c253df4e73",
+            "course": "demo-calculus",
+            "chapter": 1,
+            "concept": "极限",
+            "weakness_description": "需要复习该概念",
+            "evidence": "",
+            "severity": 3,
+            "review_count": 1,
+            "mastered": false
+          }
+        ]
+      },
+      {
+        "name": "severity_string_coerced",
+        "input": {
+          "initial_weaknesses": [],
+          "batches": [
+            {
+              "concepts": [
+                {
+                  "concept": "极限",
+                  "severity": "4"
+                }
+              ]
+            }
+          ]
+        },
+        "expect": [
+          {
+            "id": "c8c253df4e73",
+            "course": "demo-calculus",
+            "chapter": 1,
+            "concept": "极限",
+            "weakness_description": "需要复习该概念",
+            "evidence": "",
+            "severity": 4,
+            "review_count": 1,
+            "mastered": false
+          }
+        ]
+      },
+      {
+        "name": "empty_concept_skipped",
+        "input": {
+          "initial_weaknesses": [],
+          "batches": [
+            {
+              "concepts": [
+                {
+                  "concept": "   ",
+                  "severity": 4
+                },
+                {
+                  "concept": "连续性",
+                  "severity": 2
+                }
+              ]
+            }
+          ]
+        },
+        "expect": [
+          {
+            "id": "6235c707fd37",
+            "course": "demo-calculus",
+            "chapter": 1,
+            "concept": "连续性",
+            "weakness_description": "需要复习该概念",
+            "evidence": "",
+            "severity": 2,
+            "review_count": 1,
+            "mastered": false
+          }
+        ]
+      },
+      {
+        "name": "result_sorted_by_course_chapter_concept",
+        "input": {
+          "initial_weaknesses": [],
+          "batches": [
+            {
+              "concepts": [
+                {
+                  "concept": "导数",
+                  "severity": 2
+                },
+                {
+                  "concept": "极限",
+                  "severity": 3
+                }
+              ],
+              "chapter": 2
+            },
+            {
+              "concepts": [
+                {
+                  "concept": "矩阵",
+                  "severity": 1
+                }
+              ],
+              "course": "demo-linear-algebra",
+              "chapter": null
+            }
+          ]
+        },
+        "expect": [
+          {
+            "id": "d6e0cc1b0974",
+            "course": "demo-calculus",
+            "chapter": 2,
+            "concept": "导数",
+            "weakness_description": "需要复习该概念",
+            "evidence": "",
+            "severity": 2,
+            "review_count": 1,
+            "mastered": false
+          },
+          {
+            "id": "5689495f44b5",
+            "course": "demo-calculus",
+            "chapter": 2,
+            "concept": "极限",
+            "weakness_description": "需要复习该概念",
+            "evidence": "",
+            "severity": 3,
+            "review_count": 1,
+            "mastered": false
+          },
+          {
+            "id": "48fa94f74add",
+            "course": "demo-linear-algebra",
+            "chapter": null,
+            "concept": "矩阵",
+            "weakness_description": "需要复习该概念",
+            "evidence": "",
+            "severity": 1,
+            "review_count": 1,
+            "mastered": false
+          }
+        ]
+      }
+    ]
+  },
+  "reduce": {
+    "function": "reduce_weakness_severity(storage, course, concept, chapter, amount)",
+    "defaults": {
+      "course": "demo-calculus",
+      "chapter": 1,
+      "amount": 1
+    },
+    "cases": [
+      {
+        "name": "reduce_above_floor_not_mastered",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 3,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            }
+          ],
+          "ops": [
+            {
+              "concept": "极限"
+            }
+          ]
+        },
+        "expect": {
+          "returns": [
+            false
+          ],
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 2,
+              "review_count": 2,
+              "mastered": false
+            }
+          ]
+        }
+      },
+      {
+        "name": "reduce_to_one_masters_with_two_reviews",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 2,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            }
+          ],
+          "ops": [
+            {
+              "concept": "极限"
+            }
+          ]
+        },
+        "expect": {
+          "returns": [
+            true
+          ],
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 1,
+              "review_count": 2,
+              "mastered": true
+            }
+          ]
+        }
+      },
+      {
+        "name": "reduce_at_floor_still_masters_with_two_reviews",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 1,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            }
+          ],
+          "ops": [
+            {
+              "concept": "极限"
+            }
+          ]
+        },
+        "expect": {
+          "returns": [
+            true
+          ],
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 1,
+              "review_count": 2,
+              "mastered": true
+            }
+          ]
+        }
+      },
+      {
+        "name": "reduce_missing_concept_returns_false",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 4,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            }
+          ],
+          "ops": [
+            {
+              "concept": "不存在"
+            }
+          ]
+        },
+        "expect": {
+          "returns": [
+            false
+          ],
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 4,
+              "review_count": 1,
+              "mastered": false
+            }
+          ]
+        }
+      },
+      {
+        "name": "reduce_with_amount_two",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 5,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            }
+          ],
+          "ops": [
+            {
+              "concept": "极限",
+              "amount": 2
+            }
+          ]
+        },
+        "expect": {
+          "returns": [
+            false
+          ],
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 3,
+              "review_count": 2,
+              "mastered": false
+            }
+          ]
+        }
+      },
+      {
+        "name": "second_reduce_after_mastered_stays_mastered",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 2,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            }
+          ],
+          "ops": [
+            {
+              "concept": "极限"
+            },
+            {
+              "concept": "极限"
+            }
+          ]
+        },
+        "expect": {
+          "returns": [
+            true,
+            true
+          ],
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 1,
+              "review_count": 3,
+              "mastered": true
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "resolve": {
+    "function": "mark_weakness_resolved(storage, course, concept, chapter)",
+    "defaults": {
+      "course": "demo-calculus",
+      "chapter": 1
+    },
+    "cases": [
+      {
+        "name": "resolve_existing",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 4,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            }
+          ],
+          "concept": "极限",
+          "chapter": 1
+        },
+        "expect": {
+          "return": true,
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 1,
+              "review_count": 1,
+              "mastered": true
+            }
+          ]
+        }
+      },
+      {
+        "name": "resolve_missing_returns_false",
+        "input": {
+          "initial_weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 4,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            }
+          ],
+          "concept": "不存在",
+          "chapter": 1
+        },
+        "expect": {
+          "return": false,
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "不理解 ε-δ 定义",
+              "evidence": "答错选择题",
+              "severity": 4,
+              "review_count": 1,
+              "mastered": false
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+[
+  {
+    "question_id": "q1",
+    "question": "lim(x→2) (x+1) 的值是多少？",
+    "user_answer": "A",
+    "correct_answer": "C",
+    "explanation": "x+1 是连续函数，直接代入得 3。",
+    "tested_concepts": ["极限代入"],
+    "score": 2,
+    "difficulty": "easy",
+    "cognitive_level": "recall"
+  },
+  {
+    "question_id": "q2",
+    "question": "关于极限存在的判定，下列说法正确的有？",
+    "user_answer": "C,A",
+    "correct_answer": ["A", "C"],
+    "explanation": "极限存在只要求左右极限存在且相等，与该点是否有定义无关。",
+    "tested_concepts": ["极限存在性"],
+    "score": 4,
+    "difficulty": "medium",
+    "cognitive_level": "explain"
+  }
+]

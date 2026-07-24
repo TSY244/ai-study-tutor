@@ -1,0 +1,4 @@
+id: 822
+event: job.progress
+data: {"job_id":"b0000000-0000-4000-8000-000000000001","status":"running","stage":"generating_student_notes","progress":62,"message":"正在生成学生笔记","occurred_at":"2026-07-17T14:19:30Z"}
+

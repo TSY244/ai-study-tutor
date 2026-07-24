@@ -72,27 +72,27 @@
 任务：建立迁移前的可重复行为基线，不实现新业务功能。
 
 重点阅读：
-- 功能与架构文档.md
-- main.py
-- src/models.py
-- src/storage.py
-- src/course_service.py
-- src/exam_logic.py
-- src/memory.py
-- src/question_policy.py
-- src/agent_runner.py
-- tests/
+- docs/web-rebuild/00-current-python-architecture.md
+- legacy/python/main.py
+- legacy/python/src/models.py
+- legacy/python/src/storage.py
+- legacy/python/src/course_service.py
+- legacy/python/src/exam_logic.py
+- legacy/python/src/memory.py
+- legacy/python/src/question_policy.py
+- legacy/python/src/agent_runner.py
+- legacy/python/tests/
 
 执行：
 1. 运行并记录当前 Python 测试基线。
 2. 为出题数量、认知层次、客观题评分、连续答对/答错、薄弱点更新建立可移植的 JSON golden fixtures。
-3. 为一套最小课程数据建立脱敏 legacy fixture，包含课程、课时、规范 `raw/`、历史 `raw_src/` 变体、笔记、试卷、作答、`wrong_questions/`、反馈、scores.json 和 weaknesses.json。
+3. 为一套最小课程数据建立脱敏 legacy fixture，放入受版本控制的 `testdata/legacy-fixtures/`，包含课程、课时、规范 `raw/`、历史 `raw_src/` 变体、笔记、试卷、作答、`wrong_questions/`、反馈、scores.json 和 weaknesses.json。
 4. 校对 docs/web-rebuild/openapi.yaml 与 04-api-contract.md；实现确定性的 OpenAPI 生成步骤，把 `x-common-response-headers` 展开到每个 Response 后生成 `api/openapi.yaml`。服务端和前端代码生成只读取展开产物，CI 校验所有响应都有 `X-Request-ID`。
 5. 创建 Makefile 的 verify-docs、verify-openapi 和 test-legacy 入口。
 
 不得：
 - 修改现有 Python 业务语义来让 fixture 更容易通过。
-- 接触真实 course/ 用户数据或把它加入 Git。
+- 接触真实 `legacy-data/course/` 用户数据或把它加入 Git。
 - 开始 Go handler、React 页面或 Docker 服务实现。
 
 验收：
@@ -326,14 +326,14 @@
 ## 12. 阶段 9：旧数据导入与切换
 
 ```text
-任务：实现 legacy-import，将现有 course/ 文件安全迁移到 PostgreSQL 和新文件卷。
+任务：实现 legacy-import，将 `legacy-data/course/` 和 `legacy-data/.tasks/` 安全迁移到 PostgreSQL 和新文件卷。
 
 完整阅读 docs/web-rebuild/07-migration-roadmap.md 后执行。
 
 执行：
 1. 扫描模式只读旧目录，输出 manifest、识别结果、冲突和警告，不写新系统。
 2. 导入模式使用 staging/import batch；每个文件计算 hash，并记录 source_path、source_hash、importer_version 和目标 ID。
-3. 导入 course/ 下科目、lesson_XX/info.json、规范 raw、历史 raw_src 变体、教师/学生笔记、quiz、answers、wrong_questions、feedback、scores.json、weaknesses.json、summary。
+3. 导入 `legacy-data/course/` 下科目、lesson_XX/info.json、规范 raw、历史 raw_src 变体、教师/学生笔记、quiz、answers、wrong_questions、feedback、scores.json、weaknesses.json、summary，以及 `legacy-data/.tasks/` 审计记录。
 4. 为不完整、重复和历史格式建立明确映射/隔离规则；不得静默丢弃。
 5. 导入幂等：同一批次重跑不复制；源文件变化要生成新差异报告，不覆盖用户确认后的目标记录。
 6. 活动 .tasks 不直接当成新 jobs 继续执行；记录为 legacy task，并要求用户在新系统显式重建可恢复任务。

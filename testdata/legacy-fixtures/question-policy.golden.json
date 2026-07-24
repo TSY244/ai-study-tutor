@@ -1,0 +1,949 @@
+{
+  "schema_version": 1,
+  "domain": "question-policy",
+  "source_module": "legacy/python/src/question_policy.py (+ exam_logic._detect_complexity)",
+  "notes": [
+    "determine_question_count 返回 0 表示策略判定无需继续练习(practice_not_needed)。",
+    "认知层次/难度分布使用最大余数法，expect 为精确整数分配，总和恒等于 question_count。"
+  ],
+  "question_count": {
+    "function": "determine_question_count(content_complexity, consecutive_errors, consecutive_correct, accuracy, user_override)",
+    "cases": [
+      {
+        "name": "default_normal",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 0,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": null
+        },
+        "expect": 8
+      },
+      {
+        "name": "simple_content",
+        "input": {
+          "content_complexity": "simple",
+          "consecutive_errors": 0,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": null
+        },
+        "expect": 5
+      },
+      {
+        "name": "complex_content",
+        "input": {
+          "content_complexity": "complex",
+          "consecutive_errors": 0,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": null
+        },
+        "expect": 12
+      },
+      {
+        "name": "unknown_complexity_falls_back_to_default",
+        "input": {
+          "content_complexity": "weird",
+          "consecutive_errors": 0,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": null
+        },
+        "expect": 8
+      },
+      {
+        "name": "consecutive_errors_add_3",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 2,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": null
+        },
+        "expect": 11
+      },
+      {
+        "name": "consecutive_errors_add_3_clamped_to_max",
+        "input": {
+          "content_complexity": "complex",
+          "consecutive_errors": 5,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": null
+        },
+        "expect": 15
+      },
+      {
+        "name": "min_clamp_simple",
+        "input": {
+          "content_complexity": "simple",
+          "consecutive_errors": 0,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": null
+        },
+        "expect": 5
+      },
+      {
+        "name": "early_stop_when_mastered_returns_0",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 0,
+          "consecutive_correct": 3,
+          "accuracy": 0.85,
+          "user_override": null
+        },
+        "expect": 0
+      },
+      {
+        "name": "early_stop_boundary_accuracy_below",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 0,
+          "consecutive_correct": 3,
+          "accuracy": 0.84,
+          "user_override": null
+        },
+        "expect": 8
+      },
+      {
+        "name": "early_stop_boundary_streak_below",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 0,
+          "consecutive_correct": 2,
+          "accuracy": 0.85,
+          "user_override": null
+        },
+        "expect": 8
+      },
+      {
+        "name": "early_stop_ignores_consecutive_errors",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 2,
+          "consecutive_correct": 3,
+          "accuracy": 0.9,
+          "user_override": null
+        },
+        "expect": 0
+      },
+      {
+        "name": "override_within_range",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 0,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": 12
+        },
+        "expect": 12
+      },
+      {
+        "name": "override_clamped_to_min",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 0,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": 3
+        },
+        "expect": 5
+      },
+      {
+        "name": "override_clamped_to_max",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 0,
+          "consecutive_correct": 0,
+          "accuracy": 0.0,
+          "user_override": 20
+        },
+        "expect": 15
+      },
+      {
+        "name": "override_beats_early_stop",
+        "input": {
+          "content_complexity": "normal",
+          "consecutive_errors": 0,
+          "consecutive_correct": 5,
+          "accuracy": 0.95,
+          "user_override": 7
+        },
+        "expect": 7
+      }
+    ]
+  },
+  "cognitive_distribution": {
+    "function": "determine_cognitive_distribution(mastery, question_count)",
+    "levels": [
+      "recall",
+      "explain",
+      "apply",
+      "transfer",
+      "reflect"
+    ],
+    "cases": [
+      {
+        "name": "mastery_0.00_count_5",
+        "input": {
+          "mastery": 0.0,
+          "question_count": 5
+        },
+        "expect": {
+          "recall": 3,
+          "explain": 1,
+          "apply": 1,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.00_count_8",
+        "input": {
+          "mastery": 0.0,
+          "question_count": 8
+        },
+        "expect": {
+          "recall": 4,
+          "explain": 2,
+          "apply": 2,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.00_count_10",
+        "input": {
+          "mastery": 0.0,
+          "question_count": 10
+        },
+        "expect": {
+          "recall": 5,
+          "explain": 3,
+          "apply": 2,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.00_count_15",
+        "input": {
+          "mastery": 0.0,
+          "question_count": 15
+        },
+        "expect": {
+          "recall": 8,
+          "explain": 4,
+          "apply": 3,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.40_count_5",
+        "input": {
+          "mastery": 0.4,
+          "question_count": 5
+        },
+        "expect": {
+          "recall": 3,
+          "explain": 1,
+          "apply": 1,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.40_count_8",
+        "input": {
+          "mastery": 0.4,
+          "question_count": 8
+        },
+        "expect": {
+          "recall": 4,
+          "explain": 2,
+          "apply": 2,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.40_count_10",
+        "input": {
+          "mastery": 0.4,
+          "question_count": 10
+        },
+        "expect": {
+          "recall": 5,
+          "explain": 3,
+          "apply": 2,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.40_count_15",
+        "input": {
+          "mastery": 0.4,
+          "question_count": 15
+        },
+        "expect": {
+          "recall": 8,
+          "explain": 4,
+          "apply": 3,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.59_count_5",
+        "input": {
+          "mastery": 0.59,
+          "question_count": 5
+        },
+        "expect": {
+          "recall": 3,
+          "explain": 1,
+          "apply": 1,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.59_count_8",
+        "input": {
+          "mastery": 0.59,
+          "question_count": 8
+        },
+        "expect": {
+          "recall": 4,
+          "explain": 2,
+          "apply": 2,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.59_count_10",
+        "input": {
+          "mastery": 0.59,
+          "question_count": 10
+        },
+        "expect": {
+          "recall": 5,
+          "explain": 3,
+          "apply": 2,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.59_count_15",
+        "input": {
+          "mastery": 0.59,
+          "question_count": 15
+        },
+        "expect": {
+          "recall": 8,
+          "explain": 4,
+          "apply": 3,
+          "transfer": 0,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.60_count_5",
+        "input": {
+          "mastery": 0.6,
+          "question_count": 5
+        },
+        "expect": {
+          "recall": 1,
+          "explain": 1,
+          "apply": 2,
+          "transfer": 1,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.60_count_8",
+        "input": {
+          "mastery": 0.6,
+          "question_count": 8
+        },
+        "expect": {
+          "recall": 2,
+          "explain": 2,
+          "apply": 3,
+          "transfer": 1,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.60_count_10",
+        "input": {
+          "mastery": 0.6,
+          "question_count": 10
+        },
+        "expect": {
+          "recall": 2,
+          "explain": 3,
+          "apply": 4,
+          "transfer": 1,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.60_count_15",
+        "input": {
+          "mastery": 0.6,
+          "question_count": 15
+        },
+        "expect": {
+          "recall": 3,
+          "explain": 4,
+          "apply": 6,
+          "transfer": 2,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.75_count_5",
+        "input": {
+          "mastery": 0.75,
+          "question_count": 5
+        },
+        "expect": {
+          "recall": 1,
+          "explain": 1,
+          "apply": 2,
+          "transfer": 1,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.75_count_8",
+        "input": {
+          "mastery": 0.75,
+          "question_count": 8
+        },
+        "expect": {
+          "recall": 2,
+          "explain": 2,
+          "apply": 3,
+          "transfer": 1,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.75_count_10",
+        "input": {
+          "mastery": 0.75,
+          "question_count": 10
+        },
+        "expect": {
+          "recall": 2,
+          "explain": 3,
+          "apply": 4,
+          "transfer": 1,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.75_count_15",
+        "input": {
+          "mastery": 0.75,
+          "question_count": 15
+        },
+        "expect": {
+          "recall": 3,
+          "explain": 4,
+          "apply": 6,
+          "transfer": 2,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.85_count_5",
+        "input": {
+          "mastery": 0.85,
+          "question_count": 5
+        },
+        "expect": {
+          "recall": 1,
+          "explain": 1,
+          "apply": 2,
+          "transfer": 1,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.85_count_8",
+        "input": {
+          "mastery": 0.85,
+          "question_count": 8
+        },
+        "expect": {
+          "recall": 2,
+          "explain": 2,
+          "apply": 3,
+          "transfer": 1,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.85_count_10",
+        "input": {
+          "mastery": 0.85,
+          "question_count": 10
+        },
+        "expect": {
+          "recall": 2,
+          "explain": 3,
+          "apply": 4,
+          "transfer": 1,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.85_count_15",
+        "input": {
+          "mastery": 0.85,
+          "question_count": 15
+        },
+        "expect": {
+          "recall": 3,
+          "explain": 4,
+          "apply": 6,
+          "transfer": 2,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.86_count_5",
+        "input": {
+          "mastery": 0.86,
+          "question_count": 5
+        },
+        "expect": {
+          "recall": 1,
+          "explain": 0,
+          "apply": 2,
+          "transfer": 2,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_0.86_count_8",
+        "input": {
+          "mastery": 0.86,
+          "question_count": 8
+        },
+        "expect": {
+          "recall": 1,
+          "explain": 0,
+          "apply": 3,
+          "transfer": 3,
+          "reflect": 1
+        }
+      },
+      {
+        "name": "mastery_0.86_count_10",
+        "input": {
+          "mastery": 0.86,
+          "question_count": 10
+        },
+        "expect": {
+          "recall": 1,
+          "explain": 0,
+          "apply": 4,
+          "transfer": 4,
+          "reflect": 1
+        }
+      },
+      {
+        "name": "mastery_0.86_count_15",
+        "input": {
+          "mastery": 0.86,
+          "question_count": 15
+        },
+        "expect": {
+          "recall": 2,
+          "explain": 0,
+          "apply": 6,
+          "transfer": 6,
+          "reflect": 1
+        }
+      },
+      {
+        "name": "mastery_1.00_count_5",
+        "input": {
+          "mastery": 1.0,
+          "question_count": 5
+        },
+        "expect": {
+          "recall": 1,
+          "explain": 0,
+          "apply": 2,
+          "transfer": 2,
+          "reflect": 0
+        }
+      },
+      {
+        "name": "mastery_1.00_count_8",
+        "input": {
+          "mastery": 1.0,
+          "question_count": 8
+        },
+        "expect": {
+          "recall": 1,
+          "explain": 0,
+          "apply": 3,
+          "transfer": 3,
+          "reflect": 1
+        }
+      },
+      {
+        "name": "mastery_1.00_count_10",
+        "input": {
+          "mastery": 1.0,
+          "question_count": 10
+        },
+        "expect": {
+          "recall": 1,
+          "explain": 0,
+          "apply": 4,
+          "transfer": 4,
+          "reflect": 1
+        }
+      },
+      {
+        "name": "mastery_1.00_count_15",
+        "input": {
+          "mastery": 1.0,
+          "question_count": 15
+        },
+        "expect": {
+          "recall": 2,
+          "explain": 0,
+          "apply": 6,
+          "transfer": 6,
+          "reflect": 1
+        }
+      }
+    ]
+  },
+  "difficulty_distribution": {
+    "function": "determine_difficulty_distribution(question_count)",
+    "difficulties": [
+      "easy",
+      "medium",
+      "hard",
+      "challenge"
+    ],
+    "cases": [
+      {
+        "name": "count_5",
+        "input": {
+          "question_count": 5
+        },
+        "expect": {
+          "easy": 1,
+          "medium": 3,
+          "hard": 1,
+          "challenge": 0
+        }
+      },
+      {
+        "name": "count_6",
+        "input": {
+          "question_count": 6
+        },
+        "expect": {
+          "easy": 1,
+          "medium": 3,
+          "hard": 1,
+          "challenge": 1
+        }
+      },
+      {
+        "name": "count_7",
+        "input": {
+          "question_count": 7
+        },
+        "expect": {
+          "easy": 1,
+          "medium": 4,
+          "hard": 1,
+          "challenge": 1
+        }
+      },
+      {
+        "name": "count_8",
+        "input": {
+          "question_count": 8
+        },
+        "expect": {
+          "easy": 2,
+          "medium": 4,
+          "hard": 1,
+          "challenge": 1
+        }
+      },
+      {
+        "name": "count_9",
+        "input": {
+          "question_count": 9
+        },
+        "expect": {
+          "easy": 2,
+          "medium": 4,
+          "hard": 2,
+          "challenge": 1
+        }
+      },
+      {
+        "name": "count_10",
+        "input": {
+          "question_count": 10
+        },
+        "expect": {
+          "easy": 2,
+          "medium": 5,
+          "hard": 2,
+          "challenge": 1
+        }
+      },
+      {
+        "name": "count_11",
+        "input": {
+          "question_count": 11
+        },
+        "expect": {
+          "easy": 2,
+          "medium": 6,
+          "hard": 2,
+          "challenge": 1
+        }
+      },
+      {
+        "name": "count_12",
+        "input": {
+          "question_count": 12
+        },
+        "expect": {
+          "easy": 3,
+          "medium": 6,
+          "hard": 2,
+          "challenge": 1
+        }
+      },
+      {
+        "name": "count_13",
+        "input": {
+          "question_count": 13
+        },
+        "expect": {
+          "easy": 3,
+          "medium": 6,
+          "hard": 3,
+          "challenge": 1
+        }
+      },
+      {
+        "name": "count_14",
+        "input": {
+          "question_count": 14
+        },
+        "expect": {
+          "easy": 3,
+          "medium": 7,
+          "hard": 3,
+          "challenge": 1
+        }
+      },
+      {
+        "name": "count_15",
+        "input": {
+          "question_count": 15
+        },
+        "expect": {
+          "easy": 3,
+          "medium": 8,
+          "hard": 3,
+          "challenge": 1
+        }
+      }
+    ]
+  },
+  "weighted_mastery": {
+    "function": "compute_mastery(scores)",
+    "float_compare": "JSON 保存完整双精度；跨语言比较建议使用 1e-12 绝对容差。",
+    "cases": [
+      {
+        "name": "empty_history",
+        "input": {
+          "scores": []
+        },
+        "expect": 0.0
+      },
+      {
+        "name": "single_perfect_score",
+        "input": {
+          "scores": [
+            {
+              "score": 10,
+              "total": 10,
+              "timestamp": "2026-01-01"
+            }
+          ]
+        },
+        "expect": 1.0
+      },
+      {
+        "name": "single_zero_score",
+        "input": {
+          "scores": [
+            {
+              "score": 0,
+              "total": 10,
+              "timestamp": "2026-01-01"
+            }
+          ]
+        },
+        "expect": 0.0
+      },
+      {
+        "name": "recent_scores_weighted_heavier",
+        "input": {
+          "scores": [
+            {
+              "score": 0,
+              "total": 10,
+              "timestamp": "2026-01-01"
+            },
+            {
+              "score": 10,
+              "total": 10,
+              "timestamp": "2026-01-03"
+            },
+            {
+              "score": 10,
+              "total": 10,
+              "timestamp": "2026-01-02"
+            }
+          ]
+        },
+        "expect": 0.7777777777777778
+      },
+      {
+        "name": "zero_total_records_skipped",
+        "input": {
+          "scores": [
+            {
+              "score": 5,
+              "total": 0,
+              "timestamp": "2026-01-01"
+            },
+            {
+              "score": 10,
+              "total": 10,
+              "timestamp": "2026-01-02"
+            }
+          ]
+        },
+        "expect": 1.0
+      },
+      {
+        "name": "all_zero_totals_yield_zero",
+        "input": {
+          "scores": [
+            {
+              "score": 5,
+              "total": 0,
+              "timestamp": "2026-01-01"
+            },
+            {
+              "score": 3,
+              "total": 0,
+              "timestamp": "2026-01-02"
+            }
+          ]
+        },
+        "expect": 0.0
+      },
+      {
+        "name": "missing_timestamp_sorts_first",
+        "input": {
+          "scores": [
+            {
+              "score": 6,
+              "total": 10
+            },
+            {
+              "score": 8,
+              "total": 10,
+              "timestamp": "2026-01-01"
+            }
+          ]
+        },
+        "expect": 0.7200000000000001
+      },
+      {
+        "name": "fractional_scores",
+        "input": {
+          "scores": [
+            {
+              "score": 7.5,
+              "total": 10,
+              "timestamp": "2026-01-01"
+            },
+            {
+              "score": 8.5,
+              "total": 12,
+              "timestamp": "2026-01-02"
+            },
+            {
+              "score": 3,
+              "total": 6,
+              "timestamp": "2026-01-03"
+            }
+          ]
+        },
+        "expect": 0.625
+      }
+    ]
+  },
+  "detect_complexity": {
+    "function": "exam_logic._detect_complexity(raw_text, lesson_text)",
+    "cases": [
+      {
+        "name": "simple_short_plain_text",
+        "input": {
+          "raw_text": "本课介绍函数极限的直观含义：当自变量接近某个值时，函数值呈现的变化趋势。",
+          "lesson_text": "极限描述趋势。"
+        },
+        "expect": "simple"
+      },
+      {
+        "name": "normal_method_and_concept_text",
+        "input": {
+          "raw_text": "本课讲解求极限的常用方法与步骤。首先介绍代入法，然后介绍因式分解法，接着讨论有理化方法。",
+          "lesson_text": "极限的概念与连续的定义是本课重点。"
+        },
+        "expect": "normal"
+      },
+      {
+        "name": "complex_proof_and_math_text",
+        "input": {
+          "raw_text": "本课给出极限的严格定义，包含 ε-δ 推导与证明。涉及重要公式与定理，需要计算与微分、积分基础。",
+          "lesson_text": "定理的证明与公式的推导是难点。"
+        },
+        "expect": "complex"
+      }
+    ]
+  }
+}

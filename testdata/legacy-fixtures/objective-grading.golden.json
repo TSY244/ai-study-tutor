@@ -1,0 +1,344 @@
+{
+  "schema_version": 1,
+  "domain": "objective-grading",
+  "source_module": "legacy/python/src/exam_logic.py",
+  "notes": [
+    "多选按规范化后的字符串逐项比较：不去重、不排序，顺序或重复不同即判错（legacy 现状，golden 如实冻结）。",
+    "03-backend-architecture.md §10.2 的目标行为（多选集合比较）与旧实现不同，B4 迁移时必须显式决策并记录。",
+    "short_answer/case_analysis 恒为 False：需要 AI 批阅，本地不判分。"
+  ],
+  "normalize": {
+    "function": "normalize_objective_answer(value)",
+    "cases": [
+      {
+        "name": "single_letter_upper",
+        "input": "a",
+        "expect": "A"
+      },
+      {
+        "name": "surrounding_whitespace",
+        "input": "  b  ",
+        "expect": "B"
+      },
+      {
+        "name": "chinese_comma",
+        "input": "a，b",
+        "expect": "A,B"
+      },
+      {
+        "name": "mixed_separators_and_case",
+        "input": "a, b ,C",
+        "expect": "A,B,C"
+      },
+      {
+        "name": "empty_string",
+        "input": "",
+        "expect": ""
+      },
+      {
+        "name": "only_separators",
+        "input": "，, ，",
+        "expect": ""
+      },
+      {
+        "name": "multi_letter_token",
+        "input": "ab",
+        "expect": "AB"
+      },
+      {
+        "name": "empty_segments_dropped",
+        "input": "a,,b,",
+        "expect": "A,B"
+      },
+      {
+        "name": "chinese_boolean_untouched",
+        "input": "对",
+        "expect": "对"
+      },
+      {
+        "name": "already_normalized",
+        "input": "A,B,C",
+        "expect": "A,B,C"
+      }
+    ]
+  },
+  "is_objective_correct": {
+    "function": "is_objective_correct(question, user_answer)",
+    "cases": [
+      {
+        "name": "single_choice_case_insensitive",
+        "input": {
+          "question": {
+            "type": "single_choice",
+            "correct_answer": "B",
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "b"
+        },
+        "expect": true
+      },
+      {
+        "name": "single_choice_wrong_option",
+        "input": {
+          "question": {
+            "type": "single_choice",
+            "correct_answer": "B",
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "A"
+        },
+        "expect": false
+      },
+      {
+        "name": "single_choice_whitespace_tolerated",
+        "input": {
+          "question": {
+            "type": "single_choice",
+            "correct_answer": "B",
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "  B "
+        },
+        "expect": true
+      },
+      {
+        "name": "multiple_choice_exact_order",
+        "input": {
+          "question": {
+            "type": "multiple_choice",
+            "correct_answer": [
+              "A",
+              "C"
+            ],
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "A,C"
+        },
+        "expect": true
+      },
+      {
+        "name": "multiple_choice_reordered_is_wrong_legacy_quirk",
+        "input": {
+          "question": {
+            "type": "multiple_choice",
+            "correct_answer": [
+              "A",
+              "C"
+            ],
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "C,A"
+        },
+        "expect": false
+      },
+      {
+        "name": "multiple_choice_lowercase",
+        "input": {
+          "question": {
+            "type": "multiple_choice",
+            "correct_answer": [
+              "A",
+              "C"
+            ],
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "a,c"
+        },
+        "expect": true
+      },
+      {
+        "name": "multiple_choice_trailing_comma",
+        "input": {
+          "question": {
+            "type": "multiple_choice",
+            "correct_answer": [
+              "A",
+              "C"
+            ],
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "A,C,"
+        },
+        "expect": true
+      },
+      {
+        "name": "multiple_choice_duplicate_is_wrong_legacy_quirk",
+        "input": {
+          "question": {
+            "type": "multiple_choice",
+            "correct_answer": [
+              "A",
+              "C"
+            ],
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "A,A,C"
+        },
+        "expect": false
+      },
+      {
+        "name": "multiple_choice_partial_is_wrong",
+        "input": {
+          "question": {
+            "type": "multiple_choice",
+            "correct_answer": [
+              "A",
+              "C"
+            ],
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "A"
+        },
+        "expect": false
+      },
+      {
+        "name": "multiple_choice_correct_as_joined_string",
+        "input": {
+          "question": {
+            "type": "multiple_choice",
+            "correct_answer": "A,C",
+            "options": {
+              "A": "甲",
+              "B": "乙",
+              "C": "丙"
+            }
+          },
+          "user_answer": "A，C"
+        },
+        "expect": true
+      },
+      {
+        "name": "true_false_chinese_pair",
+        "input": {
+          "question": {
+            "type": "true_false",
+            "correct_answer": "对",
+            "options": null
+          },
+          "user_answer": "对"
+        },
+        "expect": true
+      },
+      {
+        "name": "true_false_user_yes_maps_to_chinese_correct",
+        "input": {
+          "question": {
+            "type": "true_false",
+            "correct_answer": "对",
+            "options": null
+          },
+          "user_answer": "Y"
+        },
+        "expect": true
+      },
+      {
+        "name": "true_false_user_no_maps_to_chinese_correct",
+        "input": {
+          "question": {
+            "type": "true_false",
+            "correct_answer": "错",
+            "options": null
+          },
+          "user_answer": "n"
+        },
+        "expect": true
+      },
+      {
+        "name": "true_false_english_correct_user_yes",
+        "input": {
+          "question": {
+            "type": "true_false",
+            "correct_answer": "TRUE",
+            "options": null
+          },
+          "user_answer": "yes"
+        },
+        "expect": true
+      },
+      {
+        "name": "true_false_mismatch",
+        "input": {
+          "question": {
+            "type": "true_false",
+            "correct_answer": "FALSE",
+            "options": null
+          },
+          "user_answer": "对"
+        },
+        "expect": false
+      },
+      {
+        "name": "true_false_unmapped_token_passes_through",
+        "input": {
+          "question": {
+            "type": "true_false",
+            "correct_answer": "T",
+            "options": null
+          },
+          "user_answer": "t"
+        },
+        "expect": true
+      },
+      {
+        "name": "short_answer_needs_ai",
+        "input": {
+          "question": {
+            "type": "short_answer",
+            "correct_answer": "极限是趋势",
+            "options": null
+          },
+          "user_answer": "极限是趋势"
+        },
+        "expect": false
+      },
+      {
+        "name": "case_analysis_needs_ai",
+        "input": {
+          "question": {
+            "type": "case_analysis",
+            "correct_answer": "见解析",
+            "options": null
+          },
+          "user_answer": "见解析"
+        },
+        "expect": false
+      }
+    ]
+  }
+}

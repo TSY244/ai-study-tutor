@@ -1,0 +1,60 @@
+{
+  "id": "quiz_chapter_01",
+  "course_id": "demo-calculus",
+  "chapter_id": 1,
+  "title": "极限的基本概念 · 章节测验",
+  "questions": [
+    {
+      "id": "q1",
+      "type": "single_choice",
+      "question": "lim(x→2) (x+1) 的值是多少？",
+      "options": {"A": "1", "B": "2", "C": "3", "D": "不存在"},
+      "correct_answer": "C",
+      "explanation": "x+1 是连续函数，直接代入得 3。",
+      "tested_concepts": ["极限代入"],
+      "difficulty": "easy",
+      "score": 2,
+      "cognitive_level": "recall"
+    },
+    {
+      "id": "q2",
+      "type": "multiple_choice",
+      "question": "关于极限存在的判定，下列说法正确的有？",
+      "options": {"A": "左极限存在且等于右极限", "B": "函数在该点必须有定义", "C": "左右极限都存在且相等"},
+      "correct_answer": ["A", "C"],
+      "explanation": "极限存在只要求左右极限存在且相等，与该点是否有定义无关。",
+      "tested_concepts": ["极限存在性"],
+      "difficulty": "medium",
+      "score": 4,
+      "cognitive_level": "explain"
+    },
+    {
+      "id": "q3",
+      "type": "true_false",
+      "question": "函数在某点的极限存在，当且仅当左右极限都存在且相等。",
+      "options": null,
+      "correct_answer": "对",
+      "explanation": "这是极限存在的充要条件。",
+      "tested_concepts": ["极限存在性"],
+      "difficulty": "easy",
+      "score": 2,
+      "cognitive_level": "recall"
+    },
+    {
+      "id": "q4",
+      "type": "short_answer",
+      "question": "用自己的话解释 ε-δ 定义中 δ 与 ε 的关系。",
+      "options": null,
+      "correct_answer": "参考：给定任意 ε > 0，总能找到依赖于 ε 的 δ > 0，使 0 < |x-a| < δ 时 |f(x)-L| < ε。",
+      "explanation": "关键是 δ 随 ε 而变化，体现“任意接近”的可实现性。",
+      "tested_concepts": ["ε-δ 定义"],
+      "difficulty": "medium",
+      "score": 5,
+      "cognitive_level": "explain"
+    }
+  ],
+  "created_at": "2026-05-20T09:05:00+08:00",
+  "mode": "markdown",
+  "source": "regular",
+  "source_quizzes": []
+}

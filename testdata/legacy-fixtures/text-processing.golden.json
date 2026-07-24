@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "domain": "text_processing",
+  "source_module": "legacy/python/src/chunking.py + legacy/python/src/material_parse/",
+  "notes": [
+    "clean_text 语义：\\r\\n/\\r -> \\n；[ \\t]+ -> 单空格；\\n{3,} -> \\n\\n；整体 strip。",
+    "clean_subtitle_text/_clean_vtt：去空行、WEBVTT 头、NOTE 行（仅 vtt）、纯数字序号行、含 --> 的时间轴行、内联标签，逐行 strip 后以 \\n 拼接再过 clean_text。",
+    "_clean_lrc 不过 clean_text（legacy 现状，golden 如实冻结）；目标系统管线的 normalizing 阶段统一兜底。",
+    "fixture 内容为合成教学文本，不含任何真实用户数据。"
+  ],
+  "normalize": {
+    "function": "chunking.clean_text",
+    "cases": [
+      {
+        "name": "crlf_and_cr",
+        "input": "极限的定义\r\n一、\r二、",
+        "expect": "极限的定义\n一、\n二、"
+      },
+      {
+        "name": "tabs_and_spaces",
+        "input": "函数  \t 连续 \t\t 可导",
+        "expect": "函数 连续 可导"
+      },
+      {
+        "name": "blank_line_collapse",
+        "input": "第一节\n\n\n\n第二节\n\n\n\n\n第三节",
+        "expect": "第一节\n\n第二节\n\n第三节"
+      },
+      {
+        "name": "mixed_with_trim",
+        "input": "  导数  \t 几何意义 \r\n\r\n\r\n  切线斜率  ",
+        "expect": "导数 几何意义 \n\n 切线斜率"
+      },
+      {
+        "name": "only_blank",
+        "input": "\n\n\n",
+        "expect": ""
+      }
+    ]
+  },
+  "srt": {
+    "function": "material_parse.local_parse.clean_subtitle_text",
+    "cases": [
+      {
+        "name": "basic",
+        "input": "1\n00:00:01,000 --> 00:00:02,000\n大家好\n\n2\n00:00:03,000 --> 00:00:04,000\n<b>欢迎</b>来到课堂\n",
+        "expect": "大家好\n欢迎来到课堂"
+      },
+      {
+        "name": "crlf_and_empty",
+        "input": "\r\n1\r\n00:00:01,000 --> 00:00:02,000\r\n极限思想\r\n",
+        "expect": "极限思想"
+      }
+    ]
+  },
+  "vtt": {
+    "function": "material_parse.url_parse._clean_vtt",
+    "cases": [
+      {
+        "name": "header_note_and_ctag",
+        "input": "WEBVTT\n\nNOTE 这是一段注释\n\n00:00:01.000 --> 00:00:02.000\n<c.colorE5E5E5>你好</c> 世界\n\n00:00:03.000 --> 00:00:04.000\n第二行\n",
+        "expect": "你好 世界\n第二行"
+      }
+    ]
+  },
+  "lrc": {
+    "function": "material_parse.url_parse._clean_lrc",
+    "cases": [
+      {
+        "name": "timestamps_removed",
+        "input": "[00:01.23]第一句话\n[00:04.56]第二句话\n",
+        "expect": "第一句话\n第二句话"
+      }
+    ]
+  }
+}

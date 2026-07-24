@@ -44,14 +44,18 @@ deploy/
 │   ├── anthropic_api_key.txt  # 不提交，权限 0600
 │   └── postgres_password.txt  # 不提交，权限 0600
 └── scripts/
-    ├── doctor.sh
     ├── init.sh
-    ├── backup.sh
-    └── restore.sh
+    ├── release-smoke.sh
+    ├── verify-secrets.sh
+    └── drill.sh
 
-data/                          # 上传、临时产物、导出
 backups/                       # 备份包
+import-reports/                # legacy-import 扫描报告
 ```
+
+运行时业务文件保存在 Compose 命名卷 `app_data`，数据库保存在命名卷
+`pg_data`；`backups/` 与 `import-reports/` 是只被一次性 Tools 容器绑定挂载
+的宿主机目录。日常 `docker compose down` 不会删除这两个命名卷。
 
 `.gitignore` 必须包含：
 
@@ -79,6 +83,7 @@ LOG_LEVEL=info
 POSTGRES_DB=ai_study_tutor
 POSTGRES_USER=ai_study_tutor
 
+AI_PROVIDER=anthropic
 CLAUDE_MODEL_DEFAULT=replace-with-supported-model
 CLAUDE_REQUEST_TIMEOUT=300s
 CLAUDE_MAX_OUTPUT_TOKENS=8192
@@ -93,9 +98,8 @@ MAX_DOWNLOAD_BYTES=2147483648
 TRANSCRIPTION_MODE=subtitle_only
 WHISPER_MODEL_PATH=
 
-DATA_DIR=../data
 BACKUP_DIR=../backups
-LEGACY_SOURCE_DIR=../course
+LEGACY_SOURCE_DIR=../legacy-data
 IMPORT_REPORT_DIR=../import-reports
 TOOLS_UID=10001
 TOOLS_GID=10001
@@ -103,7 +107,9 @@ TOOLS_GID=10001
 
 模型标识应通过配置注入，并在实际实施时从 Anthropic 官方模型文档选择受支持型号，不要将文档示例长期硬编码到业务代码。
 
-`deploy/scripts/init.sh` 在 Linux 上应把 `TOOLS_UID/TOOLS_GID` 写为执行用户的 `id -u/id -g`，并用同一身份创建 `data`、`backups`、`import-reports`；Docker Desktop 可保留镜像固定 UID，但首次启动仍必须验证三个绑定目录可写。禁止为了绕过目录权限把 Tools 改为 root 常驻运行。
+`deploy/scripts/init.sh` 在 Linux 上应把 `TOOLS_UID/TOOLS_GID` 写为执行用户的 `id -u/id -g`，并用同一身份创建 `backups`、`import-reports`；Docker Desktop 可保留镜像固定 UID，但首次启动仍必须验证这些绑定目录可写。禁止为了绕过目录权限把 Tools 改为 root 常驻运行。
+
+`AI_PROVIDER=fake` 仅用于 `deploy/scripts/drill.sh` 和 CI 的本地闭环；它不读取 Anthropic secret，也不生成学习正文。常规本机运行使用 `anthropic`，且只有 Worker 会读取 `ANTHROPIC_API_KEY_FILE`。
 
 ### 4.2 Secret
 
@@ -143,7 +149,7 @@ Docker Compose secret 会以文件形式挂载到 `/run/secrets/<name>`。只有
 
 ## 5. Compose 拓扑
 
-以下是实施蓝图，不是当前仓库中已经可运行的配置：
+当前可运行配置位于 `deploy/compose.yaml`；以下拓扑用于说明服务边界，实际发布以仓库配置和 `docker compose config` 展开结果为准：
 
 ```yaml
 name: ai-study-tutor
@@ -208,7 +214,7 @@ services:
     secrets:
       - postgres_password
     volumes:
-      - ${DATA_DIR}:/var/lib/ai-study-tutor
+      - app_data:/var/lib/ai-study-tutor
     networks:
       - frontend
       - backend
@@ -257,7 +263,7 @@ services:
       - postgres_password
       - anthropic_api_key
     volumes:
-      - ${DATA_DIR}:/var/lib/ai-study-tutor
+      - app_data:/var/lib/ai-study-tutor
     networks:
       - backend
       - egress
@@ -328,7 +334,7 @@ services:
     secrets:
       - postgres_password
     volumes:
-      - ${DATA_DIR}:/var/lib/ai-study-tutor:ro
+      - app_data:/var/lib/ai-study-tutor:ro
       - ${BACKUP_DIR}:/backups
     networks:
       - backend
@@ -350,7 +356,7 @@ services:
       target: runtime
     profiles: [manual]
     user: "${TOOLS_UID:-10001}:${TOOLS_GID:-10001}"
-    command: ["/app/restore-helper"]
+    command: ["/app/restore", "${RESTORE_BACKUP}"]
     environment:
       DB_HOST: db
       DB_PORT: "5432"
@@ -362,7 +368,7 @@ services:
     secrets:
       - postgres_password
     volumes:
-      - ${DATA_DIR}:/var/lib/ai-study-tutor:rw
+      - app_data:/var/lib/ai-study-tutor
       - ${BACKUP_DIR}:/backups:ro
     networks:
       - backend
@@ -396,7 +402,7 @@ services:
     secrets:
       - postgres_password
     volumes:
-      - ${DATA_DIR}:/var/lib/ai-study-tutor:ro
+      - app_data:/var/lib/ai-study-tutor:ro
     networks:
       - backend
     depends_on:
@@ -430,7 +436,7 @@ services:
     secrets:
       - postgres_password
     volumes:
-      - ${DATA_DIR}:/var/lib/ai-study-tutor:rw
+      - app_data:/var/lib/ai-study-tutor
     networks:
       - backend
     depends_on:
@@ -465,7 +471,7 @@ services:
       - postgres_password
     volumes:
       - ${LEGACY_SOURCE_DIR}:/legacy:ro
-      - ${DATA_DIR}:/var/lib/ai-study-tutor:rw
+      - app_data:/var/lib/ai-study-tutor
       - ${IMPORT_REPORT_DIR}:/reports:rw
     networks:
       - backend
@@ -555,7 +561,7 @@ Docker Compose 支持用 `service_healthy` 和 `service_completed_successfully` 
 
 多阶段构建：
 
-1. Go Builder 编译 `api`、`migrate`、`backup`、`legacy-import`。
+1. Go Builder 只编译 `api` 与 `migrate`。
 2. Runtime 使用精简基础镜像。
 3. 非 root 用户运行。
 4. 不安装 shell、ffmpeg、yt-dlp 和 Node。
@@ -584,20 +590,28 @@ Docker Compose 支持用 `service_healthy` 和 `service_completed_successfully` 
 
 只供 `tools` 或 `manual` profile 的一次性运维/迁移任务使用，包含：
 
-- 编译后的 `backup`、`restore-helper`、`doctor` 和 `legacy-import`。
+- 编译后的 `backup`、`restore`、`doctor`、`seed` 和 `legacy-import`。
 - 与数据库主版本匹配的 PostgreSQL client（`pg_dump`、`pg_restore`）。
 - 固定版本的 `tar`、`zstd` 和校验工具。
 
 Tools 镜像不承载常驻 HTTP 服务，不获得 Anthropic secret。`backup` 和只读 `doctor` 使用 `tools` profile；具有数据卷写权限的 `restore`、`maintenance-repair` 与 `legacy-import` 使用 `manual` profile，只由明确的本机命令运行。所有服务都使用非 root 用户、只读根文件系统、临时 `/tmp`、`no-new-privileges` 和 `cap_drop: ALL`。不要为了复用而把这些运维工具装回 API 镜像。
+
+### 7.5 前端 Docker 接口
+
+前端构建产物放入 `apps/web/dist`，由 Caddy 的 `web` 服务在容器内 `:8080`
+提供。前端不得自行发布端口、访问数据库、挂载数据卷或声明 Anthropic secret。
+浏览器只访问同源路径：`/api/v1/*`、`/healthz`、`/readyz` 和
+`/api/v1/jobs/stream`；Caddy 已为 SSE 配置 `flush_interval -1`。前端 Dockerfile
+需保持非 root、只读根文件系统，并在运行期允许 Caddy 使用 `/data`、`/config`
+两个 tmpfs。唯一宿主机发布端口是 `web` 的
+`127.0.0.1:${APP_PORT}:8080`。
 
 ## 8. 首次部署
 
 ### 8.1 准备配置
 
 ```bash
-cp deploy/.env.example deploy/.env
-mkdir -p deploy/secrets data backups import-reports
-chmod 700 deploy/secrets
+make docker-init
 ```
 
 写入两个 secret 后验证 Compose：
@@ -644,7 +658,7 @@ http://127.0.0.1:8080
 
 首次启动后在系统设置中执行 Claude 连通性测试。
 
-若为了无 AI 的本地开发暂时使用空的 `anthropic_api_key.txt`，系统应以降级模式启动；所有依赖 Claude 的新操作返回 `claude_not_configured`。正式学习流程仍要求写入有效 Key。
+若为了无 AI 的本地开发暂时使用空的 `anthropic_api_key.txt`，系统应以降级模式启动；所有依赖 Claude 的新操作返回 `claude_not_configured`。正式学习流程仍要求写入有效 Key。部署演练改用 `AI_PROVIDER=fake`，不需要真实 Key。
 
 ## 9. 日常运维
 
@@ -761,17 +775,24 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml \
 10. 启动 API/Worker/Web。
 11. 运行 Doctor：数据库引用文件存在、active 文档唯一、Job 状态可恢复、维护状态已清除。
 
-建议命令形态：
+当前实现只允许恢复到**空的** `app_data` 和新建数据库卷。保留备份目录，清空
+目标 Compose 卷后，以显式确认变量执行：
 
 ```bash
-./deploy/scripts/restore.sh ./backups/backup-YYYYMMDD-HHMMSS
+docker compose --env-file deploy/.env -f deploy/compose.yaml down -v
+docker compose --env-file deploy/.env -f deploy/compose.yaml up -d db --wait
+RESTORE_BACKUP=backup-YYYYMMDDTHHMMSSZ RESTORE_CONFIRM=RESTORE \
+  docker compose --env-file deploy/.env -f deploy/compose.yaml \
+  --profile manual run --rm restore
+docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --wait
+make docker-doctor
 ```
 
-脚本必须要求显式确认备份路径和目标实例，再调用 `docker compose --profile manual run --rm restore ...`；禁止默认选择“最新备份”后直接覆盖。
+`RESTORE_CONFIRM=RESTORE` 和精确的 `RESTORE_BACKUP` 名称缺一不可；禁止默认选择“最新备份”后直接覆盖。`down -v` 只应在已确认该项目卷可被备份恢复覆盖时使用。
 
 ## 12. 旧数据导入
 
-旧 Python `course/` 目录只以只读方式挂载到一次性 `legacy-import` 服务。先扫描，不写数据库和文件卷：
+旧系统数据根 `legacy-data/` 只以只读方式挂载到一次性 `legacy-import` 服务；Importer 从 `/legacy/course` 读取课程、从 `/legacy/.tasks` 读取历史任务。先扫描，不写数据库和文件卷：
 
 ```bash
 docker compose --env-file deploy/.env -f deploy/compose.yaml \
@@ -793,6 +814,17 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml \
 - `/var/lib/ai-study-tutor` 和 `/reports` 是明确的 `:rw` 目标；Importer 运行时仍使用非 root 用户和只读根文件系统。
 - `scan` 不创建业务数据；`import` 使用 staging batch、幂等记录和最终 reconciliation gate。
 - 最终切换前必须先停止旧 Python 写入并对 `LEGACY_SOURCE_DIR` 生成新的 Manifest。
+- `resolution.json` 的 `schema_version=1`、`manifest_sha256` 和每条 `accepted_findings` 必须精确匹配 scan 报告中的 error finding；导入批次保存 resolution SHA-256。
+- 同一 Manifest 与同一 resolution 重跑复用原批次；换 resolution 会生成新审计批次，已映射的 source hash 只会产生 `deduplicated` 记录。
+- `needs_review`、`quarantined` 和 `skipped_by_policy` 都会写入 JSON 报告与数据库审计。报告只含相对路径、hash、稳定原因码和计数，不含学习正文、答案或旧 Prompt。
+
+便捷命令：
+
+```bash
+make docker-legacy-scan
+LEGACY_IMPORT_ARGS='import --source /legacy --report /reports/import.json --resolution /reports/resolution.json --fail-on-warning' \
+  make docker-legacy-import
+```
 
 ## 13. 升级与回滚
 

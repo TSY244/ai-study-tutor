@@ -1,0 +1,20 @@
+{
+  "task_id": "task_20260603_100500_exam_review_d4e5f6",
+  "task_type": "exam_review",
+  "subject": "demo-calculus",
+  "lesson": 1,
+  "name": "极限的基本概念 · 试卷批阅",
+  "prompt": "请批阅 20260603_100000_answers.json 中的主观题（示例 fixture，正文已省略）。",
+  "system_prompt": "",
+  "source_text": "",
+  "output_dir": "course/demo-calculus/lesson_01/exam",
+  "output_files": ["20260603_100000_feedback.json"],
+  "output_format": "json",
+  "model": "",
+  "command": "",
+  "status": "failed",
+  "created_at": "2026-06-03T10:05:00+00:00",
+  "completed_at": "2026-06-03T10:06:12+00:00",
+  "error": "agent 子进程异常退出（已脱敏，旧任务不可续跑）",
+  "extra": {}
+}

@@ -1,0 +1,375 @@
+name: ai-study-tutor
+
+x-database-environment: &database-environment
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_NAME: ${POSTGRES_DB}
+  DB_USER: ${POSTGRES_USER}
+  DB_PASSWORD_FILE: /run/secrets/postgres_password
+
+x-service-environment: &service-environment
+  APP_ENV: ${APP_ENV}
+  APP_VERSION: ${APP_VERSION}
+  LOG_LEVEL: ${LOG_LEVEL}
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  migrate:
+    image: ai-study-tutor-api:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+      target: runtime
+    entrypoint: ["/app/migrate"]
+    command: ["up"]
+    environment:
+      <<: [*database-environment, *service-environment]
+    secrets:
+      - postgres_password
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  api:
+    image: ai-study-tutor-api:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+      target: runtime
+    restart: unless-stopped
+    environment:
+      <<: [*database-environment, *service-environment]
+      HTTP_ADDR: ":8080"
+      APP_DATA_DIR: /var/lib/ai-study-tutor
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+    secrets:
+      - postgres_password
+    volumes:
+      - app_data:/var/lib/ai-study-tutor
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/app/api", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  worker:
+    image: ai-study-tutor-worker:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: Dockerfile.worker
+      target: runtime
+    restart: unless-stopped
+    environment:
+      <<: [*database-environment, *service-environment]
+      APP_DATA_DIR: /var/lib/ai-study-tutor
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+      AI_PROVIDER: ${AI_PROVIDER:-anthropic}
+      CLAUDE_MODEL_DEFAULT: ${CLAUDE_MODEL_DEFAULT}
+      CLAUDE_REQUEST_TIMEOUT: ${CLAUDE_REQUEST_TIMEOUT}
+      CLAUDE_MAX_OUTPUT_TOKENS: ${CLAUDE_MAX_OUTPUT_TOKENS}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY}
+      WORKER_JOB_TIMEOUT: ${WORKER_JOB_TIMEOUT}
+      JOB_LEASE_DURATION: ${JOB_LEASE_DURATION}
+      MAX_DOWNLOAD_BYTES: ${MAX_DOWNLOAD_BYTES}
+      TRANSCRIPTION_MODE: ${TRANSCRIPTION_MODE}
+      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH}
+    secrets:
+      - postgres_password
+      - anthropic_api_key
+    volumes:
+      - app_data:/var/lib/ai-study-tutor
+    networks:
+      - backend
+      - egress
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/app/worker", "healthcheck"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    cpus: 2.0
+    mem_limit: 4g
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  web:
+    image: ai-study-tutor-web:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      target: runtime
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      API_UPSTREAM: api:8080
+    ports:
+      - "127.0.0.1:${APP_PORT}:8080"
+    networks:
+      - public
+      - frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /data:uid=10001,gid=10001,mode=0700
+      - /config:uid=10001,gid=10001,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  seed:
+    image: ai-study-tutor-tools:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: Dockerfile.tools
+      target: runtime
+    profiles: [tools]
+    entrypoint: ["/app/seed"]
+    user: "${TOOLS_UID:-10001}:${TOOLS_GID:-10001}"
+    environment:
+      <<: [*database-environment, *service-environment]
+    secrets:
+      - postgres_password
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  doctor:
+    image: ai-study-tutor-tools:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: Dockerfile.tools
+      target: runtime
+    profiles: [tools]
+    entrypoint: ["/app/doctor"]
+    user: "${TOOLS_UID:-10001}:${TOOLS_GID:-10001}"
+    environment:
+      <<: [*database-environment, *service-environment]
+      APP_DATA_DIR: /var/lib/ai-study-tutor
+    secrets:
+      - postgres_password
+    volumes:
+      - app_data:/var/lib/ai-study-tutor:ro
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  backup:
+    image: ai-study-tutor-tools:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: Dockerfile.tools
+      target: runtime
+    profiles: [tools]
+    entrypoint: ["/app/backup"]
+    command: ["create"]
+    user: "${TOOLS_UID:-10001}:${TOOLS_GID:-10001}"
+    environment:
+      <<: [*database-environment, *service-environment]
+      APP_DATA_DIR: /var/lib/ai-study-tutor
+      APP_BACKUP_DIR: /backups
+      MAINTENANCE_LEASE_DURATION: ${MAINTENANCE_LEASE_DURATION:-45s}
+      MAINTENANCE_HEARTBEAT_INTERVAL: ${MAINTENANCE_HEARTBEAT_INTERVAL:-10s}
+    secrets:
+      - postgres_password
+    volumes:
+      - app_data:/var/lib/ai-study-tutor:ro
+      - ${BACKUP_DIR:-../backups}:/backups
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  restore:
+    image: ai-study-tutor-tools:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: Dockerfile.tools
+      target: runtime
+    profiles: [manual]
+    entrypoint: ["/app/restore"]
+    command: ["${RESTORE_BACKUP:-__backup_name_required__}"]
+    user: "${TOOLS_UID:-10001}:${TOOLS_GID:-10001}"
+    environment:
+      <<: [*database-environment, *service-environment]
+      APP_DATA_DIR: /var/lib/ai-study-tutor
+      APP_BACKUP_DIR: /backups
+      RESTORE_CONFIRM: ${RESTORE_CONFIRM:-}
+    secrets:
+      - postgres_password
+    volumes:
+      - app_data:/var/lib/ai-study-tutor
+      - ${BACKUP_DIR:-../backups}:/backups:ro
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  maintenance-repair:
+    image: ai-study-tutor-tools:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: Dockerfile.tools
+      target: runtime
+    profiles: [manual]
+    entrypoint: ["/app/doctor"]
+    command: ["--repair-stale-maintenance"]
+    user: "${TOOLS_UID:-10001}:${TOOLS_GID:-10001}"
+    environment:
+      <<: [*database-environment, *service-environment]
+      APP_DATA_DIR: /var/lib/ai-study-tutor
+    secrets:
+      - postgres_password
+    volumes:
+      - app_data:/var/lib/ai-study-tutor
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  legacy-import:
+    image: ai-study-tutor-tools:${APP_VERSION}
+    build:
+      context: ..
+      dockerfile: Dockerfile.tools
+      target: runtime
+    profiles: [manual]
+    entrypoint: ["/app/legacy-import"]
+    command: ["scan", "--source", "/legacy", "--report", "/reports/scan.json"]
+    user: "${TOOLS_UID:-10001}:${TOOLS_GID:-10001}"
+    environment:
+      <<: [*database-environment, *service-environment]
+      APP_DATA_DIR: /var/lib/ai-study-tutor
+    secrets:
+      - postgres_password
+    volumes:
+      - ${LEGACY_SOURCE_DIR:-../legacy-data}:/legacy:ro
+      - app_data:/var/lib/ai-study-tutor
+      - ${IMPORT_REPORT_DIR:-../import-reports}:/reports
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+volumes:
+  app_data:
+  pg_data:
+
+networks:
+  public: {}
+  frontend:
+    internal: true
+  backend:
+    internal: true
+  egress: {}
+
+secrets:
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt

@@ -1,0 +1,550 @@
+{
+  "schema_version": 1,
+  "domain": "mastery",
+  "source_module": "legacy/python/src/memory.py",
+  "notes": [
+    "compute_chapter_mastery = 0.50*成绩加权 + 0.30*薄弱点解决率 + 0.20*严重度因子，无薄弱点时只用成绩。",
+    "float_compare: JSON 保存完整双精度；跨语言比较建议使用 1e-12 绝对容差。",
+    "get_consecutive_stats 只读取文件名排序后的最后一个 *_answers.json。"
+  ],
+  "chapter_mastery": {
+    "function": "compute_chapter_mastery(storage, course, chapter)",
+    "cases": [
+      {
+        "name": "no_data_returns_zero",
+        "input": {
+          "scores": [],
+          "weaknesses": [],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": 0.0
+      },
+      {
+        "name": "scores_only",
+        "input": {
+          "scores": [
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 6,
+              "total": 10,
+              "timestamp": "2026-01-01 10:00:00"
+            },
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 8,
+              "total": 10,
+              "timestamp": "2026-01-02 10:00:00"
+            }
+          ],
+          "weaknesses": [],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": 0.7200000000000001
+      },
+      {
+        "name": "scores_and_weaknesses_combined",
+        "input": {
+          "scores": [
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 6,
+              "total": 10,
+              "timestamp": "2026-01-01 10:00:00"
+            },
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 8,
+              "total": 10,
+              "timestamp": "2026-01-02 10:00:00"
+            }
+          ],
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "极限 的薄弱说明",
+              "evidence": "",
+              "severity": 3,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            },
+            {
+              "id": "6235c707fd37",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "连续性",
+              "weakness_description": "连续性 的薄弱说明",
+              "evidence": "",
+              "severity": 1,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": true
+            },
+            {
+              "id": "bb829e56de93",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "导数",
+              "weakness_description": "导数 的薄弱说明",
+              "evidence": "",
+              "severity": 5,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            },
+            {
+              "id": "22d2ec7c0e94",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "级数",
+              "weakness_description": "级数 的薄弱说明",
+              "evidence": "",
+              "severity": 2,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": true
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": 0.6225
+      },
+      {
+        "name": "weaknesses_filtered_by_course_and_chapter",
+        "input": {
+          "scores": [
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 6,
+              "total": 10,
+              "timestamp": "2026-01-01 10:00:00"
+            },
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 8,
+              "total": 10,
+              "timestamp": "2026-01-02 10:00:00"
+            }
+          ],
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "极限 的薄弱说明",
+              "evidence": "",
+              "severity": 5,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            },
+            {
+              "id": "33fdcba3f945",
+              "course": "demo-linear-algebra",
+              "chapter": 1,
+              "concept": "其他课程概念",
+              "weakness_description": "其他课程概念 的薄弱说明",
+              "evidence": "",
+              "severity": 5,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            },
+            {
+              "id": "fc2c9f02e460",
+              "course": "demo-calculus",
+              "chapter": 2,
+              "concept": "其他章节概念",
+              "weakness_description": "其他章节概念 的薄弱说明",
+              "evidence": "",
+              "severity": 5,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            },
+            {
+              "id": "c263451c3e50",
+              "course": "demo-calculus",
+              "chapter": null,
+              "concept": "跨章节概念计入",
+              "weakness_description": "跨章节概念计入 的薄弱说明",
+              "evidence": "",
+              "severity": 1,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": true
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": 0.61
+      },
+      {
+        "name": "weaknesses_only_no_scores",
+        "input": {
+          "scores": [],
+          "weaknesses": [
+            {
+              "id": "c8c253df4e73",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "极限",
+              "weakness_description": "极限 的薄弱说明",
+              "evidence": "",
+              "severity": 3,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": false
+            },
+            {
+              "id": "6235c707fd37",
+              "course": "demo-calculus",
+              "chapter": 1,
+              "concept": "连续性",
+              "weakness_description": "连续性 的薄弱说明",
+              "evidence": "",
+              "severity": 1,
+              "first_seen": "2026-01-01T09:00:00+08:00",
+              "last_seen": "2026-01-01T09:00:00+08:00",
+              "review_count": 1,
+              "mastered": true
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": 0.30000000000000004
+      },
+      {
+        "name": "zero_total_score_records_skipped",
+        "input": {
+          "scores": [
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 5,
+              "total": 0,
+              "timestamp": "2026-01-01 10:00:00"
+            },
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 9,
+              "total": 10,
+              "timestamp": "2026-01-02 10:00:00"
+            }
+          ],
+          "weaknesses": [],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": 0.9
+      },
+      {
+        "name": "scores_of_other_lessons_ignored",
+        "input": {
+          "scores": [
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 6,
+              "total": 10,
+              "timestamp": "2026-01-01 10:00:00"
+            },
+            {
+              "subject": "demo-calculus",
+              "lesson": 1,
+              "score": 8,
+              "total": 10,
+              "timestamp": "2026-01-02 10:00:00"
+            },
+            {
+              "subject": "demo-calculus",
+              "lesson": 2,
+              "score": 0,
+              "total": 10,
+              "timestamp": "2026-01-03 10:00:00"
+            }
+          ],
+          "weaknesses": [],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": 0.7200000000000001
+      }
+    ]
+  },
+  "consecutive_stats": {
+    "function": "get_consecutive_stats(storage, course, chapter)",
+    "cases": [
+      {
+        "name": "no_attempts",
+        "input": {
+          "attempt_files": [],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": {
+          "consecutive_correct": 0,
+          "consecutive_wrong": 0,
+          "total_answered": 0
+        }
+      },
+      {
+        "name": "all_correct",
+        "input": {
+          "attempt_files": [
+            {
+              "name": "20260601_100000_answers.json",
+              "data": {
+                "answers": [
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": true
+                  }
+                ]
+              }
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": {
+          "consecutive_correct": 3,
+          "consecutive_wrong": 0,
+          "total_answered": 3
+        }
+      },
+      {
+        "name": "trailing_wrong_streak",
+        "input": {
+          "attempt_files": [
+            {
+              "name": "20260601_100000_answers.json",
+              "data": {
+                "answers": [
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": false
+                  },
+                  {
+                    "is_correct": false
+                  }
+                ]
+              }
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": {
+          "consecutive_correct": 1,
+          "consecutive_wrong": 2,
+          "total_answered": 3
+        }
+      },
+      {
+        "name": "trailing_correct_streak",
+        "input": {
+          "attempt_files": [
+            {
+              "name": "20260601_100000_answers.json",
+              "data": {
+                "answers": [
+                  {
+                    "is_correct": false
+                  },
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": true
+                  }
+                ]
+              }
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": {
+          "consecutive_correct": 2,
+          "consecutive_wrong": 1,
+          "total_answered": 3
+        }
+      },
+      {
+        "name": "alternating_ends_wrong",
+        "input": {
+          "attempt_files": [
+            {
+              "name": "20260601_100000_answers.json",
+              "data": {
+                "answers": [
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": false
+                  },
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": false
+                  }
+                ]
+              }
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": {
+          "consecutive_correct": 1,
+          "consecutive_wrong": 1,
+          "total_answered": 4
+        }
+      },
+      {
+        "name": "null_is_correct_counts_as_wrong",
+        "input": {
+          "attempt_files": [
+            {
+              "name": "20260601_100000_answers.json",
+              "data": {
+                "answers": [
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": null
+                  },
+                  {
+                    "is_correct": null
+                  }
+                ]
+              }
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": {
+          "consecutive_correct": 1,
+          "consecutive_wrong": 2,
+          "total_answered": 3
+        }
+      },
+      {
+        "name": "latest_attempt_file_wins",
+        "input": {
+          "attempt_files": [
+            {
+              "name": "20260601_100000_answers.json",
+              "data": {
+                "answers": [
+                  {
+                    "is_correct": false
+                  },
+                  {
+                    "is_correct": false
+                  },
+                  {
+                    "is_correct": false
+                  }
+                ]
+              }
+            },
+            {
+              "name": "20260603_100000_answers.json",
+              "data": {
+                "answers": [
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": false
+                  }
+                ]
+              }
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": {
+          "consecutive_correct": 1,
+          "consecutive_wrong": 1,
+          "total_answered": 3
+        }
+      },
+      {
+        "name": "attempt_without_answers_key_ignored",
+        "input": {
+          "attempt_files": [
+            {
+              "name": "20260601_100000_answers.json",
+              "data": {
+                "quiz_id": "q1"
+              }
+            },
+            {
+              "name": "20260602_100000_answers.json",
+              "data": {
+                "answers": [
+                  {
+                    "is_correct": true
+                  },
+                  {
+                    "is_correct": false
+                  }
+                ]
+              }
+            }
+          ],
+          "course": "demo-calculus",
+          "chapter": 1
+        },
+        "expect": {
+          "consecutive_correct": 1,
+          "consecutive_wrong": 1,
+          "total_answered": 2
+        }
+      }
+    ]
+  }
+}

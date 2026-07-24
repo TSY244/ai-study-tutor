@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "id": 821,
+      "job_id": "b0000000-0000-4000-8000-000000000001",
+      "event_type": "job.progress",
+      "stage": "generating_student_notes",
+      "progress": 62,
+      "message": "正在生成学生笔记",
+      "data": {},
+      "occurred_at": "2026-07-17T14:19:30Z"
+    }
+  ],
+  "page_info": {
+    "next_cursor": null,
+    "has_more": false
+  }
+}
+

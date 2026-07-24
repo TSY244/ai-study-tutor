@@ -1,0 +1,52 @@
+name: contract-and-baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: verify-docs
+        run: make verify-docs
+
+      - name: verify-openapi
+        run: make verify-openapi
+
+      - name: test-legacy
+        run: make test-legacy
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      # 集成测试使用嵌入式 PostgreSQL 二进制（无需 Docker），缓存避免每次下载。
+      - name: Cache embedded-postgres binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.embedded-postgres-go
+          key: embedded-postgres-v17-${{ runner.os }}
+
+      - name: go-fmt
+        run: make go-fmt
+
+      - name: go-vet
+        run: make go-vet
+
+      - name: go-test
+        run: make go-test
+
+      - name: go-build
+        run: make go-build

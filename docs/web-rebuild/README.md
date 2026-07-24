@@ -41,6 +41,14 @@
 7. [旧系统迁移路线](./07-migration-roadmap.md)
 8. [OpenAPI 3.1 草案](./openapi.yaml)
 9. [前端 Codex 实施提示词](./08-frontend-codex-prompt.md)
+10. [旧版 Python 归档布局](./09-legacy-archive-layout.md)
+11. [当前 Python 架构基线](./00-current-python-architecture.md)
+12. [后端 Agent 分阶段执行手册](./10-backend-agent-playbook.md)
+13. [前端 Agent 分阶段执行手册](./11-frontend-agent-playbook.md)
+14. [领域决策记录](./12-domain-decisions.md)
+15. [Worker 素材管线（B5 交接物）](./13-worker-pipeline.md)
+16. [Compose 部署演练记录](./15-compose-deployment-drill-report.md)
+17. [旧数据导入与发布审查](./16-legacy-import-release-review.md)
 
 ## 4. 目标架构
 

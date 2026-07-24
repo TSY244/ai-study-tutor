@@ -1,0 +1,28 @@
+[
+  {
+    "id": "1730ef46000f",
+    "course": "demo-calculus",
+    "chapter": 1,
+    "concept": "ε-δ 定义",
+    "weakness_description": "不能用自己的话解释 ε-δ 定义中 δ 与 ε 的依赖关系",
+    "evidence": "20260601_100000 试卷 q4 回答停留在记忆层面",
+    "severity": 3,
+    "first_seen": "2026-06-01T10:05:00+08:00",
+    "last_seen": "2026-06-01T10:05:00+08:00",
+    "review_count": 1,
+    "mastered": false
+  },
+  {
+    "id": "47b8f2c347a1",
+    "course": "demo-calculus",
+    "chapter": 1,
+    "concept": "极限代入",
+    "weakness_description": "早期练习中直接代入求极限出错，近期已连续答对",
+    "evidence": "20260520 练习答错；20260601_100000 试卷 q1 答对",
+    "severity": 1,
+    "first_seen": "2026-05-20T09:10:00+08:00",
+    "last_seen": "2026-06-01T10:05:00+08:00",
+    "review_count": 3,
+    "mastered": true
+  }
+]

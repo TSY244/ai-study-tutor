@@ -803,6 +803,6 @@ GET /api/v1/backups
 
 - `/api/v1` 内只做向后兼容的字段新增和可选能力扩展。
 - 删除/重命名字段或改变语义需要 `/api/v2` 或明确迁移窗口。
-- OpenAPI 变更在 CI 中执行 breaking change 检查。
+- OpenAPI 变更在 CI 中执行 `make check-openapi-breaking`；默认对比已发布快照 `api/openapi.baseline.yaml`，可用 `OPENAPI_BASELINE` 显式覆盖，快照不存在时回退到 `HEAD:api/openapi.yaml`。门禁覆盖操作、必需参数、请求体、响应媒体/Schema 与组件 Schema 的破坏性变化。
 - 前端只使用生成 Client；需要自定义 SSE 包装时仍复用 OpenAPI Schema。
 - 所有示例响应进入契约测试，避免文档与实现漂移。

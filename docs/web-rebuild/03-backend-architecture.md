@@ -357,7 +357,7 @@ Attempt API 根据不可变 Quiz/Question 版本返回有序的学生可见题�
 id, kind, aggregate_type, aggregate_id, generation_family,
 status, stage, progress,
 payload, result,
-error_code, error_detail,
+error_code, error_detail, error_retryable,
 priority, attempt_count, max_attempts, available_at,
 lease_owner, lease_expires_at, cancel_requested, retry_of_job_id,
 idempotency_scope, idempotency_key,

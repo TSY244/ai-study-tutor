@@ -1,0 +1,2884 @@
+# GENERATED FILE - DO NOT EDIT.
+# Source of truth (design source): docs/web-rebuild/openapi.yaml
+# Regenerate with: make generate-openapi  (tools/openapi/openapi_contract.py generate)
+# Verify with:     make verify-openapi
+# Rules: see api/README.md
+
+openapi: 3.1.0
+info:
+  title: AI Study Tutor API
+  version: 0.3.0-draft
+  description: '单用户本地部署的 AI 学习助教 REST/SSE 契约草案。
+
+    耗时操作返回 202 和 Job；错误使用 application/problem+json。
+
+    '
+servers:
+- url: /
+  description: Caddy 同源反向代理
+tags:
+- name: System
+- name: Courses
+- name: Lessons
+- name: Materials
+- name: Documents
+- name: Quizzes
+- name: Attempts
+- name: Jobs
+- name: Weaknesses
+- name: Summaries
+- name: Progress
+- name: Exports
+- name: Files
+- name: Backups
+paths:
+  /healthz:
+    get:
+      tags:
+      - System
+      operationId: getHealth
+      summary: 进程存活检查
+      responses:
+        '200':
+          description: 进程存活
+          headers:
+            X-Request-ID: &id001
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /readyz:
+    get:
+      tags:
+      - System
+      operationId: getReadiness
+      summary: 服务就绪检查
+      responses:
+        '200':
+          description: 服务就绪
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/system/status:
+    get:
+      tags:
+      - System
+      operationId: getSystemStatus
+      summary: 查询非敏感系统状态
+      responses:
+        '200':
+          description: 系统状态
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatus'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/system/claude-tests:
+    post:
+      tags:
+      - System
+      operationId: createClaudeConnectivityTest
+      summary: 创建 Claude 连通性测试任务
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          $ref: '#/components/responses/AsyncAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/courses:
+    get:
+      tags:
+      - Courses
+      operationId: listCourses
+      summary: 查询课程列表
+      parameters:
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      - name: archived
+        in: query
+        schema:
+          type: boolean
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 200
+      responses:
+        '200':
+          description: 课程列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseList'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      tags:
+      - Courses
+      operationId: createCourse
+      summary: 创建课程
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseCreate'
+      responses:
+        '201':
+          description: 课程已创建
+          headers:
+            X-Request-ID: *id001
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Course'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/courses/{course_id}:
+    parameters:
+    - $ref: '#/components/parameters/CourseId'
+    get:
+      tags:
+      - Courses
+      operationId: getCourse
+      summary: 查询课程详情
+      responses:
+        '200':
+          description: 课程详情
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Course'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      tags:
+      - Courses
+      operationId: updateCourse
+      summary: 更新课程
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseUpdate'
+      responses:
+        '200':
+          description: 课程已更新
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Course'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      tags:
+      - Courses
+      operationId: deleteCourse
+      summary: 删除课程
+      responses:
+        '204':
+          description: 已删除
+          headers:
+            X-Request-ID: *id001
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/courses/{course_id}/lessons:
+    parameters:
+    - $ref: '#/components/parameters/CourseId'
+    get:
+      tags:
+      - Lessons
+      operationId: listLessons
+      summary: 查询课程下的课时
+      parameters:
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 课时列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LessonList'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      tags:
+      - Lessons
+      operationId: createLesson
+      summary: 创建空课时
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LessonCreate'
+      responses:
+        '201':
+          description: 课时已创建
+          headers:
+            X-Request-ID: *id001
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}:
+    parameters:
+    - $ref: '#/components/parameters/LessonId'
+    get:
+      tags:
+      - Lessons
+      operationId: getLesson
+      summary: 查询课时详情
+      responses:
+        '200':
+          description: 课时详情
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      tags:
+      - Lessons
+      operationId: updateLesson
+      summary: 更新课时
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LessonUpdate'
+      responses:
+        '200':
+          description: 课时已更新
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lesson'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      tags:
+      - Lessons
+      operationId: deleteLesson
+      summary: 删除课时
+      responses:
+        '204':
+          description: 已删除
+          headers:
+            X-Request-ID: *id001
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/materials/url:
+    post:
+      tags:
+      - Materials
+      operationId: createUrlMaterial
+      summary: 添加 URL 素材并创建导入任务
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UrlMaterialCreate'
+      responses:
+        '202':
+          description: 素材和任务已创建
+          headers:
+            X-Request-ID: *id001
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialJobAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/materials/text:
+    post:
+      tags:
+      - Materials
+      operationId: createTextMaterial
+      summary: 添加文本素材并创建导入任务
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TextMaterialCreate'
+      responses:
+        '202':
+          description: 素材和任务已创建
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialJobAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/materials/upload:
+    post:
+      tags:
+      - Materials
+      operationId: uploadMaterial
+      summary: 上传文件素材并创建导入任务
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                preferred_language:
+                  type: string
+                transcription_mode:
+                  type: string
+                  enum:
+                  - subtitle_only
+                  - whisper_local
+      responses:
+        '202':
+          description: 上传完成，导入任务已创建
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialJobAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/documents:
+    get:
+      tags:
+      - Documents
+      operationId: listCurrentDocuments
+      summary: 查询课时当前文档
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      responses:
+        '200':
+          description: 当前文档
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentSummaryCollection'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/documents/{kind}:
+    get:
+      tags:
+      - Documents
+      operationId: getCurrentDocument
+      summary: 查询指定类型的当前文档
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - name: kind
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/DocumentKind'
+      responses:
+        '200':
+          description: 当前文档
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/regenerations:
+    post:
+      tags:
+      - Documents
+      operationId: createLessonRegeneration
+      summary: 创建笔记重生成任务
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegenerationCreate'
+      responses:
+        '202':
+          $ref: '#/components/responses/AsyncAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/quiz-generations:
+    post:
+      tags:
+      - Quizzes
+      operationId: createQuizGeneration
+      summary: 创建常规试卷生成任务
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuizGenerationCreate'
+      responses:
+        '202':
+          $ref: '#/components/responses/AsyncAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/review-quiz-generations:
+    post:
+      tags:
+      - Quizzes
+      operationId: createReviewQuizGeneration
+      summary: 创建复习试卷生成任务
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewQuizGenerationCreate'
+      responses:
+        '202':
+          $ref: '#/components/responses/AsyncAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/quizzes:
+    get:
+      tags:
+      - Quizzes
+      operationId: listQuizzes
+      summary: 查询课时试卷
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 试卷列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuizList'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/quizzes/{quiz_id}:
+    get:
+      tags:
+      - Quizzes
+      operationId: getQuiz
+      summary: 查询学生可见的试卷
+      parameters:
+      - $ref: '#/components/parameters/QuizId'
+      responses:
+        '200':
+          description: 试卷详情
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quiz'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/quizzes/{quiz_id}/attempts:
+    post:
+      tags:
+      - Attempts
+      operationId: createAttempt
+      summary: 开始一次作答
+      parameters:
+      - $ref: '#/components/parameters/QuizId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Attempt 已创建
+          headers:
+            X-Request-ID: *id001
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attempt'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/attempts/{attempt_id}:
+    get:
+      tags:
+      - Attempts
+      operationId: getAttempt
+      summary: 查询作答和当前批阅状态
+      parameters:
+      - $ref: '#/components/parameters/AttemptId'
+      responses:
+        '200':
+          description: Attempt 详情
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attempt'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/attempts/{attempt_id}/answers/{question_id}:
+    patch:
+      tags:
+      - Attempts
+      operationId: saveAttemptAnswer
+      summary: 自动保存一道题的答案
+      parameters:
+      - $ref: '#/components/parameters/AttemptId'
+      - $ref: '#/components/parameters/QuestionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnswerSave'
+      responses:
+        '200':
+          description: 答案已保存
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavedAnswer'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/attempts/{attempt_id}/submit:
+    post:
+      tags:
+      - Attempts
+      operationId: submitAttempt
+      summary: 提交作答并按需创建 AI 批阅任务
+      parameters:
+      - $ref: '#/components/parameters/AttemptId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - version
+              properties:
+                version:
+                  type: integer
+                  format: int64
+                  minimum: 1
+      responses:
+        '200':
+          description: 全客观题，已同步批阅完成
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttemptSubmitCompleted'
+        '202':
+          description: 已提交并创建 AI 批阅任务
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttemptSubmitAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/attempts/{attempt_id}/grading-jobs:
+    post:
+      tags:
+      - Attempts
+      operationId: createAttemptGradingJob
+      summary: 为批阅失败的 Attempt 创建新的批阅任务
+      parameters:
+      - $ref: '#/components/parameters/AttemptId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          $ref: '#/components/responses/AsyncAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/jobs:
+    get:
+      tags:
+      - Jobs
+      operationId: listJobs
+      summary: 查询任务列表
+      parameters:
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      - name: status
+        in: query
+        schema:
+          $ref: '#/components/schemas/JobStatus'
+      - name: active
+        in: query
+        description: 为 true 时只返回 queued/running/validating/cancel_requested；不能与 status 同时使用。
+        schema:
+          type: boolean
+      - name: kind
+        in: query
+        schema:
+          $ref: '#/components/schemas/JobKind'
+      - name: aggregate_type
+        in: query
+        schema:
+          type: string
+      - name: aggregate_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 任务列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobList'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/jobs/stream:
+    get:
+      tags:
+      - Jobs
+      operationId: streamJobs
+      summary: 订阅任务事件
+      parameters:
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Server-Sent Events 流
+          headers:
+            X-Request-ID: *id001
+            Cache-Control:
+              schema:
+                type: string
+                const: no-cache
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/JobStreamEvent'
+  /api/v1/jobs/{job_id}:
+    get:
+      tags:
+      - Jobs
+      operationId: getJob
+      summary: 查询任务详情
+      parameters:
+      - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: 任务详情
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/jobs/{job_id}/cancel:
+    post:
+      tags:
+      - Jobs
+      operationId: cancelJob
+      summary: 请求取消任务
+      parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: 已请求取消
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/jobs/{job_id}/retry:
+    post:
+      tags:
+      - Jobs
+      operationId: retryJob
+      summary: 重试失败任务
+      parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          $ref: '#/components/responses/AsyncAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/weaknesses:
+    get:
+      tags:
+      - Weaknesses
+      operationId: listWeaknesses
+      summary: 查询薄弱点
+      parameters:
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      - name: course_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: lesson_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: mastered
+        in: query
+        schema:
+          type: boolean
+      - name: severity
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 5
+      responses:
+        '200':
+          description: 薄弱点列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeaknessList'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/summary-evaluations:
+    post:
+      tags:
+      - Summaries
+      operationId: createSummaryEvaluation
+      summary: 创建学习总结评估任务
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - summary
+              properties:
+                summary:
+                  type: string
+                  minLength: 1
+                  maxLength: 50000
+      responses:
+        '202':
+          description: 评估占位资源和任务已创建
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummaryEvaluationAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/materials:
+    get:
+      tags:
+      - Materials
+      operationId: listMaterials
+      summary: 查询课时素材
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 素材列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialList'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/materials/{material_id}:
+    delete:
+      tags:
+      - Materials
+      operationId: deleteMaterial
+      summary: 删除未被活动任务使用的素材
+      parameters:
+      - name: material_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: 素材已删除
+          headers:
+            X-Request-ID: *id001
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/documents/{kind}/versions:
+    get:
+      tags:
+      - Documents
+      operationId: listDocumentVersions
+      summary: 查询指定类型的文档历史版本
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - name: kind
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/DocumentKind'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 文档版本列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentList'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/documents/{document_id}:
+    get:
+      tags:
+      - Documents
+      operationId: getDocumentVersion
+      summary: 查询指定文档版本
+      parameters:
+      - name: document_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 文档版本
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/jobs/{job_id}/events:
+    get:
+      tags:
+      - Jobs
+      operationId: listJobEvents
+      summary: 查询任务事件历史
+      parameters:
+      - $ref: '#/components/parameters/JobId'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 任务事件列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobEventList'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/weaknesses/{weakness_id}:
+    get:
+      tags:
+      - Weaknesses
+      operationId: getWeakness
+      summary: 查询薄弱点及证据
+      parameters:
+      - name: weakness_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 薄弱点详情
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Weakness'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/weaknesses/{weakness_id}/resolve:
+    post:
+      tags:
+      - Weaknesses
+      operationId: resolveWeakness
+      summary: 手动标记薄弱点已掌握
+      parameters:
+      - name: weakness_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceVersion'
+      responses:
+        '200':
+          description: 薄弱点已更新
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Weakness'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/weaknesses/{weakness_id}/reopen:
+    post:
+      tags:
+      - Weaknesses
+      operationId: reopenWeakness
+      summary: 重新激活薄弱点
+      parameters:
+      - name: weakness_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceVersion'
+      responses:
+        '200':
+          description: 薄弱点已更新
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Weakness'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/courses/{course_id}/progress:
+    get:
+      tags:
+      - Progress
+      operationId: getCourseProgress
+      summary: 查询课程进度聚合
+      parameters:
+      - $ref: '#/components/parameters/CourseId'
+      responses:
+        '200':
+          description: 课程进度
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/progress:
+    get:
+      tags:
+      - Progress
+      operationId: getLessonProgress
+      summary: 查询课时掌握度与趋势
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      responses:
+        '200':
+          description: 课时进度
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/summary-evaluations/{evaluation_id}:
+    get:
+      tags:
+      - Summaries
+      operationId: getSummaryEvaluation
+      summary: 查询学习总结评估
+      parameters:
+      - name: evaluation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 总结评估
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummaryEvaluation'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/exports:
+    post:
+      tags:
+      - Exports
+      operationId: createLessonExport
+      summary: 创建课时导出
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportCreate'
+      responses:
+        '200':
+          description: 小型导出已同步完成
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileObject'
+        '202':
+          $ref: '#/components/responses/AsyncAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/files/{file_id}/download:
+    get:
+      tags:
+      - Files
+      operationId: downloadFile
+      summary: 下载已发布文件
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 文件内容
+          headers:
+            X-Request-ID: *id001
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/backups:
+    get:
+      tags:
+      - Backups
+      operationId: listBackups
+      summary: 查询备份包
+      parameters:
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 备份列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupList'
+        default:
+          $ref: '#/components/responses/Problem'
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 一次用户意图的 UUID；相同请求重复提交返回首次结果。
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    CourseId:
+      name: course_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    LessonId:
+      name: lesson_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    QuizId:
+      name: quiz_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AttemptId:
+      name: attempt_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    QuestionId:
+      name: question_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  headers:
+    RequestId:
+      description: 请求关联 ID；所有成功和错误响应都由 HTTP middleware 返回。
+      required: true
+      schema:
+        type: string
+  responses:
+    Problem:
+      description: Problem Details 错误
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServiceUnavailable:
+      description: 必需依赖不可用
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AsyncAccepted:
+      description: 后台任务已创建
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestId'
+        Location:
+          description: Job 资源地址
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AsyncAccepted'
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+    Problem:
+      type: object
+      additionalProperties: true
+      required:
+      - type
+      - title
+      - status
+      - detail
+      - code
+      - request_id
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+        request_id:
+          type: string
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+    FieldError:
+      type: object
+      additionalProperties: false
+      required:
+      - field
+      - code
+      - message
+      properties:
+        field:
+          type: string
+        code:
+          type: string
+        message:
+          type: string
+    PageInfo:
+      type: object
+      additionalProperties: false
+      required:
+      - next_cursor
+      - has_more
+      properties:
+        next_cursor:
+          type:
+          - string
+          - 'null'
+        has_more:
+          type: boolean
+    SystemStatus:
+      type: object
+      additionalProperties: false
+      required:
+      - status
+      - version
+      - maintenance
+      - database
+      - worker
+      - claude
+      - storage
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          - degraded
+          - unavailable
+        version:
+          type: string
+        maintenance:
+          $ref: '#/components/schemas/MaintenanceStatus'
+        database:
+          $ref: '#/components/schemas/ComponentStatus'
+        worker:
+          $ref: '#/components/schemas/ComponentStatus'
+        claude:
+          $ref: '#/components/schemas/ComponentStatus'
+        storage:
+          $ref: '#/components/schemas/ComponentStatus'
+    ComponentStatus:
+      type: object
+      additionalProperties: true
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          - degraded
+          - unavailable
+          - unknown
+        message:
+          type:
+          - string
+          - 'null'
+    MaintenanceStatus:
+      type: object
+      additionalProperties: false
+      required:
+      - enabled
+      - reason
+      properties:
+        enabled:
+          type: boolean
+        reason:
+          type:
+          - string
+          - 'null'
+    CourseCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 5000
+    CourseUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 5000
+        archived:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+    Course:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - title
+      - description
+      - archived
+      - lesson_count
+      - version
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        archived:
+          type: boolean
+        lesson_count:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CourseList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Course'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
+    LessonStatus:
+      type: string
+      enum:
+      - draft
+      - processing
+      - ready
+      - failed
+      - ready_with_warning
+    LessonCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - ordinal
+      - title
+      properties:
+        ordinal:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 5000
+    LessonUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      properties:
+        ordinal:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 5000
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+    DocumentAvailability:
+      type: object
+      additionalProperties: false
+      required:
+      - raw_text
+      - student_notes
+      - teacher_outline
+      properties:
+        raw_text:
+          type: boolean
+        student_notes:
+          type: boolean
+        teacher_outline:
+          type: boolean
+    Lesson:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - course_id
+      - ordinal
+      - title
+      - description
+      - status
+      - documents
+      - version
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        course_id:
+          type: string
+          format: uuid
+        ordinal:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/LessonStatus'
+        active_job_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        documents:
+          $ref: '#/components/schemas/DocumentAvailability'
+        mastery:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+          maximum: 1
+        version:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    LessonList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Lesson'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
+    MaterialKind:
+      type: string
+      enum:
+      - url
+      - upload
+      - text
+    Material:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - lesson_id
+      - kind
+      - status
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/MaterialKind'
+        status:
+          type: string
+          enum:
+          - pending
+          - ready
+          - failed
+        source_url:
+          type:
+          - string
+          - 'null'
+          format: uri
+        original_name:
+          type:
+          - string
+          - 'null'
+        created_at:
+          type: string
+          format: date-time
+    UrlMaterialCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - url
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: ^https://
+        preferred_language:
+          type: string
+          maxLength: 30
+    TextMaterialCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - text
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        text:
+          type: string
+          minLength: 1
+          maxLength: 1000000
+    MaterialJobAccepted:
+      type: object
+      additionalProperties: false
+      required:
+      - material
+      - job
+      properties:
+        material:
+          $ref: '#/components/schemas/Material'
+        job:
+          $ref: '#/components/schemas/Job'
+    DocumentKind:
+      type: string
+      enum:
+      - raw_text
+      - student_notes
+      - teacher_outline
+    Document:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - lesson_id
+      - kind
+      - revision
+      - content_md
+      - source_job_id
+      - is_active
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/DocumentKind'
+        revision:
+          type: integer
+          minimum: 1
+        content_md:
+          type: string
+        source_job_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    RegenerationCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - kinds
+      properties:
+        kinds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+            - student_notes
+            - teacher_outline
+        reason:
+          type: string
+          maxLength: 1000
+    QuizGenerationCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        question_count:
+          type:
+          - integer
+          - 'null'
+          minimum: 5
+          maximum: 15
+        title:
+          type:
+          - string
+          - 'null'
+          maxLength: 300
+    ReviewQuizGenerationCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        question_count:
+          type:
+          - integer
+          - 'null'
+          minimum: 5
+          maximum: 15
+        include_lesson_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        weakness_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    QuestionType:
+      type: string
+      enum:
+      - single_choice
+      - multiple_choice
+      - true_false
+      - short_answer
+      - case_analysis
+    Question:
+      type: object
+      description: 发布后不可变、学生可见的题目版本；标准答案和解析不在本对象中返回。
+      additionalProperties: false
+      required:
+      - id
+      - type
+      - stem
+      - options
+      - tested_concepts
+      - difficulty
+      - cognitive_level
+      - score
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/QuestionType'
+        stem:
+          type: string
+        options:
+          type:
+          - object
+          - 'null'
+          additionalProperties:
+            type: string
+        tested_concepts:
+          type: array
+          items:
+            type: string
+        difficulty:
+          type: string
+          enum:
+          - easy
+          - medium
+          - hard
+          - challenge
+        cognitive_level:
+          type: string
+          enum:
+          - recall
+          - explain
+          - apply
+          - transfer
+          - reflect
+        score:
+          type: number
+          exclusiveMinimum: 0
+    Quiz:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - lesson_id
+      - title
+      - source
+      - status
+      - questions
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        source:
+          type: string
+          enum:
+          - regular
+          - retest
+          - assembled
+        status:
+          type: string
+          enum:
+          - draft
+          - ready
+          - archived
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Question'
+        created_at:
+          type: string
+          format: date-time
+    QuizSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - lesson_id
+      - title
+      - source
+      - question_count
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        source:
+          type: string
+          enum:
+          - regular
+          - retest
+          - assembled
+        question_count:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+    QuizList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuizSummary'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
+    AttemptStatus:
+      type: string
+      enum:
+      - in_progress
+      - submitted
+      - grading
+      - graded
+      - grading_failed
+    AnswerValue:
+      type: object
+      additionalProperties: true
+      required:
+      - value
+      properties:
+        value: {}
+    AttemptAnswer:
+      type: object
+      additionalProperties: false
+      required:
+      - question_id
+      - answer
+      - answer_version
+      - updated_at
+      properties:
+        question_id:
+          type: string
+          format: uuid
+        answer:
+          $ref: '#/components/schemas/AnswerValue'
+        answer_version:
+          type: integer
+          format: int64
+          minimum: 1
+        awarded_score:
+          type:
+          - number
+          - 'null'
+        is_correct:
+          type:
+          - boolean
+          - 'null'
+        feedback:
+          anyOf:
+          - $ref: '#/components/schemas/QuestionFeedback'
+          - type: 'null'
+        updated_at:
+          type: string
+          format: date-time
+    Attempt:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - quiz_id
+      - status
+      - version
+      - questions
+      - answers
+      - started_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        quiz_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/AttemptStatus'
+        version:
+          type: integer
+          format: int64
+        auto_score:
+          type:
+          - number
+          - 'null'
+        final_score:
+          type:
+          - number
+          - 'null'
+        max_score:
+          type:
+          - number
+          - 'null'
+        grading_job_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        grading_error_code:
+          type:
+          - string
+          - 'null'
+        grading_error_detail:
+          type:
+          - string
+          - 'null'
+        questions:
+          type: array
+          description: 来自不可变 Quiz 的有序学生可见题目快照。
+          items:
+            $ref: '#/components/schemas/Question'
+        answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttemptAnswer'
+        started_at:
+          type: string
+          format: date-time
+        submitted_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        graded_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    AnswerSave:
+      type: object
+      additionalProperties: false
+      required:
+      - answer
+      - answer_version
+      - client_updated_at
+      properties:
+        answer:
+          $ref: '#/components/schemas/AnswerValue'
+        answer_version:
+          type: integer
+          format: int64
+          minimum: 0
+        client_updated_at:
+          type: string
+          format: date-time
+    SavedAnswer:
+      type: object
+      additionalProperties: false
+      required:
+      - attempt_id
+      - question_id
+      - answer
+      - answer_version
+      - attempt_version
+      - saved_at
+      properties:
+        attempt_id:
+          type: string
+          format: uuid
+        question_id:
+          type: string
+          format: uuid
+        answer:
+          $ref: '#/components/schemas/AnswerValue'
+        answer_version:
+          type: integer
+          format: int64
+          minimum: 1
+        attempt_version:
+          type: integer
+          format: int64
+          minimum: 1
+        saved_at:
+          type: string
+          format: date-time
+    QuestionFeedback:
+      type: object
+      additionalProperties: false
+      required:
+      - question_id
+      - awarded_score
+      - max_score
+      - is_correct
+      - feedback
+      - correct_understanding
+      - correct_answer
+      - explanation
+      - weak_concepts
+      properties:
+        question_id:
+          type: string
+          format: uuid
+        awarded_score:
+          type: number
+          minimum: 0
+        max_score:
+          type: number
+          exclusiveMinimum: 0
+        is_correct:
+          type:
+          - boolean
+          - 'null'
+        feedback:
+          type: string
+        correct_understanding:
+          type: string
+        correct_answer:
+          anyOf:
+          - $ref: '#/components/schemas/AnswerValue'
+          - type: 'null'
+        explanation:
+          type:
+          - string
+          - 'null'
+        weak_concepts:
+          type: array
+          items:
+            type: string
+    AttemptSubmitCompleted:
+      type: object
+      additionalProperties: false
+      required:
+      - attempt
+      properties:
+        attempt:
+          $ref: '#/components/schemas/Attempt'
+    AttemptSubmitAccepted:
+      type: object
+      additionalProperties: false
+      required:
+      - attempt
+      - job
+      properties:
+        attempt:
+          $ref: '#/components/schemas/Attempt'
+        job:
+          $ref: '#/components/schemas/Job'
+    JobStatus:
+      type: string
+      enum:
+      - queued
+      - running
+      - validating
+      - succeeded
+      - failed
+      - cancel_requested
+      - cancelled
+    JobKind:
+      type: string
+      enum:
+      - claude_connectivity_test
+      - lesson_import
+      - lesson_regenerate
+      - quiz_generate
+      - review_quiz_generate
+      - attempt_grade
+      - wrong_answer_analyze
+      - summary_evaluate
+      - lesson_export
+    JobError:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - detail
+      - retryable
+      properties:
+        code:
+          type: string
+        detail:
+          type: string
+        retryable:
+          type: boolean
+    Job:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - kind
+      - status
+      - stage
+      - progress
+      - attempt_count
+      - max_attempts
+      - retryable
+      - cancel_requested
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/JobKind'
+        aggregate_type:
+          type:
+          - string
+          - 'null'
+        aggregate_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        generation_family:
+          type:
+          - string
+          - 'null'
+          enum:
+          - lesson_generation
+          - null
+        retry_of_job_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        stage:
+          type: string
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        message:
+          type:
+          - string
+          - 'null'
+        attempt_count:
+          type: integer
+          minimum: 0
+        max_attempts:
+          type: integer
+          minimum: 1
+        retryable:
+          type: boolean
+        cancel_requested:
+          type: boolean
+        error:
+          anyOf:
+          - $ref: '#/components/schemas/JobError'
+          - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        completed_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AsyncAccepted:
+      type: object
+      additionalProperties: false
+      required:
+      - job
+      properties:
+        job:
+          $ref: '#/components/schemas/Job'
+    JobList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Job'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
+    Weakness:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - course_id
+      - concept_key
+      - concept_label
+      - description
+      - evidence
+      - severity
+      - review_count
+      - mastered
+      - version
+      - first_seen_at
+      - last_seen_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        course_id:
+          type: string
+          format: uuid
+        lesson_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        concept_key:
+          type: string
+        concept_label:
+          type: string
+        description:
+          type: string
+        evidence:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        severity:
+          type: integer
+          minimum: 1
+          maximum: 5
+        review_count:
+          type: integer
+          minimum: 0
+        mastered:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+    WeaknessList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Weakness'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
+    ResourceVersion:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+    MaterialList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Material'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
+    DocumentList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentSummary'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
+    DocumentSummaryCollection:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          description: 当前发布版本；每个 DocumentKind 最多一项，不使用游标分页。
+          items:
+            $ref: '#/components/schemas/DocumentSummary'
+    DocumentSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - lesson_id
+      - kind
+      - revision
+      - source_job_id
+      - is_active
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/DocumentKind'
+        revision:
+          type: integer
+          minimum: 1
+        source_job_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    JobEvent:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - job_id
+      - event_type
+      - stage
+      - progress
+      - message
+      - occurred_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        job_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          enum:
+          - job.queued
+          - job.started
+          - job.progress
+          - job.validating
+          - job.cancel_requested
+          - job.succeeded
+          - job.failed
+          - job.cancelled
+        stage:
+          type: string
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        message:
+          type:
+          - string
+          - 'null'
+        data:
+          type: object
+          additionalProperties: true
+        occurred_at:
+          type: string
+          format: date-time
+    JobEventList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobEvent'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
+    PersistedJobStreamEvent:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - event
+      - data
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        event:
+          type: string
+          enum:
+          - job.queued
+          - job.started
+          - job.progress
+          - job.validating
+          - job.cancel_requested
+          - job.succeeded
+          - job.failed
+          - job.cancelled
+        data:
+          $ref: '#/components/schemas/JobStreamData'
+    JobStreamData:
+      type: object
+      additionalProperties: false
+      required:
+      - job_id
+      - status
+      - stage
+      - progress
+      - message
+      - occurred_at
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        stage:
+          type: string
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        message:
+          type:
+          - string
+          - 'null'
+        occurred_at:
+          type: string
+          format: date-time
+    JobResyncRequired:
+      type: object
+      additionalProperties: false
+      required:
+      - reason
+      - high_watermark_event_id
+      - active_jobs_url
+      properties:
+        reason:
+          type: string
+          const: history_expired
+        high_watermark_event_id:
+          type: integer
+          format: int64
+          minimum: 0
+        active_jobs_url:
+          type: string
+          const: /api/v1/jobs?active=true
+    JobResyncRequiredStreamEvent:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - event
+      - data
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 当前持久化 Job Event 高水位；该 SSE 事件自身不写入 job_events。
+        event:
+          type: string
+          const: stream.resync_required
+        data:
+          $ref: '#/components/schemas/JobResyncRequired'
+    HeartbeatStreamData:
+      type: object
+      additionalProperties: false
+      required:
+      - server_time
+      properties:
+        server_time:
+          type: string
+          format: date-time
+    HeartbeatStreamEvent:
+      type: object
+      additionalProperties: false
+      required:
+      - event
+      - data
+      properties:
+        event:
+          type: string
+          const: heartbeat
+        data:
+          $ref: '#/components/schemas/HeartbeatStreamData'
+      description: 非持久化心跳；线上 SSE 帧不包含 id 行，不改变 Last-Event-ID。
+    JobStreamEvent:
+      oneOf:
+      - $ref: '#/components/schemas/PersistedJobStreamEvent'
+      - $ref: '#/components/schemas/JobResyncRequiredStreamEvent'
+      - $ref: '#/components/schemas/HeartbeatStreamEvent'
+      discriminator:
+        propertyName: event
+    ProgressPoint:
+      type: object
+      additionalProperties: false
+      required:
+      - recorded_at
+      - mastery
+      - formula_version
+      - source_attempt_id
+      properties:
+        recorded_at:
+          type: string
+          format: date-time
+        mastery:
+          type: number
+          minimum: 0
+          maximum: 1
+        formula_version:
+          type: string
+        source_attempt_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+    Progress:
+      type: object
+      additionalProperties: false
+      required:
+      - scope_type
+      - scope_id
+      - mastery
+      - formula_version
+      - completed_attempts
+      - active_weaknesses
+      - trend
+      properties:
+        scope_type:
+          type: string
+          enum:
+          - course
+          - lesson
+        scope_id:
+          type: string
+          format: uuid
+        mastery:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+          maximum: 1
+        formula_version:
+          type:
+          - string
+          - 'null'
+        completed_attempts:
+          type: integer
+          minimum: 0
+        active_weaknesses:
+          type: integer
+          minimum: 0
+        trend:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProgressPoint'
+    SummaryEvaluationStatus:
+      type: string
+      enum:
+      - queued
+      - evaluating
+      - succeeded
+      - failed
+    SummaryEvaluationAccepted:
+      type: object
+      additionalProperties: false
+      required:
+      - evaluation
+      - job
+      properties:
+        evaluation:
+          $ref: '#/components/schemas/SummaryEvaluation'
+        job:
+          $ref: '#/components/schemas/Job'
+    SummaryEvaluation:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - lesson_id
+      - status
+      - coverage_score
+      - correct_points
+      - misconceptions
+      - missing_points
+      - suggestions
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/SummaryEvaluationStatus'
+        coverage_score:
+          type:
+          - number
+          - 'null'
+          minimum: 0
+          maximum: 1
+        correct_points:
+          type: array
+          items:
+            type: string
+        misconceptions:
+          type: array
+          items:
+            type: string
+        missing_points:
+          type: array
+          items:
+            type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+        error:
+          anyOf:
+          - $ref: '#/components/schemas/JobError'
+          - type: 'null'
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    ExportCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - format
+      properties:
+        format:
+          type: string
+          enum:
+          - markdown
+          - zip
+    FileObject:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - media_type
+      - size_bytes
+      - sha256
+      - download_url
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        display_name:
+          type:
+          - string
+          - 'null'
+        media_type:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        download_url:
+          type: string
+          format: uri-reference
+        created_at:
+          type: string
+          format: date-time
+    Backup:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - status
+      - application_version
+      - database_version
+      - size_bytes
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - creating
+          - ready
+          - failed
+        application_version:
+          type: string
+        database_version:
+          type: string
+        size_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+        archive_name:
+          type:
+          - string
+          - 'null'
+          description: backups 目录内的安全展示名称，不是宿主机绝对路径或在线下载 URL。
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    BackupList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Backup'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'

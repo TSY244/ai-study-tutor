@@ -5,7 +5,7 @@
 本路线把当前 Python CLI/TUI 的能力和本地文件数据迁入 Go + Gin、React、PostgreSQL 和独立 Go Worker，并始终保留可验证、可回退的旧数据副本。
 
 - 采用旁路建设和最终切换；迁移初期不移动现有 Python 文件。
-- 旧 `course/`、`.tasks/` 在导入全过程只读。
+- 旧数据根 `legacy-data/` 中的 `course/`、`.tasks/` 在导入全过程只读；容器内分别映射为 `/legacy/course`、`/legacy/.tasks`。
 - 先迁移确定性领域规则和 API 契约，再接 Claude 和 Docker。
 - 任何旧记录要么成功映射，要么进入带原因的隔离报告，不能静默跳过。
 - 导入可 dry-run、可重复、可对账；不以退出码为 0 代替一致性验证。
@@ -25,8 +25,8 @@ flowchart LR
         TaskDir --> Agent
     end
 
-    Importer[Go legacy-import] -->|只读扫描| CourseDir
-    Importer -->|只读扫描| TaskDir
+    Importer[Go legacy-import] -->|/legacy/course 只读扫描| CourseDir
+    Importer -->|/legacy/.tasks 只读扫描| TaskDir
 
     subgraph Target[目标系统]
         Web[React]
@@ -112,6 +112,7 @@ flowchart LR
 ### `legacy_import_batches`
 
 - `id`、`source_root_fingerprint`、`manifest_sha256`、`importer_version`。
+- `resolution_sha256`；空字符串表示未提交人工 resolution。
 - `status`：`scanned | importing | needs_review | completed | failed`。
 - `started_at`、`completed_at`、`report_json`。
 
@@ -125,7 +126,8 @@ flowchart LR
 
 幂等规则：
 
-- 同一 Manifest 重跑复用原批次，不新增业务副本。
+- 同一 Manifest 与同一 resolution 重跑复用原批次，不新增业务副本。
+- 同一 Manifest 的新 resolution 生成独立审计批次；同路径同 hash 的已映射对象只记为 `deduplicated`，不得覆盖新系统数据。
 - 同路径同 hash 视为已处理。
 - 同路径 hash 变化生成差异，默认 `needs_review`，不覆盖新系统已有修改。
 - 二进制文件可按 SHA-256 去重；课程、文档和试卷不能只按内容 hash 合并。
@@ -137,7 +139,7 @@ flowchart LR
 
 | 旧来源 | 新目标 | 规则 |
 | --- | --- | --- |
-| `course/{dir}/.subject` | `courses` | 目录表示候选课程；标题优先取目录内 `info.json.subject` |
+| `/legacy/course/{dir}/.subject` | `courses` | 目录表示候选课程；标题优先取目录内 `info.json.subject` |
 | `{dir}` | `courses.slug` | 作为候选；冲突时追加稳定短 hash，不覆盖已有课程 |
 | `lesson_XX/` | `lessons.ordinal` | `XX` 必须为正整数；与 `info.json.lesson` 不一致时隔离 |
 | `info.json.subject` | `courses.title` | 同目录出现多个 subject 时批次进入 review |
@@ -266,7 +268,7 @@ Compose 必须把宿主机旧目录挂载为 `/legacy:ro`，把新系统文件�
 | `legacy_task_not_resumable` | 旧任务不能安全续跑 | 记录并提示重建 |
 | `legacy_grading_input_incomplete` | 旧 Attempt 缺少可重新批阅的题目或答案 | 隔离 Attempt，不开放重新批阅 |
 
-`--fail-on-warning` 用于验收和最终切换。人工决定写入单独 resolution 文件；该文件进入 Manifest 并计算 hash，确保决定可审计、可重放。
+`--fail-on-warning` 用于验收和最终切换。人工决定写入单独 resolution 文件；其 `manifest_sha256` 和 accepted finding 进入 batch 审计并计算 hash，确保决定可审计、可重放，但 resolution 本身不改变源 Manifest。
 
 ## 8. 实施里程碑
 

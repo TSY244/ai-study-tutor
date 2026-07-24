@@ -1,0 +1,20 @@
+{
+  "task_id": "task_20260604_090000_summarize_a1b2c3",
+  "task_type": "summarize",
+  "subject": "demo-calculus",
+  "lesson": 1,
+  "name": "极限的基本概念 · 总结评估",
+  "prompt": "请评估学生对第 1 课《极限的基本概念》的学习总结（示例 fixture，正文已省略）。",
+  "system_prompt": "",
+  "source_text": "",
+  "output_dir": "course/demo-calculus/lesson_01",
+  "output_files": ["summary_result.json"],
+  "output_format": "json",
+  "model": "",
+  "command": "",
+  "status": "pending",
+  "created_at": "2026-06-04T09:00:00+00:00",
+  "completed_at": null,
+  "error": null,
+  "extra": {}
+}

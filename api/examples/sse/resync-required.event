@@ -1,0 +1,4 @@
+id: 1042
+event: stream.resync_required
+data: {"reason":"history_expired","high_watermark_event_id":1042,"active_jobs_url":"/api/v1/jobs?active=true"}
+

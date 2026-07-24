@@ -2,10 +2,18 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
-course/
-workspace/
 *.egg-info/
 .DS_Store
 .claude/
-.tasks/
+legacy-data/
+data/
+backups/
+import-reports/
+deploy/secrets/*.txt
+!deploy/secrets/README.md
+.env
+config.json
 video_summary_report.md
+
+# Local build artifacts
+/worker

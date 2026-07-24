@@ -1,0 +1,289 @@
+// Worker 进程入口：PostgreSQL 任务队列消费者（素材解析、Claude 调用、发布）。
+//
+// B5：Job 领取循环 + lesson_import 素材管线（文本/文档/URL 字幕优先、
+// 标准化与 raw_text 文档发布）。Claude 相关 Job kind 在 B6 注册。
+//
+// 用法：
+//
+//	worker               启动 Worker（SIGINT/SIGTERM 优雅退出）
+//	worker healthcheck   容器健康检查：数据库可达且数据目录可写
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	aipkg "github.com/TSY244/ai-study-tutor/internal/ai"
+	"github.com/TSY244/ai-study-tutor/internal/filestore"
+	"github.com/TSY244/ai-study-tutor/internal/idempotency"
+	"github.com/TSY244/ai-study-tutor/internal/job"
+	"github.com/TSY244/ai-study-tutor/internal/platform/config"
+	"github.com/TSY244/ai-study-tutor/internal/platform/database"
+	"github.com/TSY244/ai-study-tutor/internal/platform/logging"
+	"github.com/TSY244/ai-study-tutor/internal/system"
+	"github.com/TSY244/ai-study-tutor/internal/worker"
+	"github.com/TSY244/ai-study-tutor/internal/worker/aihandlers"
+	"github.com/TSY244/ai-study-tutor/internal/worker/lessonimport"
+	"github.com/TSY244/ai-study-tutor/internal/worker/proc"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck())
+	}
+
+	cfg, err := config.Load(config.ServiceWorker)
+	if err != nil {
+		fatal(err)
+	}
+	logger := logging.New(cfg.Service, cfg.Version, cfg.LogLevel)
+	logger.Info("starting", slog.Any("config", cfg.SafeSummary()))
+
+	// Claude 是能力降级：Key 缺失只禁用 AI Job，不影响进程启动。
+	anthropicKey, claudeOK := cfg.Claude.AnthropicKey()
+	if cfg.Claude.Provider == "fake" {
+		logger.Warn("claude_capability", slog.String("status", "fake_local"))
+	} else if claudeOK {
+		logger.Info("claude_capability", slog.String("status", "configured"))
+	} else {
+		logger.Warn("claude_capability",
+			slog.String("status", "not_configured"),
+			slog.String("error_code", "claude_not_configured"),
+		)
+	}
+	aiProvider := aipkg.Provider(aipkg.NotConfiguredProvider{})
+	var lessonImportAI aipkg.Provider
+	if cfg.Claude.Provider == "fake" {
+		aiProvider = aipkg.NewDeterministicFakeProvider()
+	} else if claudeOK {
+		aiProvider = aipkg.NewAnthropicProvider(aipkg.AnthropicConfig{
+			APIKey:          anthropicKey,
+			Model:           cfg.Claude.Model,
+			MaxOutputTokens: cfg.Claude.MaxOutputTokens,
+			Timeout:         cfg.Claude.RequestTimeout,
+		})
+		lessonImportAI = aiProvider
+	}
+
+	if err := ensureDataDirWritable(cfg.DataDir); err != nil {
+		logger.Warn("data_dir_not_writable",
+			slog.String("data_dir", cfg.DataDir),
+			slog.String("error_code", "storage_unavailable"),
+		)
+	}
+
+	pool, err := database.Connect(context.Background(), cfg.DB.URL)
+	if err != nil {
+		fatal(err)
+	}
+	defer pool.Close()
+
+	logger.Info("worker_started",
+		slog.String("worker_id", cfg.Worker.ID),
+		slog.Int("concurrency", cfg.Worker.Concurrency),
+	)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	heartbeatDone := make(chan struct{})
+	go runSystemHeartbeatLoop(ctx, logger, pool, workerHeartbeat(cfg, claudeOK), heartbeatDone)
+
+	files, err := filestore.New(pool, cfg.DataDir, 24*time.Hour)
+	if err != nil {
+		fatal(err)
+	}
+
+	// B6 Job Handler registry：素材管线 + Worker-only Claude 任务。
+	registry := worker.NewRegistry()
+	registry.Register(job.KindLessonImport, &lessonimport.Handler{
+		Pool:              pool,
+		Files:             files,
+		Proc:              proc.ExecRunner{},
+		AI:                lessonImportAI,
+		URLAllowlist:      cfg.Material.URLAllowlist,
+		MaxDownloadBytes:  cfg.Material.MaxDownloadBytes,
+		TranscriptionMode: cfg.Material.TranscriptionMode,
+		WhisperModelPath:  cfg.Material.WhisperModelPath,
+	})
+	aihandlers.Register(registry, aihandlers.Deps{
+		Pool:     pool,
+		Provider: aiProvider,
+	})
+	runner := &worker.Runner{
+		Pool:       pool,
+		Registry:   registry,
+		Files:      files,
+		WorkerID:   cfg.Worker.ID,
+		Lease:      cfg.Worker.JobLease,
+		JobTimeout: cfg.Worker.JobTimeout,
+		Logger:     logger,
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < cfg.Worker.Concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runner.Run(ctx)
+		}()
+	}
+
+	// 周期 Recovery：回收过期 Job 租约（worker_lost）、过期 temporary
+	// 文件对象与幂等记录。
+	recoveryDone := make(chan struct{})
+	go runRecoveryLoop(ctx, logger, pool, files, recoveryDone)
+
+	<-ctx.Done()
+	logger.Info("worker_stopping")
+	wg.Wait()
+	<-recoveryDone
+	<-heartbeatDone
+	logger.Info("worker_stopped")
+}
+
+// recoveryInterval 是周期 Recovery 的间隔（短于默认 60s Job 租约，
+// 保证过期租约在一个租约周期内被回收）。
+const recoveryInterval = 15 * time.Second
+
+const workerHeartbeatInterval = 10 * time.Second
+
+func workerHeartbeat(cfg config.Config, keyConfigured bool) system.WorkerHeartbeat {
+	heartbeat := system.WorkerHeartbeat{
+		WorkerID:     cfg.Worker.ID,
+		ClaudeStatus: "unknown",
+		ClaudeModel:  cfg.Claude.Model,
+	}
+	switch {
+	case cfg.Claude.Provider == "fake":
+		heartbeat.ClaudeStatus = "degraded"
+		heartbeat.ClaudeMessage = "当前部署使用 fake Provider，尚未验证真实 Claude。"
+	case !keyConfigured:
+		heartbeat.ClaudeStatus = "unavailable"
+		heartbeat.ClaudeMessage = "Claude Key 未配置；请在部署侧配置 ANTHROPIC_API_KEY_FILE 后重试。"
+	case cfg.Claude.Model == "":
+		heartbeat.ClaudeStatus = "unavailable"
+		heartbeat.ClaudeMessage = "Claude 模型未配置；请设置 CLAUDE_MODEL_DEFAULT 后重试。"
+	default:
+		heartbeat.ClaudeMessage = "Claude 已配置，尚未执行连通性测试。"
+	}
+	return heartbeat
+}
+
+func runSystemHeartbeatLoop(ctx context.Context, logger *slog.Logger, pool *pgxpool.Pool, heartbeat system.WorkerHeartbeat, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(workerHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err := system.UpsertWorkerHeartbeat(writeCtx, pool, heartbeat)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			logger.Warn("worker_heartbeat_failed", slog.String("error", err.Error()))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func runRecoveryLoop(ctx context.Context, logger *slog.Logger, pool *pgxpool.Pool, files *filestore.Store, done chan<- struct{}) {
+	defer close(done)
+	jobRepo := &job.Repository{}
+	idemSvc := idempotency.NewService(pool)
+	ticker := time.NewTicker(recoveryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		recoverCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		tx, err := pool.Begin(recoverCtx)
+		if err != nil {
+			logger.Warn("recovery_begin_failed", slog.String("error", err.Error()))
+			cancel()
+			continue
+		}
+		requeued, failed, cancelled, err := jobRepo.RecoverExpiredLeases(recoverCtx, tx, 100)
+		if err == nil {
+			var filesRes filestore.RecoverResult
+			filesRes, err = files.Recover(recoverCtx, tx, 100)
+			if err == nil && (requeued+failed+cancelled > 0 || filesRes.Completed+filesRes.Quarantined+filesRes.Deleted+filesRes.Orphaned > 0) {
+				logger.Info("lease_recovery",
+					slog.Int("jobs_requeued", requeued),
+					slog.Int("jobs_failed", failed),
+					slog.Int("jobs_cancelled", cancelled),
+					slog.Int("files_completed", filesRes.Completed),
+					slog.Int("files_quarantined", filesRes.Quarantined),
+					slog.Int("files_deleted", filesRes.Deleted),
+					slog.Int("files_orphaned", filesRes.Orphaned))
+			}
+		}
+		if err != nil {
+			logger.Warn("lease_recovery_failed", slog.String("error", err.Error()))
+			_ = tx.Rollback(recoverCtx)
+		} else if err := tx.Commit(recoverCtx); err != nil {
+			logger.Warn("lease_recovery_commit_failed", slog.String("error", err.Error()))
+		}
+		if _, err := idemSvc.RecoverInProgress(recoverCtx, time.Hour); err != nil {
+			logger.Warn("idempotency_recovery_failed", slog.String("error", err.Error()))
+		}
+		if _, err := idemSvc.CleanupExpired(recoverCtx); err != nil {
+			logger.Warn("idempotency_cleanup_failed", slog.String("error", err.Error()))
+		}
+		cancel()
+	}
+}
+
+// healthcheck：数据库可达 + 数据目录可写，全部通过才退出 0。
+func healthcheck() int {
+	cfg, err := config.Load(config.ServiceWorker)
+	if err != nil {
+		return 1
+	}
+	if err := ensureDataDirWritable(cfg.DataDir); err != nil {
+		return 1
+	}
+	pool, err := database.Connect(context.Background(), cfg.DB.URL)
+	if err != nil {
+		return 1
+	}
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := pool.Ping(ctx); err != nil {
+		return 1
+	}
+	return 0
+}
+
+// ensureDataDirWritable 确认数据目录存在且可写（通过临时文件探测）。
+func ensureDataDirWritable(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("创建数据目录失败")
+	}
+	probe, err := os.CreateTemp(dir, ".write-probe-*")
+	if err != nil {
+		return fmt.Errorf("数据目录不可写")
+	}
+	name := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(name)
+	return nil
+}
+
+func fatal(err error) {
+	fmt.Fprintf(os.Stderr, "worker 启动失败：%v\n", err)
+	os.Exit(1)
+}
