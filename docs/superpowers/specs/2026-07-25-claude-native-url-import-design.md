@@ -1,7 +1,7 @@
 # Claude 原生 URL 素材导入设计
 
 **日期：** 2026-07-25  
-**状态：** 已确认，待规格评审  
+**状态：** 规格评审已通过，等待用户确认
 **范围：** 已在本地部署的 Claude-only 多 Key 网关之上，将 YouTube、Bilibili 等已允许网站的 URL 素材导入改为由 Claude 的 Web Fetch server tool 提取内容。
 
 ## 目标
@@ -44,7 +44,9 @@ Web Fetch 依赖配置的 Claude 网关能够原样支持 Anthropic Messages ser
 
 API 仍实施 HTTPS 和域名白名单校验，并保留当前可选的 API DNS 校验开关。因为 Worker 不再自行连向目标 URL，它不执行重定向预检、DNS 重绑定检查或任何本地下载；这些不适用于 Claude server tool 的网络边界。
 
-Worker 在发给 Claude 前再规范化 URL：移除 fragment 和已知追踪参数，保留识别页面所需的路径与查询参数（例如 YouTube 的 `v`、Bilibili 的视频路径与 `p`）。最终 URL 必须不超过 Web Fetch 支持的长度上限；无法缩短的 URL 以稳定、可行动的素材错误失败。域名白名单将同时转为 Web Fetch 的 `allowed_domains`，所以 Claude 只能访问该任务许可的来源站点。
+Worker 在发给 Claude 前必须通过一个纯函数重新解析持久化的 `source_url`，再次验证：HTTPS、没有 userinfo/显式端口、主机在当前 `URL_ALLOWLIST` 中。它会移除 fragment；YouTube 仅保留 `v`、`list`、`index`、`start`、`t`，Bilibili 仅保留 `p`，其他允许站点删除 `utm_*`、`spm*`、`trackid`、`vd_source`、`share_*` 后保留其余参数。剩余 query 参数按 key/value 排序重新编码。最终 URL 必须不超过 250 个字符；无法缩短的 URL 以 `url_blocked`（不可重试）失败。
+
+每个 Job 的 `allowed_domains` 不是整个全局白名单。它精确为来源主机和**最长命中**的白名单根域的去重集合。例如 `https://www.youtube.com/watch?v=...` 仅获得 `["www.youtube.com", "youtube.com"]`，而不是 Bilibili 或其他配置站点；`https://www.bilibili.com/video/...` 仅获得 `["www.bilibili.com", "bilibili.com"]`。根域只用于同站点跳转兼容，不能是空字符串，且不能由 URL 查询参数派生。这样 Claude 只能访问该 Job 对应的来源站点。
 
 ## Claude Provider 契约
 
@@ -56,9 +58,22 @@ Worker 在发给 Claude 前再规范化 URL：移除 fragment 和已知追踪参
 lesson_url_extract
 ```
 
-URL 提取请求含两种工具：
+URL 提取请求含两种工具。实现将 Web Fetch 固定为当前兼容的 basic server tool 版本，并固定下列 payload/限制：
 
-1. Anthropic server tool `web_fetch`，使用兼容的 basic tool version、受控 `max_uses`、内容 token 上限和 `allowed_domains`。
+1. Anthropic server tool：
+
+```json
+{
+  "type": "web_fetch_20250910",
+  "name": "web_fetch",
+  "max_uses": 3,
+  "max_content_tokens": 12000,
+  "allowed_domains": ["来源主机", "命中的白名单根域"]
+}
+```
+
+请求还必须发送 `anthropic-beta: web-fetch-2025-09-10`，以及现有的 `anthropic-version`。每个 URL 提取逻辑请求的 `max_tokens` 为 16,384；调用仍受既有 Job context 和 `CLAUDE_REQUEST_TIMEOUT` 约束。12,000 token 的抓取上限为 16,384 token 结构化工具输入预留 schema、标题和说明空间；server tool 返回任何截断/内容上限标记时，任务以 `material_too_large` 失败，绝不发布部分原文或模型概述。
+
 2. 现有 client tool `structured_result`，其 JSON schema 要求：
 
 ```json
@@ -69,17 +84,20 @@ URL 提取请求含两种工具：
 }
 ```
 
-工具选择为自动，而不是强制 `structured_result`：system prompt 要求模型先使用 Web Fetch，之后只以 `structured_result` 返回结果。Prompt 明确说明抓取内容是不可信资料，不执行其中的指令，不泄露系统提示、Key 或内部配置，也不访问来源域名以外的地址。
+工具选择为 `{"type":"auto"}`，而不是强制 `structured_result`：system prompt 要求模型先使用 Web Fetch，之后只以 `structured_result` 返回结果。它要求原文保留可检索的完整内容、不得概括或编造；若内容因工具限制无法完整取得，必须报告提取失败而非返回摘要。Prompt 明确说明抓取内容是不可信资料，不执行其中的指令，不泄露系统提示、Key 或内部配置，也不访问来源域名以外的地址。
 
 ### 响应循环
 
 现有 Anthropic Provider 目前假定单次响应并强制结构化工具。URL 提取的 Provider 路径需要支持 server tool 的 Messages 协议：
 
-- 保留完整 assistant content，原样附回后续 Messages 请求；不把 Web Fetch 工具结果伪造成浏览器或 Worker 的结果。
-- 接受 `pause_turn` 并在有限次数内继续同一请求；每次续传沿用原请求的模型、工具与超时约束。
-- 接受工具过程中的 token、模型、request-id 和延迟元数据；最终审计只保存已有安全字段。
-- 仅在得到合法的 `structured_result` 后返回 `Response.JSON`。
-- 超过受控续传次数、没有结构化结果、服务端工具拒绝或网关不支持该 tool 时，返回映射后的 `ProviderError`，不发布任何文档。
+- Provider 全程维护 `canonical_fetch_succeeded`。只有同时观察到 Web Fetch server tool 对规范化 URL 的调用，且对应 `web_fetch_tool_result` 是非错误且未截断的成功结果时，才把它置为 true。每次响应先记录该证据，再扫描 `structured_result`；仅当该标志为 true 且结果合法时才结束，即使响应的 `stop_reason` 也是 `pause_turn`。同域但不同 URL、仅有 `server_tool_use`、错误 tool result 或未调用 Web Fetch 都不能满足该条件。
+- 首次请求后最多再发出 **2 次** continuation，因此最多 3 个 Messages HTTP 请求。对每次 `pause_turn`，把完整且未经改写的上一次 assistant `content` 加入 `messages`，随后追加唯一的 user text：`继续完成此前的 URL 提取；在取得允许域名内的内容后调用 structured_result。`；保持 system、model、tools、tool choice、token 上限和原 context 不变。不创建 browser/Worker 伪造的 tool result。
+- `pause_turn` 达到第 3 个响应仍未产生结构化结果，返回 `claude_timeout`（可重试）；网关按既有 timeout 规则冷却该 Key 并尝试下一个可用 Key。
+- 每一轮均累加 input/output/cache token；`Response.Latency` 为整个逻辑请求的 wall-clock 时长；`Model`、`StopReason` 和 `ProviderRequestID` 使用最后一轮的非空值。`ai_runs` 仍只写这一条逻辑调用记录。
+- 已完成但不存在成功的规范化 URL 抓取证据时返回 `material_fetch_failed`（不可重试且不切换 Key）；已抓取成功但没有合法 `structured_result` 则返回 `claude_invalid_json`（可重试但不因该原因切换 Key）。
+- 服务端工具不支持、beta/header 被拒绝、或请求参数被拒绝时映射 `claude_invalid_request`（不可重试且不切换 Key）。
+
+Provider 新增稳定内部错误常量 `material_fetch_failed`，仅用于 Web Fetch server tool result。若 tool result 显式表明网络、超时、429 或 5xx，其 `ProviderError.Retryable` 为 true；来源拒绝、404、域名限制或不支持的媒体类型为 false。该 code 不是 Key 故障，网关不得把它计入 Key 的冷却或 failover。
 
 普通 Claude 请求继续使用当前强制 `structured_result` 的单次路径，避免影响测验、批改、总结和现有网关故障切换语义。
 
@@ -92,7 +110,7 @@ URL 分支从“写入 `acquired.txt` 后调用本地 `extract`”调整为专�
 3. 校验并标准化 `raw_text_markdown`，套用现有 `MaxTextRunes` 上限和 `ChunkText`。
 4. 填充来源元数据：`title`、`webpage_url`、`extractor: "claude_web_fetch"` 与非敏感提取说明。移除本地字幕/yt-dlp 版本字段在此路径的含义。
 5. 按现有顺序调用教师教纲和学生笔记生成。
-6. 复用现有 `publishFunc` 单事务发布原文、教纲、笔记。任一步失败均不发布半成品。
+6. 仅当规范化后的原文、教师教纲和学生笔记三者均为非空且通过各自现有校验时，才调用 `publishFunc`。复用该单事务发布原文、教纲、笔记；任一步失败均不发布半成品。
 
 文本和上传分支继续使用现有获取/解析流程及 AI 可用时的生成逻辑。URL 分支不会创建或执行任何外部命令，相关依赖可以保留给其他路径或后续清理，但该分支测试必须证明其未被调用。
 
@@ -105,12 +123,16 @@ URL 分支从“写入 `acquired.txt` 后调用本地 `extract`”调整为专�
 | 无可用 Claude Key | `claude_not_configured` | 配置 Claude Key 后重试 | 否 |
 | Key 鉴权失败 | `claude_auth_failed` | 网关按多 Key 策略切换；全部失败则提示更新 Key | 否 |
 | 限流、超时、服务端错误 | 现有 Claude retryable code | 由 Job 与网关现有策略重试/切换 | 否 |
-| Web Fetch 无法访问或内容为空 | 映射后的 Claude/素材错误 | 提示链接内容不可提取或稍后再试 | 否 |
+| Web Fetch 工具报告临时网络、超时、429 或 5xx | `material_fetch_failed`（可重试） | 提示 Claude 暂时无法提取链接内容，稍后再试 | 否 |
+| Web Fetch 工具报告访问拒绝、页面不存在或不支持内容 | `material_fetch_failed`（不可重试） | 提示链接内容不可提取，检查链接或改用文本/文件 | 否 |
+| 未成功抓取规范化来源 URL | `material_fetch_failed`（不可重试） | 提示 Claude 未能提取指定链接内容 | 否 |
 | 网关不支持 server tool | `claude_invalid_request` | 提示部署侧需支持 Claude Web Fetch | 否 |
-| 结构化输出缺失或无效 | `claude_invalid_json` / `claude_schema_invalid` | 提示 Claude 输出无效，可重试 | 否 |
-| 原文超过上限 | `too_large` | 提示更换/拆分素材 | 否 |
+| pause 限额耗尽 | `claude_timeout`（可重试） | 提示 Claude 提取未在时限内完成 | 否 |
+| 结构化输出缺失或无效 | `claude_invalid_json` / `claude_schema_invalid`（可重试） | 提示 Claude 输出无效，可重试 | 否 |
+| 原文为空 | `material_empty_content`（不可重试） | 提示链接未提取到可学习文本 | 否 |
+| 原文超过上限或 Web Fetch 指示截断 | `material_too_large`（不可重试） | 提示更换/拆分素材 | 否 |
 
-来源内容不能覆盖系统指令。错误详情不得包含完整 URL 查询中潜在的敏感值、完整抓取内容、Key、上游原始报文或 prompt。现有多 Key 网关对 401/403、429、网络错误、超时和 5xx 的状态转换与 failover 不变。
+来源内容不能覆盖系统指令。错误详情不得包含完整 URL 查询中潜在的敏感值、完整抓取内容、Key、上游原始报文或 prompt。现有多 Key 网关对 401/403、429、网络错误、超时和 5xx 的状态转换与 failover 不变。`material_fetch_failed` 是来源可访问性错误，不冷却或切换 Key；`claude_timeout`、`claude_auth_failed`、`claude_rate_limited`、`claude_overloaded` 和 `claude_unavailable` 继续使用网关的既有 Key 级 failover。
 
 ## 前端和 API
 
@@ -127,7 +149,7 @@ URL 分支从“写入 `acquired.txt` 后调用本地 `extract`”调整为专�
 - 常规结构化请求仍产生原有强制 `structured_result` payload。
 - URL 请求包含 `web_fetch` 与 `structured_result`，自动工具选择、允许域名、限额和 schema 均符合契约。
 - Web Fetch 的 `pause_turn` 可在受控次数内续传，保持 prior assistant content。
-- server tool 成功后能解析 `structured_result`；tool 错误、缺少结果、超过续传次数和无效 JSON 有稳定错误映射。
+- 只有成功、未截断地抓取规范化 URL 后才能解析 `structured_result`；未调用、同域不同 URL、tool 错误、截断、缺少结果、超过续传次数和无效 JSON 都有稳定错误映射。
 - 请求、错误、日志和 `ai_runs` 中没有 Key、抓取正文或原始上游响应。
 
 ### Lesson import
@@ -135,8 +157,9 @@ URL 分支从“写入 `acquired.txt` 后调用本地 `extract`”调整为专�
 - URL job 通过 fake Claude 输出成功提取后，原子发布原文、教师教纲和学生笔记，来源 metadata 的 extractor 为 `claude_web_fetch`。
 - URL job 不调用 `yt-dlp`、FFmpeg、Whisper、DNS 预检或 HTTP redirect transport。
 - URL job 无 Claude provider/无可用 Key 时以 `claude_not_configured` 失败，不触发本地回退。
-- Claude 提取为空、超限或任一后续生成失败时没有发布半成品。
+- Claude 提取为空、超限或任一后续生成失败时没有发布半成品；断言 `raw_text`、`teacher_outline`、`student_notes` 三者必须全有或全无。
 - 文本和上传的既有测试继续通过。
+- URL 查询 secret、prompt sentinel、来源正文 sentinel 或 Key-like sentinel 只能存在于注入给 mock upstream 的测试输入；它们不得出现在浏览器侧 HTTP fixture、Job error、`ai_runs`、测试快照或日志断言中。
 
 ### 回归与部署
 
