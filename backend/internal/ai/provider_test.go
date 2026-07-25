@@ -57,10 +57,17 @@ func TestProviderErrorRetryMatrix(t *testing.T) {
 }
 
 func TestBuildLessonURLExtractRequest(t *testing.T) {
-	canonicalURL := "https://www.youtube.com/watch?v=abc"
+	const (
+		allowedDomainSentinel = "allowed-domain-redaction-sentinel.invalid"
+		systemSentinel        = "system-prompt-redaction-sentinel"
+		userSentinel          = "user-prompt-redaction-sentinel"
+		sourceSentinel        = "source-material-redaction-sentinel"
+		keySentinel           = "sk-ant-key-redaction-sentinel"
+	)
+	canonicalURL := "https://www.youtube.com/watch?v=" + sourceSentinel
 	req, err := BuildLessonURLExtractRequest(LessonURLExtractPromptInput{
 		URL:            canonicalURL,
-		AllowedDomains: []string{" www.youtube.com ", "youtube.com"},
+		AllowedDomains: []string{" " + allowedDomainSentinel + " ", "youtube.com"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,13 +81,13 @@ func TestBuildLessonURLExtractRequest(t *testing.T) {
 	if req.WebFetch.URL != canonicalURL {
 		t.Fatal("canonical URL 错误")
 	}
-	wantDomains := []string{"www.youtube.com", "youtube.com"}
+	wantDomains := []string{allowedDomainSentinel, "youtube.com"}
 	if len(req.WebFetch.AllowedDomains) != len(wantDomains) {
-		t.Fatalf("allowed domains 数量错误: got %v want %v", req.WebFetch.AllowedDomains, wantDomains)
+		t.Fatal("allowed domains 数量错误")
 	}
 	for i := range wantDomains {
 		if req.WebFetch.AllowedDomains[i] != wantDomains[i] {
-			t.Fatalf("allowed domains 顺序或空白处理错误: got %v want %v", req.WebFetch.AllowedDomains, wantDomains)
+			t.Fatal("allowed domains 顺序或空白处理错误")
 		}
 	}
 	if req.WebFetch.MaxUses != 3 || req.WebFetch.MaxContentTokens != 12000 || req.WebFetch.MaxContinuations != 2 {
@@ -132,6 +139,25 @@ func TestBuildLessonURLExtractRequest(t *testing.T) {
 			t.Fatalf("URL 提取 schema 未要求属性 %q: %v", name, schema.Required)
 		}
 	}
+	var titleSchema struct {
+		Type      string `json:"type"`
+		MinLength *int   `json:"minLength"`
+	}
+	if err := json.Unmarshal(schema.Properties["title"], &titleSchema); err != nil {
+		t.Fatalf("title schema 不是有效 JSON: %v", err)
+	}
+	if titleSchema.Type != "string" || (titleSchema.MinLength != nil && *titleSchema.MinLength > 0) {
+		t.Fatal("title schema 必须允许空字符串")
+	}
+	var rawTextSchema struct {
+		MinLength *int `json:"minLength"`
+	}
+	if err := json.Unmarshal(schema.Properties["raw_text_markdown"], &rawTextSchema); err != nil {
+		t.Fatalf("raw_text_markdown schema 不是有效 JSON: %v", err)
+	}
+	if rawTextSchema.MinLength == nil || *rawTextSchema.MinLength < 1 {
+		t.Fatal("raw_text_markdown schema 必须要求非空内容")
+	}
 
 	other, err := BuildLessonURLExtractRequest(LessonURLExtractPromptInput{
 		URL:            "https://www.youtube.com/watch?v=xyz",
@@ -159,10 +185,29 @@ func TestBuildLessonURLExtractRequest(t *testing.T) {
 			t.Fatalf("web fetch 选项变更未影响 prompt hash: variant %d", i)
 		}
 	}
-	for _, built := range []Request{req, other} {
+	redactionProbe := req
+	probeWebFetch := *req.WebFetch
+	probeWebFetch.AllowedDomains = append([]string(nil), req.WebFetch.AllowedDomains...)
+	redactionProbe.WebFetch = &probeWebFetch
+	redactionProbe.System = systemSentinel
+	redactionProbe.User = userSentinel + "\n" + keySentinel
+	for _, built := range []Request{req, other, redactionProbe} {
 		encoded, _ := json.Marshal(built.RedactedLogFields())
-		if strings.Contains(string(encoded), built.WebFetch.URL) {
-			t.Fatal("脱敏日志字段包含 canonical URL")
+		for _, sentinel := range []string{
+			allowedDomainSentinel,
+			systemSentinel,
+			userSentinel,
+			sourceSentinel,
+			keySentinel,
+		} {
+			for _, field := range built.RedactedLogFields() {
+				if value, ok := field.(string); ok && strings.Contains(value, sentinel) {
+					t.Fatal("脱敏日志字段包含敏感 sentinel")
+				}
+			}
+			if strings.Contains(string(encoded), sentinel) {
+				t.Fatal("脱敏日志 JSON 包含敏感 sentinel")
+			}
 		}
 	}
 

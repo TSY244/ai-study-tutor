@@ -51,7 +51,7 @@ var lessonURLExtractSchema = rawSchema(map[string]any{
 	"type": "object", "additionalProperties": false,
 	"required": []string{"title", "raw_text_markdown", "extraction_note"},
 	"properties": map[string]any{
-		"title":             map[string]any{"type": "string", "minLength": 1},
+		"title":             map[string]any{"type": "string"},
 		"raw_text_markdown": map[string]any{"type": "string", "minLength": 1},
 		"extraction_note":   map[string]any{"type": "string"},
 	},
