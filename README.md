@@ -4,6 +4,8 @@
 
 当前可执行的重构设计、接口和部署蓝图位于 [docs/web-rebuild/README.md](./docs/web-rebuild/README.md)。前端实施可直接使用 [Codex 提示词](./docs/web-rebuild/08-frontend-codex-prompt.md)。
 
+**部署**：全部组件以 Docker 容器运行，宿主机只需 Docker。详见 [docs/deployment.md](./docs/deployment.md)。
+
 ## 目录
 
 ```text
