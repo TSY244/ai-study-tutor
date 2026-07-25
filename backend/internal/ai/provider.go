@@ -17,6 +17,7 @@ type Purpose string
 
 const (
 	PurposeConnectivity       Purpose = "claude_connectivity_test"
+	PurposeLessonURLExtract   Purpose = "lesson_url_extract"
 	PurposeTeacherOutline     Purpose = "teacher_outline"
 	PurposeStudentNotes       Purpose = "student_notes"
 	PurposeQuizGenerate       Purpose = "quiz_generate"
@@ -44,10 +45,21 @@ type Request struct {
 	SchemaVersion         string
 	Model                 string
 	MaxOutputTokens       int
+	WebFetch              *WebFetchOptions
 }
 
-// PromptHash returns a SHA-256 over the complete prompt/schema payload. The
-// hash is safe for ai_runs; it allows auditing without persisting the prompt.
+// WebFetchOptions is worker-only input for a provider-side web fetch. It has
+// no API DTO because source URLs must not be sent to browser clients or logs.
+type WebFetchOptions struct {
+	URL              string
+	AllowedDomains   []string
+	MaxUses          int
+	MaxContentTokens int
+	MaxContinuations int
+}
+
+// PromptHash returns a SHA-256 over the complete generation payload. The hash
+// is safe for ai_runs; it allows auditing without persisting the prompt.
 func (r Request) PromptHash() string {
 	h := sha256.New()
 	h.Write([]byte(r.Purpose))
@@ -61,6 +73,13 @@ func (r Request) PromptHash() string {
 	h.Write([]byte(r.User))
 	h.Write([]byte{0})
 	h.Write(r.Schema)
+	if r.WebFetch != nil {
+		// JSON preserves the fixed field order of WebFetchOptions and escapes
+		// values, so every value has an unambiguous representation in the hash.
+		webFetch, _ := json.Marshal(r.WebFetch)
+		h.Write([]byte{0})
+		h.Write(webFetch)
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -94,18 +113,19 @@ type Response struct {
 }
 
 const (
-	ErrNotConfigured   = "claude_not_configured"
-	ErrAuthFailed      = "claude_auth_failed"
-	ErrRateLimited     = "claude_rate_limited"
-	ErrTimeout         = "claude_timeout"
-	ErrOverloaded      = "claude_overloaded"
-	ErrInvalidRequest  = "claude_invalid_request"
-	ErrRefused         = "claude_refused"
-	ErrOutputTruncated = "claude_output_truncated"
-	ErrInvalidJSON     = "claude_invalid_json"
-	ErrSchemaInvalid   = "claude_schema_invalid"
-	ErrDomainInvalid   = "claude_domain_invalid"
-	ErrUnavailable     = "claude_unavailable"
+	ErrNotConfigured       = "claude_not_configured"
+	ErrAuthFailed          = "claude_auth_failed"
+	ErrRateLimited         = "claude_rate_limited"
+	ErrTimeout             = "claude_timeout"
+	ErrOverloaded          = "claude_overloaded"
+	ErrInvalidRequest      = "claude_invalid_request"
+	ErrRefused             = "claude_refused"
+	ErrOutputTruncated     = "claude_output_truncated"
+	ErrInvalidJSON         = "claude_invalid_json"
+	ErrSchemaInvalid       = "claude_schema_invalid"
+	ErrDomainInvalid       = "claude_domain_invalid"
+	ErrUnavailable         = "claude_unavailable"
+	ErrMaterialFetchFailed = "material_fetch_failed"
 )
 
 // ProviderError is the only error shape Worker handlers need to understand.
@@ -136,6 +156,16 @@ func WrapError(code, detail string, cause error) *ProviderError {
 	e := ErrorForCode(code, detail)
 	e.cause = cause
 	return e
+}
+
+// MaterialFetchError returns a safe material-fetch error without retaining
+// upstream provider text, which can include source URLs or fetched content.
+func MaterialFetchError(retryable bool) *ProviderError {
+	return &ProviderError{
+		Code:      ErrMaterialFetchFailed,
+		Detail:    "Claude 无法提取该链接内容。",
+		Retryable: retryable,
+	}
 }
 
 func retryableCode(code string) bool {
