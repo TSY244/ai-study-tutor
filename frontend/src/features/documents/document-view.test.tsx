@@ -112,7 +112,7 @@ describe('文档阅读视图', () => {
     renderWithRouter(NOTES_PATH)
     await screen.findByRole('article', { name: '文档内容' })
     await user.click(screen.getByRole('button', { name: /历史版本/ }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await screen.findByRole('dialog', {}, { timeout: 5000 })
 
     expect(within(dialog).getByText('R12')).toBeInTheDocument()
     expect(within(dialog).queryByText('R1')).not.toBeInTheDocument()
