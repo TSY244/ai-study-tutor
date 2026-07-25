@@ -59,12 +59,13 @@ func TestProviderErrorRetryMatrix(t *testing.T) {
 func TestBuildLessonURLExtractRequest(t *testing.T) {
 	const (
 		allowedDomainSentinel = "allowed-domain-redaction-sentinel.invalid"
+		urlSentinel           = "url-redaction-sentinel"
 		systemSentinel        = "system-prompt-redaction-sentinel"
 		userSentinel          = "user-prompt-redaction-sentinel"
-		sourceSentinel        = "source-material-redaction-sentinel"
+		sourceTextSentinel    = "source-text-redaction-sentinel"
 		keySentinel           = "sk-ant-key-redaction-sentinel"
 	)
-	canonicalURL := "https://www.youtube.com/watch?v=" + sourceSentinel
+	canonicalURL := "https://www.youtube.com/watch?v=" + urlSentinel
 	req, err := BuildLessonURLExtractRequest(LessonURLExtractPromptInput{
 		URL:            canonicalURL,
 		AllowedDomains: []string{" " + allowedDomainSentinel + " ", "youtube.com"},
@@ -190,18 +191,26 @@ func TestBuildLessonURLExtractRequest(t *testing.T) {
 	probeWebFetch.AllowedDomains = append([]string(nil), req.WebFetch.AllowedDomains...)
 	redactionProbe.WebFetch = &probeWebFetch
 	redactionProbe.System = systemSentinel
-	redactionProbe.User = userSentinel + "\n" + keySentinel
+	redactionProbe.User = userSentinel + "\n" + sourceTextSentinel + "\n" + keySentinel
+	if !strings.Contains(redactionProbe.User, sourceTextSentinel) {
+		t.Fatal("redaction probe 必须包含原始来源文本 sentinel")
+	}
 	for _, built := range []Request{req, other, redactionProbe} {
 		encoded, _ := json.Marshal(built.RedactedLogFields())
 		for _, sentinel := range []string{
 			allowedDomainSentinel,
+			urlSentinel,
 			systemSentinel,
 			userSentinel,
-			sourceSentinel,
+			sourceTextSentinel,
 			keySentinel,
 		} {
 			for _, field := range built.RedactedLogFields() {
-				if value, ok := field.(string); ok && strings.Contains(value, sentinel) {
+				fieldJSON, err := json.Marshal(field)
+				if err != nil {
+					t.Fatal("脱敏日志字段无法编码")
+				}
+				if strings.Contains(string(fieldJSON), sentinel) {
 					t.Fatal("脱敏日志字段包含敏感 sentinel")
 				}
 			}
