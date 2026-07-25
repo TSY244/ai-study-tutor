@@ -8,6 +8,7 @@ import {
   invalidateJobChanged,
   invalidateLessonChanged,
 } from '@/api/invalidation'
+import { presentJobError } from '@/api/problem-messages'
 import { queryKeys } from '@/api/query-client'
 import { ErrorState } from '@/components/ui/error-state'
 import { SkeletonText } from '@/components/ui/skeleton'
@@ -110,7 +111,10 @@ export function ActiveJobCard({
         <p className="mt-1 text-sm text-text-muted">
           {job.status === 'succeeded'
             ? '生成完成，课时内容已就绪。'
-            : (job.error?.detail ?? job.message ?? '任务已结束。')}
+            : job.error
+              ? // code-first 呈现：不回显上游 detail（链接/Key/prompt）
+                presentJobError(job.error.code, job.retryable).message
+              : (job.message ?? '任务已结束。')}
         </p>
       )}
     </section>

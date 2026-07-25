@@ -65,6 +65,9 @@ export function UrlImportForm({ lesson }: { lesson: Lesson }) {
         <Label htmlFor="url-import-url" required>
           链接
         </Label>
+        <p className="text-sm text-text-muted">
+          由 Claude 在后台提取允许的 https:// 链接内容，并生成原文、教纲与笔记；离开页面任务仍继续。
+        </p>
         <Input
           id="url-import-url"
           type="url"

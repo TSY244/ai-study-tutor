@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { getResourceBusyInfo, presentProblem, presentProblemCode } from '@/api/problem-messages'
+import {
+  getResourceBusyInfo,
+  presentJobError,
+  presentProblem,
+  presentProblemCode,
+} from '@/api/problem-messages'
 import { ApiProblemError, KNOWN_PROBLEM_CODES } from '@/api/problem'
 
 describe('presentProblemCode', () => {
@@ -49,6 +54,68 @@ describe('presentProblem', () => {
 
   it('非 Problem 错误按 unknown_error 处理', () => {
     expect(presentProblem(new Error('boom'))).toEqual(presentProblemCode('unknown_error'))
+  })
+})
+
+describe('presentJobError', () => {
+  // 链接 + Key + prompt 片段：任何呈现文案都不得回显这类上游 detail。
+  const URL_SENTINEL = 'https://www.youtube.com/watch?v=secret0&utm_source=sk-ant-leaked'
+
+  it('URL 执行的稳定 Job code 都有可行动文案，且不含链接/Key/prompt 泄漏', () => {
+    const codes = [
+      'url_blocked',
+      'material_fetch_failed',
+      'material_empty_content',
+      'material_too_large',
+      'claude_timeout',
+      'claude_invalid_request',
+      'claude_invalid_json',
+      'claude_schema_invalid',
+      'claude_not_configured',
+    ]
+    for (const code of codes) {
+      for (const retryable of [true, false]) {
+        const presentation = presentJobError(code, retryable)
+        const text = `${presentation.title} ${presentation.message}`
+        expect(presentation.title.length, code).toBeGreaterThan(0)
+        expect(presentation.message.length, code).toBeGreaterThan(0)
+        expect(text, code).not.toContain(URL_SENTINEL)
+        expect(text, code).not.toContain('sk-ant')
+        expect(text, code).not.toContain('utm_source')
+        // 保留 Job 的 retryable 信号
+        expect(presentation.retryable, code).toBe(retryable)
+      }
+    }
+  })
+
+  it('material_fetch_failed 只靠 retryable 区分暂时性失败与内容不可访问', () => {
+    const temporary = presentJobError('material_fetch_failed', true)
+    const permanent = presentJobError('material_fetch_failed', false)
+    expect(temporary.message).not.toBe(permanent.message)
+    expect(temporary.retryable).toBe(true)
+    expect(permanent.retryable).toBe(false)
+    expect(temporary.message).toContain('重试')
+    expect(permanent.message).toContain('无法')
+  })
+
+  it('empty/oversize 说明下一步操作', () => {
+    expect(presentJobError('material_empty_content', false).message).toContain('文本')
+    expect(presentJobError('material_too_large', false).message).toMatch(/文本|文件/)
+  })
+
+  it('claude_invalid_request 说明部署网关需支持 Web Fetch', () => {
+    expect(presentJobError('claude_invalid_request', false).message).toContain('Web Fetch')
+  })
+
+  it('未映射的 Job code 回落到契约呈现（未知码兜底 unknown_error）', () => {
+    expect(presentJobError('claude_unavailable', true)).toEqual({
+      ...presentProblemCode('claude_unavailable'),
+      retryable: true,
+    })
+    expect(presentJobError('some_future_job_code', false)).toEqual({
+      ...presentProblemCode('unknown_error'),
+      retryable: false,
+    })
   })
 })
 

@@ -1,13 +1,61 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { http } from 'msw'
+import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 
+import type { Job } from '@/api/generated/model'
 import { isIdempotencyKey } from '@/lib/idempotency'
-import { JOB_FAILED_ID, JOB_RUNNING_ID, JOB_SUCCEEDED_ID } from '@/mocks/fixtures'
+import {
+  JOB_FAILED_ID,
+  JOB_RUNNING_ID,
+  JOB_SUCCEEDED_ID,
+  LESSON_CONFIDENCE_ID,
+} from '@/mocks/fixtures'
 import { server } from '@/mocks/server'
 import { captureRequests, problemResponse } from '@/test/mock-helpers'
 import { renderWithRouter } from '@/test/utils'
+
+const URL_JOB_ID = 'b0000000-0000-4000-8000-0000000000a1'
+
+/** 上游 detail 哨兵：链接 + Key，不可重试原因绝不回显。 */
+const SENTINEL_DETAIL =
+  'upstream 413: https://www.youtube.com/watch?v=secret0&utm_source=sk-ant-leaked'
+
+/** 失败不可重试的 URL 导入任务（material_too_large）。 */
+function stubNonRetryableUrlJob() {
+  const now = '2026-07-25T10:00:00Z'
+  const job: Job = {
+    id: URL_JOB_ID,
+    kind: 'lesson_import',
+    aggregate_type: 'lesson',
+    aggregate_id: LESSON_CONFIDENCE_ID,
+    generation_family: 'lesson_generation',
+    retry_of_job_id: null,
+    status: 'failed',
+    stage: 'Claude 提取链接内容',
+    progress: 40,
+    message: null,
+    attempt_count: 3,
+    max_attempts: 3,
+    retryable: false,
+    cancel_requested: false,
+    error: { code: 'material_too_large', detail: SENTINEL_DETAIL, retryable: false },
+    created_at: now,
+    started_at: now,
+    completed_at: now,
+    updated_at: now,
+  }
+  server.use(
+    http.get(`*/api/v1/jobs/${URL_JOB_ID}`, ({ request }) =>
+      HttpResponse.json(job, {
+        headers: { 'X-Request-ID': request.headers.get('X-Request-ID') ?? 'mock-request-id' },
+      }),
+    ),
+    http.get(`*/api/v1/jobs/${URL_JOB_ID}/events`, () =>
+      HttpResponse.json({ items: [], page_info: { next_cursor: null, has_more: false } }),
+    ),
+  )
+}
 
 /** 任务详情操作：取消（确认框）与重试（幂等 + 跳转新任务）。 */
 describe('JobActions', () => {
@@ -52,6 +100,21 @@ describe('JobActions', () => {
     expect(await screen.findByText('已成功')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重试任务' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '取消任务' })).not.toBeInTheDocument()
+  })
+
+  it('失败不可重试：原因按 code 映射文案，不回显原始 detail', async () => {
+    stubNonRetryableUrlJob()
+    renderWithRouter(`/jobs/${URL_JOB_ID}`)
+
+    const actions = await screen.findByLabelText('任务操作')
+    // 不可重试原因：material_too_large 的稳定文案（说明下一步操作）
+    expect(actions).toHaveTextContent('不可重试')
+    expect(actions).toHaveTextContent('超出可处理的长度')
+    // 原始 detail 中的链接/Key 哨兵绝不渲染
+    expect(actions.textContent).not.toContain('youtube.com')
+    expect(actions.textContent).not.toContain('sk-ant')
+    // 不可重试任务不提供重试按钮
+    expect(screen.queryByRole('button', { name: '重试任务' })).not.toBeInTheDocument()
   })
 
   it('服务端判 job_not_retryable：错误留在详情页展示', async () => {

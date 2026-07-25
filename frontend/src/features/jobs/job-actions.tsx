@@ -2,7 +2,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 
 import type { Job } from '@/api/generated/model'
-import { presentProblem } from '@/api/problem-messages'
+import { presentJobError, presentProblem } from '@/api/problem-messages'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useCancelJob, useRetryJob } from '@/features/jobs/use-job-actions'
@@ -26,7 +26,10 @@ export function JobActions({ job }: { job: Job }) {
   const retryable = job.status === 'failed' && job.retryable
   const notRetryableReason =
     job.status === 'failed' && !job.retryable
-      ? (job.error?.detail ?? '该任务的失败类型不支持重试。')
+      ? // code-first 呈现：不回显上游 detail（链接/Key/prompt）
+        job.error
+        ? presentJobError(job.error.code, job.retryable).message
+        : '该任务的失败类型不支持重试。'
       : null
 
   const confirmCancel = async () => {

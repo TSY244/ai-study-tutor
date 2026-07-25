@@ -113,6 +113,8 @@ describe('ImportPanel', () => {
     renderWithRouter(FAILED_LESSON_URL)
 
     await user.click(await screen.findByRole('tab', { name: '链接' }))
+    // 说明文案：由 Claude 在后台提取允许的 https 链接
+    expect(screen.getByText(/由 Claude 在后台提取/)).toBeInTheDocument()
     const urlInput = await screen.findByRole('textbox', { name: /链接/ })
     await user.type(urlInput, 'http://insecure.example.com/a')
     await user.click(screen.getByRole('button', { name: '导入链接' }))

@@ -43,6 +43,11 @@ const PROBLEM_PRESENTATIONS: Record<KnownProblemCode, ProblemPresentation> = {
     message: 'Worker 尚未配置 Claude Key。请在部署侧配置（浏览器不保存任何 Key）。',
     retryable: false,
   },
+  claude_code_settings_unavailable: {
+    title: 'Claude Code 设置不可用',
+    message: '无法写入本机 Claude Code 设置。请检查 ~/.claude 目录挂载和权限后重试。',
+    retryable: true,
+  },
   claude_unavailable: {
     title: 'AI 服务暂不可用',
     message: '任务和你的输入已保留。请稍后重试，或先在系统状态页查看服务情况。',
@@ -126,6 +131,65 @@ const FALLBACK: ProblemPresentation = PROBLEM_PRESENTATIONS.unknown_error
 /** 按 code 取稳定呈现；契约新增码未映射时兜底为 unknown_error（不崩溃）。 */
 export function presentProblemCode(code: string): ProblemPresentation {
   return code in PROBLEM_PRESENTATIONS ? PROBLEM_PRESENTATIONS[code as KnownProblemCode] : FALLBACK
+}
+
+/**
+ * Worker-only 的 Job 错误码（04 契约未枚举，不改动 OpenAPI）→ 稳定呈现。
+ * 文案只依赖 code 与 Job 的 retryable 信号，绝不解析/回显上游 detail
+ * （链接、Key、prompt 一律不出现）。retryable 取自 Job 本身，
+ * 调用方拿到的 presentation.retryable 始终与 Job 一致。
+ */
+const JOB_ERROR_MESSAGES: Record<string, (retryable: boolean) => { title: string; message: string }> =
+  {
+    url_blocked: () => ({
+      title: '链接无法导入',
+      message: '该链接不在允许导入的范围内。请更换受支持的链接，或改用文本、文件导入。',
+    }),
+    material_fetch_failed: (retryable) =>
+      retryable
+        ? {
+            title: '链接内容提取失败',
+            message:
+              '提取链接内容时遇到暂时性问题。请稍后重试；若多次失败，请改用文本或文件导入。',
+          }
+        : {
+            title: '无法访问链接内容',
+            message: 'Claude 无法获取该链接的内容。请确认链接可公开访问，或改用文本、文件导入。',
+          },
+    material_empty_content: () => ({
+      title: '未提取到有效内容',
+      message: '该链接没有可提取的正文内容。请把需要的内容复制为文本导入，或改用文件上传。',
+    }),
+    material_too_large: () => ({
+      title: '链接内容超出大小限制',
+      message: '提取的内容超出可处理的长度。请截取需要的部分，改用文本或文件分批导入。',
+    }),
+    claude_timeout: () => ({
+      title: 'Claude 响应超时',
+      message: '等待 Claude 响应超时。任务和你的输入已保留，请稍后重试。',
+    }),
+    claude_invalid_request: () => ({
+      title: 'Claude 请求被拒绝',
+      message: '导入链接需要部署的网关支持 Claude Web Fetch。请检查部署配置后重试。',
+    }),
+    claude_invalid_json: () => ({
+      title: 'Claude 返回结果无法解析',
+      message: 'Claude 返回了格式异常的结果。请重试；若持续出现，请改用文本或文件导入。',
+    }),
+    claude_schema_invalid: () => ({
+      title: 'Claude 返回结果不完整',
+      message: 'Claude 返回的结果缺少必需内容。请重试；若持续出现，请改用文本或文件导入。',
+    }),
+  }
+
+/**
+ * 异步任务失败的 code-first 呈现：Worker-only 码走本地窄映射，
+ * 其余码回落到契约呈现；retryable 始终保留 Job 的信号。
+ */
+export function presentJobError(code: string, retryable: boolean): ProblemPresentation {
+  const jobSpecific = JOB_ERROR_MESSAGES[code]
+  if (jobSpecific) return { ...jobSpecific(retryable), retryable }
+  return { ...presentProblemCode(code), retryable }
 }
 
 /**

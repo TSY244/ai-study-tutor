@@ -4,6 +4,7 @@ import { CircleAlert } from 'lucide-react'
 
 import { getJob } from '@/api/generated/endpoints/jobs/jobs'
 import { getLesson } from '@/api/generated/endpoints/lessons/lessons'
+import { presentJobError } from '@/api/problem-messages'
 import { queryKeys } from '@/api/query-client'
 import { Badge } from '@/components/ui/badge'
 import { ErrorState } from '@/components/ui/error-state'
@@ -56,7 +57,7 @@ function JobDetailPage() {
   const active = isJobActive(job.status)
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="mx-auto max-w-2xl space-y-5">
       <PageHeader
         title={JOB_KIND_LABEL[job.kind]}
         actions={<Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>}
@@ -89,7 +90,9 @@ function JobDetailPage() {
             <CircleAlert aria-hidden="true" className="h-4 w-4 shrink-0" />
             任务失败
           </p>
-          <p className="mt-1 text-sm text-text">{job.error.detail}</p>
+          <p className="mt-1 text-sm text-text">
+            {presentJobError(job.error.code, job.retryable).message}
+          </p>
           <p className="mt-2 text-sm text-text-subtle">
             错误码 <span className="font-mono">{job.error.code}</span> ·{' '}
             {job.retryable ? '可重试' : '不可重试'}

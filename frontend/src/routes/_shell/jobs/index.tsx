@@ -4,6 +4,7 @@ import { ChevronRight, ListTodo } from 'lucide-react'
 
 import { listJobs } from '@/api/generated/endpoints/jobs/jobs'
 import type { Job } from '@/api/generated/model'
+import { presentJobError } from '@/api/problem-messages'
 import { queryKeys } from '@/api/query-client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -116,7 +117,12 @@ function JobRow({ job }: { job: Job }) {
               <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
             </span>
             <span className="mt-0.5 block truncate text-sm text-text-muted">
-              {active ? job.stage : (job.error?.detail ?? job.message ?? job.stage)}
+              {active
+                ? job.stage
+                : job.error
+                  ? // code-first 呈现：不回显上游 detail（链接/Key/prompt）
+                    presentJobError(job.error.code, job.retryable).message
+                  : (job.message ?? job.stage)}
             </span>
           </span>
           <span className="shrink-0 text-xs text-text-subtle">
