@@ -103,6 +103,18 @@ type Handler struct {
 
 	// AI 仅在 Worker 显式注入 provider 时启用；nil 表示降级为只发布 raw_text。
 	AI aipkg.Provider
+	// AIAvailable 可选，用于多 Key 网关热重载：false 时保持 raw_text
+	// 降级，运行期新增启用 Key 后无需重启即可开始生成文档。
+	AIAvailable func() bool
+
+	// URLImportAI 是 URL 素材专用的网关限定 Provider（GatewayOnly，无
+	// legacy 回退）。nil 或 URLImportAvailable()=false 时 URL 导入以
+	// 非重试 claude_not_configured 失败：不做旧的 raw-text-only 降级，
+	// 也不回退 legacy 直连 Key 或本地下载管线。
+	URLImportAI aipkg.Provider
+	// URLImportAvailable 可选，热重载判定网关当前是否有启用 Key；
+	// nil 视为可用（测试便捷）。
+	URLImportAvailable func() bool
 
 	// 外部工具名（参数数组调用，无 shell）。
 	YtDlpBin     string
@@ -174,6 +186,12 @@ func (h *Handler) Execute(ctx context.Context, ex *worker.Execution) (*worker.Ou
 		return nil, worker.WrapError(worker.ErrCodeInternal, "读取素材失败，将自动重试。", true, err)
 	}
 
+	// URL 素材在通用文件获取序列之前分支：走 Claude Web Fetch 提取管线，
+	// 不经过本地 DNS、重定向预检、yt-dlp、FFmpeg 或 Whisper。
+	if p.Kind == material.KindURL {
+		return h.executeURL(ctx, ex, p, m)
+	}
+
 	if err := ex.Stage(ctx, StageAcquiring, progressAcquiring, "获取素材内容"); err != nil {
 		return nil, err
 	}
@@ -229,8 +247,8 @@ func (h *Handler) Execute(ctx context.Context, ex *worker.Execution) (*worker.Ou
 			"未提取到有效文本内容。请检查文件内容或直接粘贴文本。", false)
 	}
 	generated := map[string]string{}
-	if h.AI != nil {
-		generated, err = h.generateLessonDocuments(ctx, ex, p, norm)
+	if h.AI != nil && (h.AIAvailable == nil || h.AIAvailable()) {
+		generated, err = h.generateLessonDocuments(ctx, ex, p, norm, h.AI)
 		if err != nil {
 			return nil, err
 		}
@@ -283,22 +301,125 @@ func (h *Handler) acquire(ctx context.Context, ex *worker.Execution, p payload, 
 			return nil, err
 		}
 		return &acquisition{path: dst}, nil
-
-	case material.KindURL:
-		raw := p.SourceURL
-		if raw == "" && m.SourceURL != nil {
-			raw = *m.SourceURL
-		}
-		path, version, info, err := h.acquireURL(ctx, raw, p.PreferredLanguage, effectiveMode(h, p), ex.WorkDir)
-		if err != nil {
-			return nil, err
-		}
-		return &acquisition{path: path, dtype: TypeTXT, parserVersion: version, source: info}, nil
 	}
 	return nil, worker.NewError(worker.ErrCodeUnsupportedType, "未知素材类型。", false)
 }
 
-func (h *Handler) generateLessonDocuments(ctx context.Context, ex *worker.Execution, p payload, rawText string) (map[string]string, error) {
+// executeURL 运行 URL 素材的 Claude Web Fetch 管线：canonical 再校验 ->
+// Claude 提取 -> 规范化/切分 -> 同一网关限定 Provider 生成两份文档 ->
+// 一次性发布（publishFunc 事务保持 all-or-nothing）。
+// 全程不经过本地 DNS、重定向预检、yt-dlp、FFmpeg 或 Whisper。
+func (h *Handler) executeURL(ctx context.Context, ex *worker.Execution, p payload, m *material.Material) (*worker.Outcome, error) {
+	if h.URLImportAI == nil || (h.URLImportAvailable != nil && !h.URLImportAvailable()) {
+		return nil, worker.NewError(worker.ErrCodeClaudeNotConfigured,
+			"Claude 网关未配置启用的 Key，无法导入链接素材；请配置后重试。", false)
+	}
+	raw := p.SourceURL
+	if raw == "" && m.SourceURL != nil {
+		raw = *m.SourceURL
+	}
+	if err := ex.Stage(ctx, StageAcquiring, progressAcquiring, "校验素材链接"); err != nil {
+		return nil, err
+	}
+	canonical, domains, err := canonicalClaudeURL(raw, h.URLAllowlist)
+	if err != nil {
+		return nil, err
+	}
+	req, err := aipkg.BuildLessonURLExtractRequest(aipkg.LessonURLExtractPromptInput{
+		URL:            canonical,
+		AllowedDomains: domains,
+	})
+	if err != nil {
+		return nil, worker.WrapError(worker.ErrCodeInternal, "构建 Claude 请求失败。", false, err)
+	}
+
+	if err := ex.Stage(ctx, StageExtracting, progressExtracting, "Claude 提取链接内容"); err != nil {
+		return nil, err
+	}
+	res, err := h.generateClaudeURL(ctx, ex.Job.ID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := ex.Stage(ctx, StageNormalizing, progressNormalizing, "规范化文本"); err != nil {
+		return nil, err
+	}
+	norm := Normalize(res.RawTextMarkdown)
+	if err := validateClaudeURLText(norm, h.MaxTextRunes); err != nil {
+		return nil, err
+	}
+
+	if err := ex.Stage(ctx, StageChunking, progressChunking, "切分文本块"); err != nil {
+		return nil, err
+	}
+	chunks := ChunkText(norm)
+
+	if err := ex.Stage(ctx, StageValidating, progressValidating, "校验解析结果"); err != nil {
+		return nil, err
+	}
+	if len(chunks) == 0 {
+		return nil, worker.NewError(worker.ErrCodeEmptyContent,
+			"未提取到有效文本内容。请检查链接内容或直接粘贴文本。", false)
+	}
+
+	// URL 素材的教纲/笔记必须由同一网关限定 Provider 生成（防止提取与
+	// 生成之间 Key 被移除导致 legacy 回退），且两份都非空才允许进入
+	// 发布事务，保证三份文档 all-or-nothing。
+	generated, err := h.generateLessonDocuments(ctx, ex, p, norm, h.URLImportAI)
+	if err != nil {
+		return nil, err
+	}
+	for _, kind := range []string{document.KindTeacherOutline, document.KindStudentNotes} {
+		if strings.TrimSpace(generated[kind]) == "" {
+			return nil, worker.NewError(worker.ErrCodeClaudeDomainInvalid,
+				"Claude 生成的学习文档不完整，将自动重试。", true)
+		}
+	}
+
+	if err := ex.Stage(ctx, StagePublishing, progressPublishing, "发布文档版本"); err != nil {
+		return nil, err
+	}
+	return &worker.Outcome{
+		Publish: h.publishFunc(ex.Job, p, m, norm, TypeTXT, claudeURLParserVersion,
+			claudeURLSourceInfo(res, canonical), chunks, generated),
+	}, nil
+}
+
+// generateClaudeURL 调用 URL 专用 Provider 提取链接正文，并按
+// generateMarkdown 同款模式恰好记录一条 purpose=lesson_url_extract 的
+// 脱敏 ai_run；Claude 错误经 claudeWorkerError 保留错误码与重试标志
+// （ErrMaterialFetchFailed -> worker.ErrCodeMaterialFetchFailed）。
+func (h *Handler) generateClaudeURL(ctx context.Context, jobID uuid.UUID, req aipkg.Request) (claudeURLResult, error) {
+	resp, callErr := h.URLImportAI.Generate(ctx, req)
+	var res claudeURLResult
+	runErr := callErr
+	if callErr == nil {
+		res, runErr = parseClaudeURLResult(resp.JSON)
+	}
+	if err := h.aiRuns.Create(ctx, h.Pool, aipkg.NewRun(jobID, req, resp, runErr)); err != nil {
+		return claudeURLResult{}, worker.WrapError(worker.ErrCodeInternal, "记录 Claude 调用失败，将自动重试。", true, err)
+	}
+	if runErr != nil {
+		return claudeURLResult{}, claudeWorkerError(runErr)
+	}
+	return res, nil
+}
+
+// validateClaudeURLText 校验 Claude 提取的正文：空文本与超长映射为稳定的
+// 不可重试错误码（与本地管线同一语义）。
+func validateClaudeURLText(norm string, maxRunes int) error {
+	if norm == "" {
+		return worker.NewError(worker.ErrCodeEmptyContent,
+			"未提取到有效文本内容。请检查链接内容或直接粘贴文本。", false)
+	}
+	if len([]rune(norm)) > maxRunes {
+		return worker.NewError(worker.ErrCodeTooLarge,
+			fmt.Sprintf("文本超过上限（%d 字符）。请拆分素材后重试。", maxRunes), false)
+	}
+	return nil
+}
+
+func (h *Handler) generateLessonDocuments(ctx context.Context, ex *worker.Execution, p payload, rawText string, provider aipkg.Provider) (map[string]string, error) {
 	les, err := h.lessons.GetByID(ctx, h.Pool, p.LessonID)
 	if errors.Is(err, lesson.ErrNotFound) {
 		return nil, worker.NewError(worker.ErrCodeParseFailed, "课时不存在或已删除。", false)
@@ -327,7 +448,7 @@ func (h *Handler) generateLessonDocuments(ctx context.Context, ex *worker.Execut
 		if err != nil {
 			return nil, worker.WrapError(worker.ErrCodeInternal, "构建 Claude 请求失败。", false, err)
 		}
-		md, err := h.generateMarkdown(ctx, ex.Job.ID, req)
+		md, err := h.generateMarkdown(ctx, ex.Job.ID, req, provider)
 		if err != nil {
 			return nil, err
 		}
@@ -336,8 +457,8 @@ func (h *Handler) generateLessonDocuments(ctx context.Context, ex *worker.Execut
 	return out, nil
 }
 
-func (h *Handler) generateMarkdown(ctx context.Context, jobID uuid.UUID, req aipkg.Request) (string, error) {
-	resp, callErr := h.AI.Generate(ctx, req)
+func (h *Handler) generateMarkdown(ctx context.Context, jobID uuid.UUID, req aipkg.Request, provider aipkg.Provider) (string, error) {
+	resp, callErr := provider.Generate(ctx, req)
 	var parsed struct {
 		Markdown string `json:"markdown"`
 	}

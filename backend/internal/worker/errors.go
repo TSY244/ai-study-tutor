@@ -19,7 +19,7 @@ import (
 const (
 	// 获取阶段（acquiring）。
 	ErrCodeURLBlocked          = "url_blocked"           // Worker 二次 SSRF 校验失败（不可重试）
-	ErrCodeMaterialFetchFailed = "material_fetch_failed" // 下载/外部工具失败（按原因分类）
+	ErrCodeMaterialFetchFailed = "material_fetch_failed" // 本地下载/外部工具失败或 Claude 链接提取失败（按原因分类）
 	ErrCodeTranscriptRequired  = "transcript_required"   // 无字幕且未配置转写（不可重试，可行动）
 	ErrCodeToolMissing         = "tool_missing"          // 外部二进制缺失（不可重试）
 	// 解析阶段（detecting/extracting/normalizing）。

@@ -22,9 +22,12 @@ import (
 //
 //   - 仅 https；host 必须在白名单内；DNS 解析结果必须全部公网
 //     （Worker 侧二次校验，API 创建时的校验不能覆盖 DNS 重绑定）；
-//   - 预检请求跟随重定向时逐跳重复上述校验，最多 maxRedirects 跳；
-//   - 下载交给 yt-dlp（参数数组），文件落盘于 Job 隔离目录，体积受
-//     --max-filesize 与任务总时限约束。
+//   - 预检请求跟随重定向时逐跳重复上述校验，最多 maxRedirects 跳。
+//
+// 注意：URL 素材导入已改走 Claude Web Fetch（见 claude_url.go 与
+// Handler.executeURL），不再从这里进入。本文件保留的本地辅助仅供既有
+// 单元测试覆盖（checkURLHost/validateRedirectChain/pickSubtitleFile/
+// classifyProcErr），生产路径不再调用。
 
 const maxRedirects = 5
 
@@ -43,63 +46,6 @@ type sourceInfo struct {
 	// ExtractionNote 是 Claude Web Fetch 路径的非敏感提取说明（如内容
 	// 受限原因）；本地下载路径不写入该字段。
 	ExtractionNote string `json:"extraction_note,omitempty"`
-}
-
-// acquireURL 获取 URL 素材文本：字幕优先（人工 -> 自动），无字幕按
-// 转写模式走 whisper_local 或返回可行动 transcript_required。
-// 返回已清洗文本文件路径、解析器版本与来源摘要。
-func (h *Handler) acquireURL(ctx context.Context, rawURL, preferredLang, effectiveMode, workDir string) (string, string, *sourceInfo, error) {
-	if err := h.checkURLHost(ctx, rawURL); err != nil {
-		return "", "", nil, err
-	}
-	if err := h.validateRedirectChain(ctx, rawURL); err != nil {
-		return "", "", nil, err
-	}
-
-	info := &sourceInfo{}
-	// 记录下载工具版本（03 §8.2）；失败不阻断主流程。
-	if res, err := h.Proc.Run(ctx, proc.Cmd{Name: h.YtDlpBin, Args: []string{"--version"}, Dir: workDir}); err == nil {
-		info.YtDlpVersion = strings.TrimSpace(string(res.Stdout))
-	}
-
-	langs := subtitleLangs(preferredLang)
-	// 1) 人工字幕。
-	path, lang, err := h.downloadSubtitles(ctx, rawURL, langs, false, workDir)
-	if err != nil {
-		return "", "", nil, err
-	}
-	if path != "" {
-		info.SubtitleOrigin, info.SubtitleLang = "manual", lang
-		h.loadInfoJSON(workDir, info)
-		return path, "subtitle/v1", info, nil
-	}
-	// 2) 自动字幕。
-	path, lang, err = h.downloadSubtitles(ctx, rawURL, langs, true, workDir)
-	if err != nil {
-		return "", "", nil, err
-	}
-	if path != "" {
-		info.SubtitleOrigin, info.SubtitleLang = "auto", lang
-		h.loadInfoJSON(workDir, info)
-		return path, "subtitle/v1", info, nil
-	}
-
-	// 3) 无字幕：按转写模式处置。
-	h.loadInfoJSON(workDir, info)
-	if effectiveMode != "whisper_local" {
-		return "", "", nil, worker.NewError(worker.ErrCodeTranscriptRequired,
-			"未能获取字幕。请上传字幕文件（.srt/.vtt）、直接粘贴文本，或配置 TRANSCRIPTION_MODE=whisper_local 后重试。", false)
-	}
-	text, err := h.transcribeURLAudio(ctx, rawURL, workDir)
-	if err != nil {
-		return "", "", nil, err
-	}
-	info.SubtitleOrigin = "whisper_local"
-	out := filepath.Join(workDir, "acquired.txt")
-	if err := os.WriteFile(out, []byte(text), 0o644); err != nil {
-		return "", "", nil, worker.WrapError(worker.ErrCodeInternal, "写入临时文件失败，将自动重试。", true, err)
-	}
-	return out, "whisper/v1", info, nil
 }
 
 // checkURLHost 校验单个 URL：https + 白名单 + DNS 全公网。
@@ -183,33 +129,6 @@ func subtitleLangs(preferred string) string {
 	return strings.Join(base, ",")
 }
 
-// downloadSubtitles 调 yt-dlp 下载字幕（auto=false 人工，true 自动）。
-// 返回清洗后的文本文件路径与字幕语言；无可用字幕返回 ("", "", nil)。
-func (h *Handler) downloadSubtitles(ctx context.Context, rawURL, langs string, auto bool, workDir string) (string, string, error) {
-	modeFlag := "--write-subs"
-	noFlag := "--no-write-auto-subs"
-	if auto {
-		modeFlag = "--write-auto-subs"
-		noFlag = "--no-write-subs"
-	}
-	args := []string{
-		"--skip-download", modeFlag, noFlag,
-		"--sub-langs", langs,
-		"--sub-format", "vtt/srt/lrc/best",
-		"--no-playlist",
-		"--socket-timeout", "30",
-		"--retries", "3",
-		"--max-filesize", fmt.Sprintf("%d", h.maxDownloadBytes()),
-		"--write-info-json",
-		"-o", filepath.Join(workDir, "src.%(ext)s"),
-		rawURL,
-	}
-	if _, err := h.Proc.Run(ctx, proc.Cmd{Name: h.YtDlpBin, Args: args, Dir: workDir}); err != nil {
-		return "", "", classifyProcErr(h.YtDlpBin, err)
-	}
-	return pickSubtitleFile(workDir, langs)
-}
-
 // pickSubtitleFile 在工作目录扫描字幕文件，清洗后写入 acquired.txt。
 // 偏好：语言列表靠前 > vtt > srt > lrc > txt；文件名排序保证确定性。
 func pickSubtitleFile(workDir, langs string) (string, string, error) {
@@ -281,28 +200,8 @@ func pickSubtitleFile(workDir, langs string) (string, string, error) {
 	return "", "", nil
 }
 
-// transcribeURLAudio 下载音轨并本地 Whisper 转写（whisper_local 模式）。
-func (h *Handler) transcribeURLAudio(ctx context.Context, rawURL, workDir string) (string, error) {
-	args := []string{
-		"-x", "--audio-format", "wav", "--audio-quality", "0",
-		"--no-playlist",
-		"--socket-timeout", "30",
-		"--retries", "3",
-		"--max-filesize", fmt.Sprintf("%d", h.maxDownloadBytes()),
-		"-o", filepath.Join(workDir, "audio.%(ext)s"),
-		rawURL,
-	}
-	if _, err := h.Proc.Run(ctx, proc.Cmd{Name: h.YtDlpBin, Args: args, Dir: workDir}); err != nil {
-		return "", classifyProcErr(h.YtDlpBin, err)
-	}
-	wav := filepath.Join(workDir, "audio.wav")
-	if _, err := os.Stat(wav); err != nil {
-		return "", worker.NewError(worker.ErrCodeMaterialFetchFailed, "音轨下载未产出预期文件。", false)
-	}
-	return h.runWhisper(ctx, wav, workDir)
-}
-
 // runWhisper 调用本地 Whisper CLI 转写 wav 文件，返回清洗文本。
+// 保留给上传音视频的 whisper_local 转写（extract.go），URL 路径不再使用。
 func (h *Handler) runWhisper(ctx context.Context, wavPath, workDir string) (string, error) {
 	if strings.TrimSpace(h.WhisperModelPath) == "" {
 		return "", worker.NewError(worker.ErrCodeToolMissing,
@@ -372,6 +271,7 @@ func containsAny(s string, subs ...string) bool {
 }
 
 // loadInfoJSON 读取 yt-dlp info.json 中的安全字段（标题/时长/来源）。
+// 保留给既有单元测试；生产 URL 路径已改走 Claude Web Fetch，不再调用。
 func (h *Handler) loadInfoJSON(workDir string, info *sourceInfo) {
 	entries, err := os.ReadDir(workDir)
 	if err != nil {

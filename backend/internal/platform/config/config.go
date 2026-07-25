@@ -12,6 +12,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -82,13 +83,37 @@ type MaintenanceConfig struct {
 type ClaudeConfig struct {
 	// apiKey is the Anthropic key read from ANTHROPIC_API_KEY_FILE.
 	// Unexported so it cannot leak through %+v / slog by accident.
-	apiKey          string
-	KeyFile         string
-	KeyFilePresent  bool // file existed and was readable
-	Provider        string
-	Model           string
-	RequestTimeout  time.Duration
-	MaxOutputTokens int
+	apiKey         string
+	KeyFile        string
+	KeyFilePresent bool // file existed and was readable
+	Provider       string
+	// AnthropicBaseURL 是 Claude 兼容网关的非敏感基础地址；Worker 在其后
+	// 追加 /v1/messages。默认指向 Anthropic 官方 API。
+	AnthropicBaseURL string
+	Model            string
+	RequestTimeout   time.Duration
+	MaxOutputTokens  int
+	// GatewayConfigFile 是 Claude 多 Key 网关配置（keys.json）路径；
+	// api 与 worker 都读取。为空表示未启用网关，回退到单 Key 行为。
+	GatewayConfigFile string
+	// GatewayWriteEnabled 仅 api 使用：开启 /system/claude-keys 写端点；
+	// 默认关闭（只读）。
+	GatewayWriteEnabled bool
+	// ClaudeCodeSettingsFile 仅 api 使用：映射到宿主机 ~/.claude/settings.json
+	// 的容器内固定文件路径。它不包含密钥。
+	ClaudeCodeSettingsFile string
+}
+
+const defaultAnthropicBaseURL = "https://api.anthropic.com"
+
+// AnthropicMessagesEndpoint returns the complete Messages API URL. Operators
+// may provide either a base URL or the full /v1/messages endpoint.
+func (c ClaudeConfig) AnthropicMessagesEndpoint() string {
+	base := strings.TrimRight(strings.TrimSpace(c.AnthropicBaseURL), "/")
+	if strings.HasSuffix(base, "/v1/messages") {
+		return base
+	}
+	return base + "/v1/messages"
 }
 
 // AnthropicKey returns the configured key and whether AI calls are possible.
@@ -104,6 +129,7 @@ func (c ClaudeConfig) Configured() bool { return c.apiKey != "" }
 type MaterialConfig struct {
 	MaxDownloadBytes  int64
 	URLAllowlist      []string
+	APIDNSValidation  bool
 	TranscriptionMode string
 	WhisperModelPath  string
 }
@@ -264,6 +290,12 @@ func (c *Config) loadClaude(getEnv func(string) string, service string) error {
 			c.Claude.KeyFilePresent = true
 		}
 	}
+	baseURL := strings.TrimRight(envOr(getEnv, "ANTHROPIC_BASE_URL", defaultAnthropicBaseURL), "/")
+	parsedBaseURL, err := url.ParseRequestURI(baseURL)
+	if err != nil || parsedBaseURL.Scheme != "https" || parsedBaseURL.Host == "" {
+		return fmt.Errorf("ANTHROPIC_BASE_URL 必须是有效的 https URL")
+	}
+	c.Claude.AnthropicBaseURL = baseURL
 	c.Claude.Model = getEnv("CLAUDE_MODEL_DEFAULT")
 	if timeout, err := durationOr(getEnv, "CLAUDE_REQUEST_TIMEOUT", 300*time.Second); err == nil {
 		c.Claude.RequestTimeout = timeout
@@ -271,6 +303,13 @@ func (c *Config) loadClaude(getEnv func(string) string, service string) error {
 	if tokens, err := intOr(getEnv, "CLAUDE_MAX_OUTPUT_TOKENS", 8192); err == nil {
 		c.Claude.MaxOutputTokens = int(tokens)
 	}
+	c.Claude.GatewayConfigFile = strings.TrimSpace(getEnv("CLAUDE_GATEWAY_CONFIG_FILE"))
+	writeEnabled, err := boolOr(getEnv, "CLAUDE_GATEWAY_WRITE_ENABLED", false)
+	if err != nil {
+		return err
+	}
+	c.Claude.GatewayWriteEnabled = writeEnabled
+	c.Claude.ClaudeCodeSettingsFile = strings.TrimSpace(getEnv("CLAUDE_CODE_SETTINGS_FILE"))
 	return nil
 }
 
@@ -279,9 +318,14 @@ func (c *Config) loadMaterial(getEnv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	apiDNSValidation, err := boolOr(getEnv, "URL_API_DNS_VALIDATION", true)
+	if err != nil {
+		return err
+	}
 	c.Material = MaterialConfig{
 		MaxDownloadBytes:  maxDownload,
 		URLAllowlist:      csvOr(getEnv, "URL_ALLOWLIST", nil),
+		APIDNSValidation:  apiDNSValidation,
 		TranscriptionMode: envOr(getEnv, "TRANSCRIPTION_MODE", "subtitle_only"),
 		WhisperModelPath:  getEnv("WHISPER_MODEL_PATH"),
 	}
@@ -298,17 +342,20 @@ func (c *Config) loadMaterial(getEnv func(string) string) error {
 func (c Config) SafeSummary() map[string]any {
 	_, claudeConfigured := c.Claude.AnthropicKey()
 	return map[string]any{
-		"service":            c.Service,
-		"env":                c.Env,
-		"version":            c.Version,
-		"http_addr":          c.HTTP.Addr,
-		"db_configured":      c.DB.URL != "",
-		"data_dir":           c.DataDir,
-		"worker_id":          c.Worker.ID,
-		"worker_concurrency": c.Worker.Concurrency,
-		"claude_configured":  claudeConfigured,
-		"claude_provider":    c.Claude.Provider,
-		"claude_model":       c.Claude.Model,
+		"service":                         c.Service,
+		"env":                             c.Env,
+		"version":                         c.Version,
+		"http_addr":                       c.HTTP.Addr,
+		"db_configured":                   c.DB.URL != "",
+		"data_dir":                        c.DataDir,
+		"worker_id":                       c.Worker.ID,
+		"worker_concurrency":              c.Worker.Concurrency,
+		"claude_configured":               claudeConfigured,
+		"claude_provider":                 c.Claude.Provider,
+		"claude_model":                    c.Claude.Model,
+		"claude_gateway_configured":       c.Claude.GatewayConfigFile != "",
+		"claude_gateway_write_enabled":    c.Claude.GatewayWriteEnabled,
+		"claude_code_settings_configured": c.Claude.ClaudeCodeSettingsFile != "",
 	}
 }
 
@@ -360,6 +407,18 @@ func durationOr(getEnv func(string) string, key string, fallback time.Duration) 
 		return 0, fmt.Errorf("%s 不是合法时长（如 60s/5m）", key)
 	}
 	return d, nil
+}
+
+func boolOr(getEnv func(string) string, key string, fallback bool) (bool, error) {
+	v := strings.TrimSpace(getEnv(key))
+	if v == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s 不是合法布尔值（true/false）", key)
+	}
+	return b, nil
 }
 
 // secretFromFileOrEnv prefers the *_FILE variant; the plain env var is only

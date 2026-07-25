@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	aipkg "github.com/TSY244/ai-study-tutor/backend/internal/ai"
+	"github.com/TSY244/ai-study-tutor/backend/internal/claudegateway"
 	"github.com/TSY244/ai-study-tutor/backend/internal/filestore"
 	"github.com/TSY244/ai-study-tutor/backend/internal/idempotency"
 	"github.com/TSY244/ai-study-tutor/backend/internal/job"
@@ -49,29 +50,28 @@ func main() {
 
 	// Claude 是能力降级：Key 缺失只禁用 AI Job，不影响进程启动。
 	anthropicKey, claudeOK := cfg.Claude.AnthropicKey()
-	if cfg.Claude.Provider == "fake" {
+	providers := buildClaudeProviders(cfg, anthropicKey, claudeOK, logger)
+	gateway := providers.Gateway
+	gatewayKeys := providers.GatewayEnabledKeys
+
+	switch {
+	case cfg.Claude.Provider == "fake":
 		logger.Warn("claude_capability", slog.String("status", "fake_local"))
-	} else if claudeOK {
+	case gateway != nil && gatewayKeys > 0:
+		logger.Info("claude_capability",
+			slog.String("status", "gateway_configured"),
+			slog.Int("enabled_keys", gatewayKeys),
+		)
+	case claudeOK:
 		logger.Info("claude_capability", slog.String("status", "configured"))
-	} else {
+	default:
 		logger.Warn("claude_capability",
 			slog.String("status", "not_configured"),
 			slog.String("error_code", "claude_not_configured"),
 		)
 	}
-	aiProvider := aipkg.Provider(aipkg.NotConfiguredProvider{})
-	var lessonImportAI aipkg.Provider
-	if cfg.Claude.Provider == "fake" {
-		aiProvider = aipkg.NewDeterministicFakeProvider()
-	} else if claudeOK {
-		aiProvider = aipkg.NewAnthropicProvider(aipkg.AnthropicConfig{
-			APIKey:          anthropicKey,
-			Model:           cfg.Claude.Model,
-			MaxOutputTokens: cfg.Claude.MaxOutputTokens,
-			Timeout:         cfg.Claude.RequestTimeout,
-		})
-		lessonImportAI = aiProvider
-	}
+	aiProvider := providers.AI
+	lessonImportAI := providers.LessonImportAI
 
 	if err := ensureDataDirWritable(cfg.DataDir); err != nil {
 		logger.Warn("data_dir_not_writable",
@@ -94,7 +94,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	heartbeatDone := make(chan struct{})
-	go runSystemHeartbeatLoop(ctx, logger, pool, workerHeartbeat(cfg, claudeOK), heartbeatDone)
+	go runSystemHeartbeatLoop(ctx, logger, pool, workerHeartbeatSource(cfg, claudeOK, gateway), heartbeatDone)
 
 	files, err := filestore.New(pool, cfg.DataDir, 24*time.Hour)
 	if err != nil {
@@ -104,14 +104,17 @@ func main() {
 	// B6 Job Handler registry：素材管线 + Worker-only Claude 任务。
 	registry := worker.NewRegistry()
 	registry.Register(job.KindLessonImport, &lessonimport.Handler{
-		Pool:              pool,
-		Files:             files,
-		Proc:              proc.ExecRunner{},
-		AI:                lessonImportAI,
-		URLAllowlist:      cfg.Material.URLAllowlist,
-		MaxDownloadBytes:  cfg.Material.MaxDownloadBytes,
-		TranscriptionMode: cfg.Material.TranscriptionMode,
-		WhisperModelPath:  cfg.Material.WhisperModelPath,
+		Pool:               pool,
+		Files:              files,
+		Proc:               proc.ExecRunner{},
+		AI:                 lessonImportAI,
+		AIAvailable:        providers.LessonImportAvailable,
+		URLImportAI:        providers.URLImportAI,
+		URLImportAvailable: providers.URLImportAvailable,
+		URLAllowlist:       cfg.Material.URLAllowlist,
+		MaxDownloadBytes:   cfg.Material.MaxDownloadBytes,
+		TranscriptionMode:  cfg.Material.TranscriptionMode,
+		WhisperModelPath:   cfg.Material.WhisperModelPath,
 	})
 	aihandlers.Register(registry, aihandlers.Deps{
 		Pool:     pool,
@@ -149,13 +152,82 @@ func main() {
 	logger.Info("worker_stopped")
 }
 
+type claudeProviders struct {
+	Gateway               *claudegateway.Router
+	GatewayEnabledKeys    int
+	AI                    aipkg.Provider
+	LessonImportAI        aipkg.Provider
+	LessonImportAvailable func() bool
+	// URLImportAI/URLImportAvailable 仅在存在网关配置时装配：URL 导入只用
+	// 网关启用 Key（GatewayOnly，无 legacy 回退）；legacy 直连 Key 或
+	// fake/非 Anthropic Provider 永不是 URL 导入替代品（字段保持 nil）。
+	URLImportAI        aipkg.Provider
+	URLImportAvailable func() bool
+}
+
+// buildClaudeProviders 是 Worker 的唯一 Claude Provider 装配入口。网关
+// Store 在每次调用/能力检查时热重载，因此运行期新增 Key 无需重启 Worker。
+func buildClaudeProviders(cfg config.Config, anthropicKey string, claudeOK bool, logger *slog.Logger) claudeProviders {
+	providers := claudeProviders{AI: aipkg.NotConfiguredProvider{}}
+	if cfg.Claude.Provider == "fake" {
+		fake := aipkg.NewDeterministicFakeProvider()
+		providers.AI = fake
+		providers.LessonImportAI = fake
+		return providers
+	}
+	if cfg.Claude.Provider != "anthropic" {
+		return providers
+	}
+
+	var legacy aipkg.Provider = aipkg.NotConfiguredProvider{}
+	if claudeOK {
+		legacy = aipkg.NewAnthropicProvider(aipkg.AnthropicConfig{
+			APIKey:          anthropicKey,
+			Model:           cfg.Claude.Model,
+			Endpoint:        cfg.Claude.AnthropicMessagesEndpoint(),
+			MaxOutputTokens: cfg.Claude.MaxOutputTokens,
+			Timeout:         cfg.Claude.RequestTimeout,
+		})
+	}
+	if cfg.Claude.GatewayConfigFile != "" {
+		gateway := &claudegateway.Router{
+			Store:           claudegateway.NewStore(cfg.Claude.GatewayConfigFile),
+			State:           claudegateway.NewStateTracker(claudegateway.StatePathFor(cfg.Claude.GatewayConfigFile), logger),
+			Legacy:          legacy,
+			Endpoint:        cfg.Claude.AnthropicMessagesEndpoint(),
+			DefaultModel:    cfg.Claude.Model,
+			MaxOutputTokens: cfg.Claude.MaxOutputTokens,
+			Logger:          logger,
+		}
+		providers.Gateway = gateway
+		providers.GatewayEnabledKeys = gateway.EnabledKeyCount()
+		providers.AI = gateway
+		providers.LessonImportAI = gateway
+		providers.LessonImportAvailable = func() bool {
+			return claudeOK || gateway.EnabledKeyCount() > 0
+		}
+		providers.URLImportAI = gateway.GatewayOnly()
+		providers.URLImportAvailable = func() bool {
+			return gateway.EnabledKeyCount() > 0
+		}
+		return providers
+	}
+	if claudeOK {
+		providers.AI = legacy
+		providers.LessonImportAI = legacy
+	}
+	return providers
+}
+
 // recoveryInterval 是周期 Recovery 的间隔（短于默认 60s Job 租约，
 // 保证过期租约在一个租约周期内被回收）。
 const recoveryInterval = 15 * time.Second
 
 const workerHeartbeatInterval = 10 * time.Second
 
-func workerHeartbeat(cfg config.Config, keyConfigured bool) system.WorkerHeartbeat {
+// workerHeartbeat 构造非敏感能力信号；状态词汇保持
+// ok/degraded/unavailable/unknown 不变，仅在消息中区分「网关已配置」。
+func workerHeartbeat(cfg config.Config, keyConfigured bool, gatewayEnabledKeys int) system.WorkerHeartbeat {
 	heartbeat := system.WorkerHeartbeat{
 		WorkerID:     cfg.Worker.ID,
 		ClaudeStatus: "unknown",
@@ -165,9 +237,11 @@ func workerHeartbeat(cfg config.Config, keyConfigured bool) system.WorkerHeartbe
 	case cfg.Claude.Provider == "fake":
 		heartbeat.ClaudeStatus = "degraded"
 		heartbeat.ClaudeMessage = "当前部署使用 fake Provider，尚未验证真实 Claude。"
-	case !keyConfigured:
+	case !keyConfigured && gatewayEnabledKeys == 0:
 		heartbeat.ClaudeStatus = "unavailable"
 		heartbeat.ClaudeMessage = "Claude Key 未配置；请在部署侧配置 ANTHROPIC_API_KEY_FILE 后重试。"
+	case gatewayEnabledKeys > 0:
+		heartbeat.ClaudeMessage = fmt.Sprintf("Claude 网关已配置（%d 个启用 Key），尚未执行连通性测试。", gatewayEnabledKeys)
 	case cfg.Claude.Model == "":
 		heartbeat.ClaudeStatus = "unavailable"
 		heartbeat.ClaudeMessage = "Claude 模型未配置；请设置 CLAUDE_MODEL_DEFAULT 后重试。"
@@ -177,13 +251,25 @@ func workerHeartbeat(cfg config.Config, keyConfigured bool) system.WorkerHeartbe
 	return heartbeat
 }
 
-func runSystemHeartbeatLoop(ctx context.Context, logger *slog.Logger, pool *pgxpool.Pool, heartbeat system.WorkerHeartbeat, done chan<- struct{}) {
+// workerHeartbeatSource 在每次心跳前读取网关当前启用 Key 数。Store 会热重载
+// keys.json，因此运行期新增、停用或删除 Key 不会让系统状态滞留在旧能力状态。
+func workerHeartbeatSource(cfg config.Config, keyConfigured bool, gateway *claudegateway.Router) func() system.WorkerHeartbeat {
+	return func() system.WorkerHeartbeat {
+		gatewayEnabledKeys := 0
+		if gateway != nil {
+			gatewayEnabledKeys = gateway.EnabledKeyCount()
+		}
+		return workerHeartbeat(cfg, keyConfigured, gatewayEnabledKeys)
+	}
+}
+
+func runSystemHeartbeatLoop(ctx context.Context, logger *slog.Logger, pool *pgxpool.Pool, heartbeat func() system.WorkerHeartbeat, done chan<- struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(workerHeartbeatInterval)
 	defer ticker.Stop()
 	for {
 		writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		err := system.UpsertWorkerHeartbeat(writeCtx, pool, heartbeat)
+		err := system.UpsertWorkerHeartbeat(writeCtx, pool, heartbeat())
 		cancel()
 		if err != nil && ctx.Err() == nil {
 			logger.Warn("worker_heartbeat_failed", slog.String("error", err.Error()))

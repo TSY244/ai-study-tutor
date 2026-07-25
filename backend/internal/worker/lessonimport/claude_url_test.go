@@ -210,3 +210,38 @@ func TestClaudeURLSourceInfo(t *testing.T) {
 		t.Fatalf("parser version 期望 claude-web-fetch/v1，得到 %q", claudeURLParserVersion)
 	}
 }
+
+// TestClaudeURLWorkerErrorMapping 覆盖 Claude URL 执行分支的错误映射：
+// material_fetch_failed 保留 retryability，空/超长正文映射为稳定的不可重试码。
+func TestClaudeURLWorkerErrorMapping(t *testing.T) {
+	t.Run("material_fetch_failed preserves retryability", func(t *testing.T) {
+		for _, retryable := range []bool{true, false} {
+			err := claudeWorkerError(aipkg.MaterialFetchError(retryable))
+			var werr *worker.Error
+			if !errors.As(err, &werr) {
+				t.Fatalf("应映射为 *worker.Error: %T", err)
+			}
+			if werr.Code != worker.ErrCodeMaterialFetchFailed {
+				t.Fatalf("错误码期望 %s，得到 %s", worker.ErrCodeMaterialFetchFailed, werr.Code)
+			}
+			if werr.Retryable != retryable {
+				t.Fatalf("retryability 期望 %v，得到 %v", retryable, werr.Retryable)
+			}
+		}
+	})
+
+	t.Run("empty and oversize text map to stable codes", func(t *testing.T) {
+		err := validateClaudeURLText("", 100)
+		var werr *worker.Error
+		if !errors.As(err, &werr) || werr.Code != worker.ErrCodeEmptyContent || werr.Retryable {
+			t.Fatalf("空正文应映射为不可重试 %s: %v", worker.ErrCodeEmptyContent, err)
+		}
+		err = validateClaudeURLText(strings.Repeat("x", 101), 100)
+		if !errors.As(err, &werr) || werr.Code != worker.ErrCodeTooLarge || werr.Retryable {
+			t.Fatalf("超长正文应映射为不可重试 %s: %v", worker.ErrCodeTooLarge, err)
+		}
+		if err := validateClaudeURLText(strings.Repeat("x", 100), 100); err != nil {
+			t.Fatalf("上限内的正文应通过: %v", err)
+		}
+	})
+}
