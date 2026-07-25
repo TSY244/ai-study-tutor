@@ -40,6 +40,9 @@ type sourceInfo struct {
 	SubtitleOrigin string `json:"subtitle_origin,omitempty"` // manual/auto/whisper_local
 	SubtitleLang   string `json:"subtitle_lang,omitempty"`
 	YtDlpVersion   string `json:"ytdlp_version,omitempty"`
+	// ExtractionNote 是 Claude Web Fetch 路径的非敏感提取说明（如内容
+	// 受限原因）；本地下载路径不写入该字段。
+	ExtractionNote string `json:"extraction_note,omitempty"`
 }
 
 // acquireURL 获取 URL 素材文本：字幕优先（人工 -> 自动），无字幕按
