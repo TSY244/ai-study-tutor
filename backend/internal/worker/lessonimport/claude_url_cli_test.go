@@ -149,7 +149,7 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 
 	// env 恰好是白名单变量；api_key 是优先级最高的启用 Key。
 	wantKeys := map[string]bool{
-		"HOME": false, "PATH": false, "CI": false, "NO_COLOR": false,
+		"HOME": false, "PATH": false, "SHELL": false, "CI": false, "NO_COLOR": false,
 		"ANTHROPIC_BASE_URL": false, "ANTHROPIC_AUTH_TOKEN": false,
 	}
 	for _, kv := range cmd.Env {

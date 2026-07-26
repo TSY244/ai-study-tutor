@@ -190,12 +190,15 @@ func (x *ClaudeURLCLIExtractor) selectKey() (claudegateway.Key, error) {
 	return keys[best], nil
 }
 
-// env 构造 CLI 子进程的白名单环境：只放行 HOME/PATH/CI/NO_COLOR 与
-// Anthropic 凭证，不继承父进程其余变量。api_key 只出现在这里。
+// env 构造 CLI 子进程的白名单环境：只放行 HOME/PATH/SHELL/CI/NO_COLOR
+// 与 Anthropic 凭证，不继承父进程其余变量。api_key 只出现在这里。
+// SHELL 必须显式设置且指向 bash：CLI 的 Bash 工具没有它时报 "No
+// suitable shell found"，busybox sh 不被接受（镜像已安装 bash）。
 func (x *ClaudeURLCLIExtractor) env(apiKey string) []string {
 	env := []string{
 		"HOME=" + x.Home,
 		"PATH=" + os.Getenv("PATH"),
+		"SHELL=/bin/bash",
 		"CI=1",
 		"NO_COLOR=1",
 		"ANTHROPIC_AUTH_TOKEN=" + apiKey,
