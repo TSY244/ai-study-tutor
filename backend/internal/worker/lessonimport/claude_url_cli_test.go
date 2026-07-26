@@ -131,7 +131,7 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 			t.Fatalf("argv 缺少 %q: %v", want, cmd.Args)
 		}
 	}
-	// prompt 含 canonical URL，且携带不可信数据与严格 JSON 约束。
+	// prompt 含 canonical URL，且携带不可信数据与分隔标记输出约束。
 	var prompt string
 	for i, a := range cmd.Args {
 		if a == "-p" && i+1 < len(cmd.Args) {
@@ -141,7 +141,7 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 	if !strings.Contains(prompt, "https://www.youtube.com/watch?v=abc") {
 		t.Fatalf("prompt 应含 canonical URL: %q", prompt)
 	}
-	for _, want := range []string{"WebFetch", "untrusted", "raw_text_markdown"} {
+	for _, want := range []string{"WebFetch", "untrusted", "<<<RAW_TEXT_MARKDOWN>>>"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt 缺少 %q: %q", want, prompt)
 		}
@@ -323,5 +323,58 @@ func TestStripCodeFence(t *testing.T) {
 	}
 	if got := stripCodeFence("  {\"title\":\"t\"}  "); got != `{"title":"t"}` {
 		t.Fatalf("空白剥离错误: %q", got)
+	}
+}
+
+// TestNormalizeCLIResultJSON：严格 JSON（含围栏）原样通过；分隔标记格式
+// （含未转义引号/反斜杠的 Markdown，即模型产出非法 JSON 的真实失败模式）
+// 重新编码为合法 JSON 并能通过 parseClaudeURLResult；两种格式都缺失时
+// 原样返回，由 parseClaudeURLResult 归类 claude_invalid_json。
+func TestNormalizeCLIResultJSON(t *testing.T) {
+	strict := `{"title":"t","raw_text_markdown":"r","extraction_note":"n"}`
+	if got := normalizeCLIResultJSON("```json\n" + strict + "\n```"); string(got) != strict {
+		t.Fatalf("严格 JSON 应原样通过: %q", got)
+	}
+
+	marked := "<<<TITLE>>>\n定投完全攻略\n<<<RAW_TEXT_MARKDOWN>>>\n# 标题\n\n> \"让经济学·像玩游戏一样上头\"\n\n路径 C:\\videos\\a.mp4\n<<<EXTRACTION_NOTE>>>\n字幕不可获取，仅页面文本"
+	got := normalizeCLIResultJSON(marked)
+	res, err := parseClaudeURLResult(got)
+	if err != nil {
+		t.Fatalf("标记格式应解析成功: %v", err)
+	}
+	if res.Title != "定投完全攻略" ||
+		res.RawTextMarkdown != "# 标题\n\n> \"让经济学·像玩游戏一样上头\"\n\n路径 C:\\videos\\a.mp4" ||
+		res.ExtractionNote != "字幕不可获取，仅页面文本" {
+		t.Fatalf("标记解析内容错误: %+v", res)
+	}
+
+	garbage := normalizeCLIResultJSON("抓取失败，无法输出")
+	if _, err := parseClaudeURLResult(garbage); aipkg.AsProviderError(err).Code != aipkg.ErrInvalidJSON {
+		t.Fatalf("无格式内容应 claude_invalid_json: %v", err)
+	}
+}
+
+// TestClaudeURLCLIExtractMarkedResult：信封 result 为分隔标记格式时成功
+// 提取并通过下游 schema 校验。
+func TestClaudeURLCLIExtractMarkedResult(t *testing.T) {
+	keysFile := writeCLIGatewayKeys(t, cliTestKey("winner", cliKeySentinel, 10, 100, true))
+	fake := proc.NewFake()
+	fake.Enqueue(proc.Static(cliEnvelopeJSON(t, map[string]any{
+		"type": "result", "subtype": "success", "is_error": false,
+		"result":      "<<<TITLE>>>\n极限入门\n<<<RAW_TEXT_MARKDOWN>>>\n大家好，\"引用原文\" 不需要转义\n<<<EXTRACTION_NOTE>>>\n含字幕",
+		"duration_ms": 42000, "session_id": "sess-marked",
+		"usage": map[string]any{"input_tokens": 100, "output_tokens": 200},
+	}), nil))
+	x := newCLIExtractor(keysFile, fake)
+	resp, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := parseClaudeURLResult(resp.JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Title != "极限入门" || res.RawTextMarkdown != "大家好，\"引用原文\" 不需要转义" || res.ExtractionNote != "含字幕" {
+		t.Fatalf("标记格式 result 映射错误: %+v", res)
 	}
 }
