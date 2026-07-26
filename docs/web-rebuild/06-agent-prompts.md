@@ -177,7 +177,7 @@
 2. 实现 application service 和 repository；handler 只做绑定、调用和响应映射。
 3. 严格使用接口契约的稳定错误码，包括 `validation_error`、`not_found`、`resource_busy`、`upload_too_large`；禁止在实现中发明近义错误码。
 4. 文件上传流式写入临时目录，同时计算 SHA-256；按后端文档的 temporary row -> 原子移动 -> ready/link 两阶段协议发布，并实现崩溃恢复。请求失败不得留下不可对账的正式对象。
-5. URL 只在 API 中做协议/白名单安全校验，不下载内容；实际处理交给后续 Worker Job（由 Claude Web Fetch 提取）。
+5. URL 只在 API 中做协议/白名单安全校验，不下载内容；实际处理交给后续 Worker Job（由容器内 Claude Code CLI WebFetch 提取）。
 6. 文本素材写入 PostgreSQL 或按架构定义落库，同时创建 lesson_import Job。
 7. 乐观并发使用版本号或 If-Match；重复 Idempotency-Key 返回同一结果。
 8. 素材导入、内容重生成、普通出题和复习出题统一属于 `lesson_generation`；同一 Lesson 已有活动生成 Job 时映射数据库唯一冲突为 `409 resource_busy`，不能排队覆盖、基于变化中的内容出题或重复调用 Claude。
@@ -200,7 +200,7 @@
 2. 实现 file store：object key 不使用用户文件名；数据库记录 hash、size、media_type、状态和引用。
 3. 文本素材规范化为 UTF-8，保留来源和时间戳。
 4. 文档素材支持 P0 规定的 PDF/DOCX/TXT/Markdown；记录解析器版本和警告。
-5. URL 素材由 Claude Web Fetch server tool 提取原文（Worker 先做 canonicalClaudeURL 规范化与白名单校验），元数据记 Extractor=claude_web_fetch、ParserVersion=claude-web-fetch/v1；ffmpeg/yt-dlp 仅用于上传媒体，执行时使用参数数组、非 root、超时、取消和输出限制。
+5. URL 素材由 Worker 容器内 Claude Code CLI 的 WebFetch 客户端工具提取原文（Worker 先做 canonicalClaudeURL 规范化与白名单校验，需出网访问白名单站点），元数据记 Extractor=claude_web_fetch、ParserVersion=claude-web-fetch/v1；ffmpeg/yt-dlp 仅用于上传媒体，执行时使用参数数组、非 root、超时、取消和输出限制。
 6. 上传音视频没有字幕时，按 TRANSCRIPTION_MODE：subtitle_only 返回 transcript_required；whisper_local 才调用本地 Whisper。
 7. 文本过长时按可复现规则分块，记录 chunk 顺序、hash 和 token 估算。
 8. 临时目录按 job_id 隔离，成功/失败/取消都清理可重建文件。

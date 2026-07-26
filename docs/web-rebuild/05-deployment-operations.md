@@ -575,7 +575,7 @@ Docker Compose 支持用 `service_healthy` 和 `service_completed_successfully` 
 
 - Go Worker 二进制。
 - `ca-certificates`。
-- 固定版本的 `ffmpeg`、`yt-dlp`（仅处理上传媒体；URL 素材由 Claude Web Fetch 提取，Worker 无需直连 YouTube/Bilibili）。
+- 固定版本的 `ffmpeg`、`yt-dlp`（仅处理上传媒体）；`nodejs`/`npm` 与 npm 全局安装（pin 大版本）的 Claude Code CLI——URL 素材由容器内 CLI 的 WebFetch 客户端工具抓取，Worker 需出网访问白名单站点。
 - DOCX/PDF 等必要本地解析依赖。
 - 可选 Whisper CLI（仅上传音视频转写），但不默认内置大型模型文件。
 
@@ -884,7 +884,7 @@ Worker 定期清理：
 - 只有 Worker 获得 Anthropic secret 和出网网络。
 - PostgreSQL 不映射宿主机端口。
 - 容器以非 root 用户运行，`cap_drop: ALL`、`no-new-privileges`、只读根文件系统。
-- 上传文件受大小和类型限制；URL 素材经协议与白名单校验、Worker 规范化，实际抓取由 Claude Web Fetch 在 Anthropic 侧完成。
+- 上传文件受大小和类型限制；URL 素材经协议与白名单校验、Worker 规范化，实际抓取由 Worker 容器内 Claude Code CLI 的 WebFetch 客户端工具完成（需出网访问白名单站点）。
 - 所有 Markdown 在前端安全渲染。
 - 日志输出请求元数据，不输出 API Key、数据库密码和完整敏感正文。
 - 依赖镜像和二进制定期扫描，发布时生成 SBOM。
@@ -920,7 +920,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml logs --tail=200 mig
 - `claude_auth_failed`：Key 无效或权限不足。
 - `claude_rate_limited`：等待后重试。
 - `claude_timeout`：网络或超时配置。
-- `claude_invalid_request`：模型标识或请求不支持；URL 导入出现此错误时，检查网关是否转发 Web Fetch server tools 与 `anthropic-beta` header。
+- `claude_invalid_request`：模型标识或请求不支持；URL 导入的提取失败先查 `material_fetch_failed`/`claude_auth_failed`——确认 Worker 镜像内 `claude` CLI 可用（`nodejs`+npm 全局安装）、容器以可写 HOME（`/var/lib/ai-study-tutor`）运行、网关 keys.json 有启用 Key，且 Worker 能出网访问白名单站点。
 
 确认 Worker 有 `egress` 网络，而 API 不需要出网。
 

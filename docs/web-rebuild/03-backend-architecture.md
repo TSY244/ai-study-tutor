@@ -18,7 +18,7 @@ flowchart LR
     API --> FS[(Data Volume)]
     Worker[Go Worker] --> DB
     Worker --> FS
-    Worker --> Claude[Claude Messages API（URL 经 Web Fetch 提取）]
+    Worker --> Claude[Claude Messages API（文档生成）；URL 经容器内 Claude Code CLI WebFetch 提取]
     Worker --> Parser[yt-dlp / ffmpeg / parsers（上传文件）]
     Worker -. optional .-> Whisper[Local Whisper CLI（仅上传音视频）]
 ```
@@ -36,7 +36,7 @@ flowchart LR
 
 API 禁止直接执行：
 
-- `yt-dlp`、`ffmpeg` 和语音转写（仅服务上传媒体；URL 素材由 Claude Web Fetch 提取）。
+- `yt-dlp`、`ffmpeg` 和语音转写（仅服务上传媒体；URL 素材由 Worker 容器内 Claude Code CLI WebFetch 提取）。
 - Claude API 请求。
 - 长文切片和大文件解析。
 - 大规模导出或备份。
@@ -596,11 +596,12 @@ acquiring -> detecting -> extracting -> normalizing -> chunking -> generate -> v
 - Worker 使用 canonicalClaudeURL 再校验与规范化：强制 HTTPS、拒绝
   userinfo/端口/非白名单主机，剥离 utm_*/spm*/trackid/vd_source/share_*
   等追踪参数，保留语义参数，query 排序重编码，URL 上限 250 字符。
-- 内容由 Claude 通过 Messages API server tool `web_fetch_20250910`
-  （`anthropic-beta: web-fetch-2025-09-10`，tool_choice auto，
-  max_uses=3，max_content_tokens=12000，输出上限 16384，pause_turn
-  最多 2 次 continuation）在 Anthropic 侧抓取并提取原文；Worker 不
-  直连 YouTube/Bilibili，不再使用 yt-dlp 下载 URL。
+- 内容由 Worker 容器内的 Claude Code CLI（npm 全局安装）以
+  `--allowedTools "Bash Read Write WebFetch"` 执行：WebFetch 是 CLI
+  客户端工具，抓取发生在 Worker 容器（需出网访问白名单站点），不经
+  网关 server tool；不再使用 yt-dlp 下载 URL。CLI 凭证取自
+  claudegateway keys.json（最高优先级启用 Key 的 api_key 注入
+  `ANTHROPIC_AUTH_TOKEN`，base_url 取进程级 `ANTHROPIC_BASE_URL`）。
 - 提取后同一会话继续生成教师教纲与学生笔记；raw_text、
   teacher_outline、student_notes 三份文档齐全才在一个事务里
   all-or-nothing 发布。
@@ -618,8 +619,8 @@ acquiring -> detecting -> extracting -> normalizing -> chunking -> generate -> v
 ### 8.4 音视频素材
 
 Claude API 调用前必须得到文本或受支持的文档/图片输入。URL 素材不适用
-以下本地流程，统一由 Claude Web Fetch 提取原文（见 8.2）。上传音视频
-流程：
+以下本地流程，统一由 Worker 容器内 Claude Code CLI WebFetch 提取原文
+（见 8.2）。上传音视频流程：
 
 1. 优先使用内嵌字幕或同目录字幕。
 2. 无字幕时：若配置 `TRANSCRIPTION_MODE=whisper_local`，使用本地 Whisper CLI 转写。
@@ -827,6 +828,6 @@ LOG_LEVEL
 - [ ] 复习测验有独立任务类型和策略。
 - [ ] 批阅失败不丢失 Attempt 和客观题分。
 - [ ] 文件路径无法逃逸数据目录。
-- [ ] URL 素材经 API 白名单校验、Worker 规范化后由 Claude Web Fetch 提取，Worker 不直连抓取。
+- [ ] URL 素材经 API 白名单校验、Worker 规范化后由容器内 Claude Code CLI WebFetch 提取（Worker 需出网访问白名单站点）。
 - [ ] 日志不包含 API Key。
 - [ ] PostgreSQL 和文件卷均可备份和恢复。

@@ -130,8 +130,10 @@ golden 夹具（`backend/testdata/legacy-fixtures/`）如实冻结 legacy 现状
 
 > **已被 Claude Web Fetch 路线取代（2026-07）**：URL 素材不再由 Worker
 > 本地预检/下载；Worker 只做 canonicalClaudeURL 规范化与白名单校验，
-> 实际抓取由 Claude 的 Web Fetch server tool 在 Anthropic 侧完成，
-> 本地 DNS 重绑定 / TOCTOU 风险随之消除。以下为历史决策原文，保留备查。
+> 本地 DNS 重绑定 / TOCTOU 风险随之消除。2026-07 晚些时候实际抓取
+> 再从 Web Fetch server tool 改为 Worker 容器内 Claude Code CLI 的
+> WebFetch 客户端工具（中转网关不转发 server tools；Worker 需出网访问
+> 白名单站点）。以下为历史决策原文，保留备查。
 
 - API 创建时校验一次；Worker 下载前再次校验（DNS 重绑定防护）：
   仅 https、host 白名单、DNS 全公网；预检请求跟随重定向逐跳重复

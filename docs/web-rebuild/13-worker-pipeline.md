@@ -69,8 +69,8 @@ fLaC/OggS，audio/video 结合扩展名区分）、合法 UTF-8 文本兜底为
   `html/v1`（去 script/style/注释/不可见容器/标签 + 实体反转义）、
   `pdf/v1`（外部 `pdftotext -layout -enc UTF-8 <in> -`）、
   `subtitle/v1`（仅上传字幕清洗）、`whisper/v1`（仅上传媒体）、
-  `media/v1`、`claude-web-fetch/v1`（URL 素材，Claude Web Fetch 提取，
-  见 3.4）。
+  `media/v1`、`claude-web-fetch/v1`（URL 素材，Worker 容器内 Claude
+  Code CLI WebFetch 提取，见 3.4）。
 - 规范化 `norm/v1`：与 legacy `clean_text` 逐字节一致（golden fixture
   `backend/testdata/legacy-fixtures/text-processing.golden.json` 冻结，期望值经
   legacy Python 运行时实际核对）。
@@ -81,30 +81,37 @@ fLaC/OggS，audio/video 结合扩展名区分）、合法 UTF-8 文本兜底为
 - 文本上限 `MaxTextRunes`（默认 2,000,000 rune，超出 →
   `material_too_large`）；清洗后为空 → `material_empty_content`。
 
-### 3.4 URL 管线（Claude Web Fetch）
+### 3.4 URL 管线（Worker 容器内 Claude Code CLI WebFetch）
 
 1. API 创建时已做 https + 白名单校验（`URL_ALLOWLIST`，不强制出网
    DNS 校验）；Worker 再用 canonicalClaudeURL 二次校验与规范化：
    强制 HTTPS、拒绝 userinfo/端口/非白名单主机，剥离
    utm_*/spm*/trackid/vd_source/share_* 等追踪参数，保留语义参数，
    query 排序重编码，URL 上限 250 字符；违规 → `url_blocked`（终态）；
-2. 调用 Claude Messages API 的 server tool `web_fetch_20250910`
-   （`anthropic-beta: web-fetch-2025-09-10`，tool_choice=auto，
-   max_uses=3，max_content_tokens=12000，输出上限 16384，
-   pause_turn 最多 2 次 continuation），由 Claude 在 Anthropic 侧
-   抓取并提取原文；Worker 不直连 YouTube/Bilibili，不再使用 yt-dlp
-   下载 URL；
-3. 提取后同一会话继续生成教师教纲与学生笔记；
+2. Worker 容器内执行 Claude Code CLI（npm 全局安装，pin 大版本）
+   `claude --allowedTools "Bash Read Write WebFetch" -p <prompt>
+   --output-format json`：WebFetch 是 CLI 客户端工具，抓取发生在
+   Worker 容器（需出网访问白名单站点），不经网关 server tool，不再
+   使用 yt-dlp 下载 URL。CLI 凭证取自 claudegateway keys.json（最高
+   优先级启用 Key 的 api_key 注入 `ANTHROPIC_AUTH_TOKEN`；base_url 取
+   进程级 `ANTHROPIC_BASE_URL`，中转网关可用，无需官方 Key）；子进程
+   env 只放行 HOME/PATH/CI/NO_COLOR 与 Anthropic 凭证，单次调用默认
+   超时 10 分钟；api_key 只出现在子进程 env，绝不进入日志、错误
+   detail 或 ai_runs；
+3. 提取后教师教纲与学生笔记仍经网关 Messages Provider 生成；
    raw_text/teacher_outline/student_notes 三份文档齐全才在一个事务里
    all-or-nothing 发布；
 4. 元数据：Extractor=`claude_web_fetch`、ParserVersion=
-   `claude-web-fetch/v1`；ai_runs 记录 purpose=`lesson_url_extract`；
-5. 错误映射：抓取暂时性失败或内容不可访问 → `material_fetch_failed`
-   （由 Job retryable 区分自动重试与终态）；超时 → `claude_timeout`；
-   提取结果为空 → `material_empty_content`；超上限 →
-   `material_too_large`；网关不支持 Web Fetch →
-   `claude_invalid_request`；未配置 gateway Key →
-   `claude_not_configured`（终态，绝不回退 legacy 单 Key）。
+   `claude-web-fetch/v1`；ai_runs 记录 purpose=`lesson_url_extract`
+   （usage/duration/session_id 取自 CLI JSON envelope）；
+5. 错误映射：CLI 超时或信封 `api_error_status` 为 429/5xx →
+   `material_fetch_failed`（可重试）；exit 非零、is_error 或内容不可
+   访问 → `material_fetch_failed`（终态）；401/403 →
+   `claude_auth_failed`（终态）；result JSON 畸形 →
+   `claude_invalid_json`/`claude_schema_invalid`；提取结果为空 →
+   `material_empty_content`；超上限 → `material_too_large`；CLI 不可用
+   或未配置 gateway Key → `claude_not_configured`（终态，绝不回退
+   legacy 单 Key）。
 
 上传音视频：先 `ffmpeg -i <in> -map 0:s:0 -f srt embedded.srt -y` 抽
 内嵌字幕；失败则按转写模式走 whisper（`ffmpeg -i <in> -vn -acodec
@@ -137,7 +144,7 @@ pcm_s16le -ar 16000 -ac 1 audio.wav -y`，与 legacy 参数一致）或
 | 错误码 | 可重试 | 含义与建议 |
 | --- | --- | --- |
 | `url_blocked` | 否 | URL 未通过白名单/规范化校验（非 https、非白名单主机、含 userinfo/端口、超过 250 字符等），终态 |
-| `material_fetch_failed` | 按原因 | URL 由 Claude Web Fetch 抓取失败或内容不可访问；暂时性错误自动重试，内容不可访问为终态（由 Job retryable 区分）；上传媒体的工具失败亦归此类 |
+| `material_fetch_failed` | 按原因 | URL 由容器内 Claude Code CLI WebFetch 抓取失败或内容不可访问；暂时性错误自动重试，内容不可访问为终态（由 Job retryable 区分）；上传媒体的工具失败亦归此类 |
 | `transcript_required` | 否 | 仅限上传音视频：无字幕且未配置转写；detail 含修复动作（上传字幕/粘贴文本/配置 whisper_local） |
 | `tool_missing` | 否 | 外部二进制缺失（yt-dlp/ffmpeg/whisper-cli 仅上传媒体需要、pdftotext 为 PDF）或 WHISPER_MODEL_PATH 未配置 |
 | `material_unsupported_type` | 否 | 无法识别的文件类型 |
@@ -188,9 +195,11 @@ make seed   # 幂等；数据库配置与 api/worker 相同
 
 ## 8. 已知限制（诚实清单）
 
-- URL 素材已改为 Claude Web Fetch 提取（2026-07）：Worker 不再本地
-  预检/下载，原先的 DNS 重绑定 TOCTOU 风险随之消除；白名单与
-  canonicalClaudeURL 规范化仍然保留，实际抓取发生在 Anthropic 侧。
+- URL 素材已改为 Worker 容器内 Claude Code CLI WebFetch 提取
+  （2026-07，由 Anthropic web_fetch server tool 再改而来，因中转网关
+  不转发 server tools）：Worker 不再本地预检/下载，原先的 DNS 重绑定
+  TOCTOU 风险随之消除；白名单与 canonicalClaudeURL 规范化仍然保留，
+  实际抓取发生在 Worker 容器（需出网访问白名单站点）。
 - HTML 不可见容器移除是近似实现（RE2 不支持反向引用，对
   div/span/section 逐个匹配）；嵌套同标签的极端文档可能残留边界。
 - `_clean_lrc` 不做整体空白规范化（与 legacy 一致）；统一由
