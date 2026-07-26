@@ -18,13 +18,23 @@ func TestExecRunnerEcho(t *testing.T) {
 }
 
 func TestExecRunnerNonZeroExit(t *testing.T) {
-	_, err := ExecRunner{}.Run(context.Background(), Cmd{Name: "/bin/sh", Args: []string{"-c", "echo boom >&2; exit 3"}})
+	res, err := ExecRunner{}.Run(context.Background(), Cmd{Name: "/bin/sh", Args: []string{"-c", "echo out; echo boom >&2; exit 3"}})
 	var exitErr *ExitError
 	if !errors.As(err, &exitErr) {
 		t.Fatalf("期望 ExitError，得到 %v", err)
 	}
 	if exitErr.Code != 3 || exitErr.StderrTail == "" {
 		t.Fatalf("退出码/摘要错误: %+v", exitErr)
+	}
+	// 非零退出仍返回有界采集输出（CLI 可能在退出前写出 JSON 信封）。
+	if res == nil {
+		t.Fatal("非零退出应同时返回非 nil Result")
+	}
+	if string(res.Stdout) != "out\n" {
+		t.Fatalf("stdout 错误: %q", res.Stdout)
+	}
+	if exitErr.StderrTail != "boom" {
+		t.Fatalf("StderrTail 应只携带 stderr 尾部: %q", exitErr.StderrTail)
 	}
 }
 

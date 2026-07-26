@@ -3,8 +3,9 @@
 // 安全约束：
 //   - 仅以参数数组调用（exec.CommandContext），永不经过 shell；
 //   - context 取消/超时会杀掉子进程（取消语义见 03 §7.3）；
-//   - stdout/stderr 采集有界，超出部分截断，错误信息只携带 stderr 尾部摘要，
-//     不携带完整输出（可能含学习材料片段）。
+//   - stdout/stderr 采集有界，超出部分截断；非零退出时 Result 与 ExitError
+//     一并返回（Result 携带有界采集输出），错误信息本身只携带 stderr 尾部
+//     摘要，不携带完整输出（可能含学习材料片段）。
 package proc
 
 import (
@@ -46,6 +47,9 @@ type Result struct {
 }
 
 // ExitError：子进程以非零状态退出。StderrTail 为有界尾部摘要。
+// Run 返回 ExitError 时仍可能同时返回非 nil 的 *Result（有界采集的
+// stdout/stderr，例如 CLI 在非零退出前写出的 JSON 信封）；错误本身只
+// 携带 stderr 尾部摘要。调用方不得以 Result 非 nil 判定执行成功。
 type ExitError struct {
 	Code       int
 	StderrTail string
@@ -95,6 +99,7 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 }
 
 // Run 执行命令。取消/超时返回 ctx.Err()（exec.CommandContext 已杀掉子进程）。
+// 非零退出返回 *ExitError，并同时返回携带有界采集输出的非 nil *Result。
 func (ExecRunner) Run(ctx context.Context, cmd Cmd) (*Result, error) {
 	if cmd.Name == "" {
 		return nil, errors.New("proc: 命令名不能为空")
@@ -117,7 +122,15 @@ func (ExecRunner) Run(ctx context.Context, cmd Cmd) (*Result, error) {
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return nil, &ExitError{Code: exitErr.ExitCode(), StderrTail: tailOf(stderr.buf.Bytes(), stderrTailLen)}
+			// 非零退出时进程可能已把结构化结果（如 CLI JSON 信封）写到
+			// stdout：Result 与 ExitError 一并返回，错误本身仍只携带
+			// stderr 尾部摘要。
+			return &Result{
+				Stdout:          stdout.buf.Bytes(),
+				Stderr:          stderr.buf.Bytes(),
+				StdoutTruncated: stdout.truncated,
+				StderrTruncated: stderr.truncated,
+			}, &ExitError{Code: exitErr.ExitCode(), StderrTail: tailOf(stderr.buf.Bytes(), stderrTailLen)}
 		}
 		var pathErr *os.PathError
 		if errors.As(err, &pathErr) || errors.Is(err, exec.ErrNotFound) || isNotFound(err) {
