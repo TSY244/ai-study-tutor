@@ -29,12 +29,12 @@
 ```text
 浏览器 ──► 127.0.0.1:8080 ──► [public] web [frontend] ──► api ──► [backend] ──► db
                                                               worker ──┤
-                                                                       └─► [egress] ──► 外网（Anthropic API、课程 URL 抓取）
+                                                                       └─► [egress] ──► 外网（Anthropic API；URL 素材由 Claude Web Fetch 在 Anthropic 侧抓取）
 ```
 
 - `frontend`、`backend` 是 internal 网络，不出网。
 - 只有 `web` 暴露端口，且只绑定 `127.0.0.1`；`db` 不暴露任何端口。
-- 只有 `worker` 能访问外网（`egress` 网络），AI 调用和 URL 素材抓取都从这里出去。
+- 只有 `worker` 能访问外网（`egress` 网络），AI 调用从这里出去；URL 素材不再由 Worker 直连下载，而是经 Claude Web Fetch 在 Anthropic 侧获取。
 
 ### 1.3 数据与密钥
 
@@ -46,6 +46,8 @@
 | 导入报告 | `./import-reports/`（宿主机） | 由 `legacy-import` 容器写入 |
 | 数据库密码 | `deploy/secrets/postgres_password.txt` | Docker secret，只挂载给需要的容器 |
 | Claude API Key | `deploy/secrets/anthropic_api_key.txt` | Docker secret，**只挂载给 worker** |
+| Claude 网关配置（多 Key） | `./data/claude-gateway/`（宿主机，权限 0700） | 存放 `keys.json`，**只挂载给 api/worker**，web 不可见 |
+| Claude Code 本机设置 | `~/.claude/settings.json`（宿主机） | 仅 API 容器映射 `~/.claude`；从「设置」保存指定 Key 时原子覆盖该文件 |
 
 两个命名卷由 Docker 管理，删除容器不影响数据；`docker compose down -v` 才会删除卷（危险操作，见 §7.3）。
 
@@ -96,6 +98,10 @@ chmod 600 deploy/secrets/anthropic_api_key.txt
 
 **不配置也能启动**：系统以降级模式运行，课程导入、文本处理等确定性功能正常，AI 生成类任务（出题、批改、总结评估）会明确失败并可在配置后重试。Key 只挂载到 `worker` 容器，`api` 和 `web` 永远接触不到。
 
+部署后也可以在「设置」页直接管理多个 Claude Key：网关按优先级自动故障转移，配置保存在 `data/claude-gateway/keys.json`（只挂载进 `api`/`worker`）；当没有任何启用的 Key 时，上面的旧单 Key secret 文件仍作为回退生效。
+
+每张 Claude Key 卡片还可选择「保存到 Claude Code」。确认后，API 从已保存的 Key 中读取密钥并原子覆盖宿主机的 `~/.claude/settings.json`，浏览器不会接收完整 Key。该目录仅映射给 API 容器，Worker 和 Web 无权访问。
+
 如需调整端口、模型、上传大小等，编辑 `deploy/.env`（完整配置项见 §4）。
 
 ### 3.4 构建并启动
@@ -127,6 +133,7 @@ make docker-seed      # 可选：写入演示课程数据（幂等，可重复�
 | `LOG_LEVEL` | `info` | 日志级别（`debug`/`info`/`warn`/`error`） |
 | `POSTGRES_DB` / `POSTGRES_USER` | `ai_study_tutor` | 数据库名与账号（密码在 secret 文件，不在此） |
 | `AI_PROVIDER` | `anthropic` | AI 提供方；`fake` 仅用于部署演练 |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic 兼容 API 的基础地址；Worker 调用 `<base>/v1/messages`。使用兼容网关时设为其基础地址；URL 导入依赖网关转发 Messages server tools 与 `anthropic-beta` header，且必须配置 gateway Key（无 gateway Key 时 URL 导入报 `claude_not_configured`，不回退 legacy 单 Key） |
 | `CLAUDE_MODEL_DEFAULT` | 空 | 覆盖默认模型，空为用代码内置默认 |
 | `CLAUDE_REQUEST_TIMEOUT` | `300s` | 单次 AI 请求超时 |
 | `CLAUDE_MAX_OUTPUT_TOKENS` | `8192` | AI 输出上限 |
@@ -135,9 +142,13 @@ make docker-seed      # 可选：写入演示课程数据（幂等，可重复�
 | `JOB_LEASE_DURATION` | `60s` | 任务租约时长（Worker 崩溃后回收依据） |
 | `MAINTENANCE_LEASE_DURATION` / `MAINTENANCE_HEARTBEAT_INTERVAL` | `45s` / `10s` | 备份期间维护锁的租约与心跳 |
 | `MAX_UPLOAD_BYTES` / `MAX_DOWNLOAD_BYTES` | `2147483648` | 上传素材 / 下载远程素材上限（2 GB） |
-| `TRANSCRIPTION_MODE` | `subtitle_only` | 音视频转写策略；`subtitle_only` 只下字幕不下载媒体 |
-| `WHISPER_MODEL_PATH` | 空 | 本地 Whisper 模型路径（启用本地转写时用） |
+| `URL_ALLOWLIST` | `youtube.com,bilibili.com` | URL 素材主机白名单，逗号分隔；父域条目允许其子域，API 与 Worker 使用同一值；Worker 侧另做 canonicalClaudeURL 规范化（剥离追踪参数、拒绝 userinfo/端口、250 字符上限）后交给 Claude Web Fetch 提取 |
+| `URL_API_DNS_VALIDATION` | `false` | 标准 Compose 的 API 无出网能力，因此只做协议/白名单校验；URL 不再由 Worker 本地抓取，实际抓取由 Claude Web Fetch 在 Anthropic 侧完成，不再依赖 Worker 侧 DNS/重定向链校验 |
+| `TRANSCRIPTION_MODE` | `subtitle_only` | 上传音视频的转写策略；`subtitle_only` 只用已有字幕不做本地转写；URL 素材不适用（走 Claude Web Fetch） |
+| `WHISPER_MODEL_PATH` | 空 | 本地 Whisper 模型路径（启用本地转写时用，仅上传音视频） |
 | `BACKUP_DIR` / `IMPORT_REPORT_DIR` / `LEGACY_SOURCE_DIR` | `../backups` 等 | 一次性工具容器挂载的宿主机目录，相对 `deploy/` |
+| `CLAUDE_GATEWAY_CONFIG_DIR` | `../data/claude-gateway` | Claude 多 Key 网关配置目录（`keys.json`），只挂载进 `api`/`worker`，init 脚本创建为 0700 |
+| `CLAUDE_CODE_SETTINGS_DIR` | 当前用户的 `~/.claude` | Claude Code 设置目录，只挂载进 `api`；init 脚本写入绝对路径，保存操作覆盖其中的 `settings.json` |
 | `TOOLS_UID` / `TOOLS_GID` | `10001` | 工具容器运行 UID/GID；Linux 上 init 脚本自动改为当前用户 |
 
 改完 `.env` 后需要 `make docker-up`（配置类变更）或 `docker compose ... up -d --force-recreate` 生效；密钥文件内容变更同样需要重建容器（secret 在容器启动时挂载）。

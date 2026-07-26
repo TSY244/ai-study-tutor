@@ -18,9 +18,9 @@ flowchart LR
     API --> FS[(Data Volume)]
     Worker[Go Worker] --> DB
     Worker --> FS
-    Worker --> Claude[Claude Messages API]
-    Worker --> Parser[yt-dlp / ffmpeg / parsers]
-    Worker -. optional .-> Whisper[Local Whisper CLI]
+    Worker --> Claude[Claude Messages API（URL 经 Web Fetch 提取）]
+    Worker --> Parser[yt-dlp / ffmpeg / parsers（上传文件）]
+    Worker -. optional .-> Whisper[Local Whisper CLI（仅上传音视频）]
 ```
 
 ### 2.1 API 进程职责
@@ -36,7 +36,7 @@ flowchart LR
 
 API 禁止直接执行：
 
-- `yt-dlp`、`ffmpeg` 和语音转写。
+- `yt-dlp`、`ffmpeg` 和语音转写（仅服务上传媒体；URL 素材由 Claude Web Fetch 提取）。
 - Claude API 请求。
 - 长文切片和大文件解析。
 - 大规模导出或备份。
@@ -148,10 +148,10 @@ Gin 官方文档支持路由分组、中间件、JSON 绑定与校验；安全�
 下列内容保存在 `APP_DATA_DIR`：
 
 - 用户上传的原始大文件。
-- URL 下载文件、字幕和音频中间产物。
+- 上传媒体的字幕和音频转写中间产物（URL 素材不再本地下载）。
 - 导出的 Markdown/ZIP。
 - 备份临时文件。
-- 可选的本地 Whisper 模型。
+- 可选的本地 Whisper 模型（仅用于上传音视频转写）。
 
 数据库保存 `storage_key`，禁止保存依赖宿主机绝对路径的业务引用。
 
@@ -560,7 +560,7 @@ PostgreSQL 官方文档明确指出 `SKIP LOCKED` 适合多个消费者访问队
 | 类型 | 示例 | 策略 |
 | --- | --- | --- |
 | 瞬时错误 | 网络超时、429、部分 5xx | 指数退避 + 抖动，尊重 `Retry-After` |
-| 输入错误 | 不支持的文件、URL 无字幕且无转写 | 不自动重试，给出修复动作 |
+| 输入错误 | 不支持的文件、上传音视频无字幕且无转写、URL 非白名单 | 不自动重试，给出修复动作 |
 | Schema/业务校验 | AI 输出缺字段、题型不合法 | 使用修复提示最多重试 1 次，然后失败 |
 | 存储错误 | 空间不足、权限错误 | 不自动重试，等待用户处理 |
 | 取消 | 用户请求取消 | 尽快终止子进程/请求，标记 cancelled |
@@ -591,11 +591,21 @@ acquiring -> detecting -> extracting -> normalizing -> chunking -> generate -> v
 
 ### 8.2 URL 素材
 
-- 仅允许 `https`，第一阶段显式支持 YouTube 和 B站域名。
-- 在请求前解析 DNS，并拒绝回环、链路本地、私网和保留地址。
-- 限制重定向次数、下载时长、文件大小和总任务时间。
-- 使用 `yt-dlp` 优先获取人工字幕，再获取自动字幕。
-- 记录来源 URL、视频标题、时长、字幕语言和下载工具版本。
+- 仅允许 `https`，第一阶段显式支持 YouTube 和 B站域名（`URL_ALLOWLIST`，代码层空值 = 全拒）。
+- API 侧只做协议与白名单校验，不强制出网 DNS 校验，也不下载内容。
+- Worker 使用 canonicalClaudeURL 再校验与规范化：强制 HTTPS、拒绝
+  userinfo/端口/非白名单主机，剥离 utm_*/spm*/trackid/vd_source/share_*
+  等追踪参数，保留语义参数，query 排序重编码，URL 上限 250 字符。
+- 内容由 Claude 通过 Messages API server tool `web_fetch_20250910`
+  （`anthropic-beta: web-fetch-2025-09-10`，tool_choice auto，
+  max_uses=3，max_content_tokens=12000，输出上限 16384，pause_turn
+  最多 2 次 continuation）在 Anthropic 侧抓取并提取原文；Worker 不
+  直连 YouTube/Bilibili，不再使用 yt-dlp 下载 URL。
+- 提取后同一会话继续生成教师教纲与学生笔记；raw_text、
+  teacher_outline、student_notes 三份文档齐全才在一个事务里
+  all-or-nothing 发布。
+- 元数据记录 Extractor=claude_web_fetch、ParserVersion=
+  claude-web-fetch/v1；AI 调用记录 purpose=lesson_url_extract。
 
 ### 8.3 文档素材
 
@@ -607,14 +617,15 @@ acquiring -> detecting -> extracting -> normalizing -> chunking -> generate -> v
 
 ### 8.4 音视频素材
 
-Claude API 调用前必须得到文本或受支持的文档/图片输入。音视频流程：
+Claude API 调用前必须得到文本或受支持的文档/图片输入。URL 素材不适用
+以下本地流程，统一由 Claude Web Fetch 提取原文（见 8.2）。上传音视频
+流程：
 
 1. 优先使用内嵌字幕或同目录字幕。
-2. URL 视频优先通过 `yt-dlp` 获取字幕。
-3. 无字幕时：若配置 `TRANSCRIPTION_MODE=whisper_local`，使用本地 Whisper CLI 转写。
-4. 若未配置转写，任务失败为 `transcript_required`，提示上传字幕或粘贴文本。
+2. 无字幕时：若配置 `TRANSCRIPTION_MODE=whisper_local`，使用本地 Whisper CLI 转写。
+3. 若未配置转写，任务失败为 `transcript_required`，提示上传字幕或粘贴文本。
 
-本地 Whisper 是可选能力，不应在首次安装时静默下载大型模型。模型路径、语言、线程数和资源占用必须可配置。
+本地 Whisper 是可选能力（仅上传音视频使用），不应在首次安装时静默下载大型模型。模型路径、语言、线程数和资源占用必须可配置。
 
 ## 9. Claude 集成
 
@@ -816,6 +827,6 @@ LOG_LEVEL
 - [ ] 复习测验有独立任务类型和策略。
 - [ ] 批阅失败不丢失 Attempt 和客观题分。
 - [ ] 文件路径无法逃逸数据目录。
-- [ ] URL 下载具备 SSRF 防护和大小/超时限制。
+- [ ] URL 素材经 API 白名单校验、Worker 规范化后由 Claude Web Fetch 提取，Worker 不直连抓取。
 - [ ] 日志不包含 API Key。
 - [ ] PostgreSQL 和文件卷均可备份和恢复。

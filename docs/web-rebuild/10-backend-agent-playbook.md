@@ -127,9 +127,9 @@
 
 执行：
 1. 实现 Job handler registry、阶段事件、取消、超时和按 job_id 隔离的临时目录。
-2. 支持文本、PDF/DOCX/TXT/Markdown、字幕优先的视频 URL；yt-dlp/ffmpeg 仅通过参数数组调用。
-3. 实现 URL 解析重定向 SSRF 二次校验、下载/输出上限、解析器版本和可复现 chunking。
-4. 处理 subtitle_only 与 whisper_local；无字幕时返回可行动 transcript_required。
+2. 支持文本、PDF/DOCX/TXT/Markdown；URL 素材由 Claude Web Fetch 提取原文（不再本地下载）；yt-dlp/ffmpeg 仅服务上传媒体，且只通过参数数组调用。
+3. 实现 canonicalClaudeURL 规范化（强制 HTTPS、白名单、剥离追踪参数、250 字符上限）、文本上限、解析器版本（URL 为 claude-web-fetch/v1）和可复现 chunking。
+4. 上传音视频处理 subtitle_only 与 whisper_local；无字幕时返回可行动 transcript_required（URL 素材不适用，走 Claude Web Fetch）。
 5. 所有发布走 B2 文件恢复协议；失败/取消不改变 active 文档。
 
 验收：fixture + fake process runner 覆盖超时、取消、非零退出、SSRF、重复文件和中断发布。
