@@ -141,7 +141,7 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 	if !strings.Contains(prompt, "https://www.youtube.com/watch?v=abc") {
 		t.Fatalf("prompt 应含 canonical URL: %q", prompt)
 	}
-	for _, want := range []string{"yt-dlp", "--skip-download", "untrusted", "<<<RAW_TEXT_MARKDOWN>>>"} {
+	for _, want := range []string{"yt-dlp", "--skip-download", "--cookies", "untrusted", "<<<RAW_TEXT_MARKDOWN>>>"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt 缺少 %q: %q", want, prompt)
 		}

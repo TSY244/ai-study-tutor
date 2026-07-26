@@ -70,10 +70,17 @@ services:
       HTTP_ADDR: ":8080"
       APP_DATA_DIR: /var/lib/ai-study-tutor
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+      URL_ALLOWLIST: ${URL_ALLOWLIST:-youtube.com,bilibili.com}
+      URL_API_DNS_VALIDATION: ${URL_API_DNS_VALIDATION:-false}
+      CLAUDE_GATEWAY_CONFIG_FILE: /config/claude-gateway/keys.json
+      CLAUDE_GATEWAY_WRITE_ENABLED: "true"
+      CLAUDE_CODE_SETTINGS_FILE: /claude-code/settings.json
     secrets:
       - postgres_password
     volumes:
       - app_data:/var/lib/ai-study-tutor
+      - ${CLAUDE_GATEWAY_CONFIG_DIR:-../data/claude-gateway}:/config/claude-gateway
+      - ${CLAUDE_CODE_SETTINGS_DIR:?Run make docker-init to set CLAUDE_CODE_SETTINGS_DIR}:/claude-code
     networks:
       - frontend
       - backend
@@ -104,6 +111,8 @@ services:
       <<: [*database-environment, *service-environment]
       APP_DATA_DIR: /var/lib/ai-study-tutor
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      CLAUDE_GATEWAY_CONFIG_FILE: /config/claude-gateway/keys.json
       AI_PROVIDER: ${AI_PROVIDER:-anthropic}
       CLAUDE_MODEL_DEFAULT: ${CLAUDE_MODEL_DEFAULT}
       CLAUDE_REQUEST_TIMEOUT: ${CLAUDE_REQUEST_TIMEOUT}
@@ -112,6 +121,7 @@ services:
       WORKER_JOB_TIMEOUT: ${WORKER_JOB_TIMEOUT}
       JOB_LEASE_DURATION: ${JOB_LEASE_DURATION}
       MAX_DOWNLOAD_BYTES: ${MAX_DOWNLOAD_BYTES}
+      URL_ALLOWLIST: ${URL_ALLOWLIST:-youtube.com,bilibili.com}
       TRANSCRIPTION_MODE: ${TRANSCRIPTION_MODE}
       WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH}
     secrets:
@@ -119,6 +129,8 @@ services:
       - anthropic_api_key
     volumes:
       - app_data:/var/lib/ai-study-tutor
+      - ${CLAUDE_GATEWAY_CONFIG_DIR:-../data/claude-gateway}:/config/claude-gateway
+      - ./cookies:/config/cookies:ro
     networks:
       - backend
       - egress

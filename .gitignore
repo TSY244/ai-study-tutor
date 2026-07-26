@@ -17,3 +17,4 @@ video_summary_report.md
 
 # Local build artifacts
 /worker
+deploy/cookies/
