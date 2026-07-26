@@ -20,6 +20,7 @@ interface KeyDraft {
   name: string
   apiKey: string
   model: string
+  baseUrl: string
   enabled: boolean
   priority: string
   weight: string
@@ -32,6 +33,7 @@ const emptyDraft: KeyDraft = {
   name: '',
   apiKey: '',
   model: '',
+  baseUrl: '',
   enabled: true,
   priority: '10',
   weight: '100',
@@ -46,6 +48,7 @@ function draftFor(keyRecord: ClaudeKey | null): KeyDraft {
     name: keyRecord.name,
     apiKey: '',
     model: keyRecord.model,
+    baseUrl: keyRecord.base_url ?? '',
     enabled: keyRecord.enabled,
     priority: String(keyRecord.priority),
     weight: String(keyRecord.weight),
@@ -88,6 +91,7 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
     setFormError(null)
     const name = draft.name.trim()
     const model = draft.model.trim()
+    const baseUrl = draft.baseUrl.trim()
     const apiKey = draft.apiKey.trim()
     const priority = parseInteger(draft.priority, 0, Number.MAX_SAFE_INTEGER)
     const weight = parseInteger(draft.weight, 1, 1000)
@@ -101,6 +105,11 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
     }
     if (!model || model.length > 100) {
       setFormError('模型为必填项，且不能超过 100 个字符。')
+      return
+    }
+    // 前端只做前缀校验；完整校验（https、无 userinfo、去尾 /）以后端为准。
+    if (baseUrl !== '' && !baseUrl.startsWith('https://')) {
+      setFormError('Base URL 必须是 https:// 开头的地址')
       return
     }
     if (!editing && !apiKey) {
@@ -121,6 +130,7 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
     const common: ClaudeKeyUpdate = {
       name,
       model,
+      base_url: baseUrl,
       enabled: draft.enabled,
       priority,
       weight,
@@ -131,6 +141,10 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
     const payload: ClaudeKeyCreate | ClaudeKeyUpdate = editing
       ? { ...common, ...(apiKey ? { api_key: apiKey } : {}) }
       : { ...common, api_key: apiKey, name, model }
+    if (!editing && !payload.base_url) {
+      // 创建时留空不发送 base_url；编辑时空串表示清除（回退环境变量）。
+      delete payload.base_url
+    }
 
     setSaving(true)
     try {
@@ -187,6 +201,18 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
                 onChange={(event) => change('model', event.target.value)}
               />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="claude-key-base-url">Base URL</Label>
+            <Input
+              id="claude-key-base-url"
+              autoComplete="off"
+              placeholder="https://api.anthropic.com"
+              value={draft.baseUrl}
+              onChange={(event) => change('baseUrl', event.target.value)}
+            />
+            <p className="text-xs text-text-subtle">留空使用部署环境变量 ANTHROPIC_BASE_URL。</p>
           </div>
 
           <div className="space-y-1.5">

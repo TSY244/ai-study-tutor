@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,7 +32,7 @@ type Router struct {
 	// nil 时使用 ai.NotConfiguredProvider。
 	Legacy aipkg.Provider
 
-	// Endpoint 覆盖 Anthropic 端点（测试注入 httptest 服务器）。
+	// Endpoint 是进程级默认 Anthropic 端点；Key.base_url 非空时优先于它。
 	Endpoint string
 	// HTTPClient 覆盖每次尝试使用的 HTTP 客户端（测试注入）。
 	HTTPClient *http.Client
@@ -190,6 +191,7 @@ func (r *Router) legacy() aipkg.Provider {
 
 // attempt 用选中的 Key 现场构造 Anthropic Provider 并发起一次调用。
 // Model 解析：req.Model > key.Model > DefaultModel。
+// 端点解析：Key.base_url（补全 /v1/messages）> r.Endpoint。
 func (r *Router) attempt(ctx context.Context, key Key, req aipkg.Request) (aipkg.Response, error) {
 	model := req.Model
 	if model == "" {
@@ -202,15 +204,30 @@ func (r *Router) attempt(ctx context.Context, key Key, req aipkg.Request) (aipkg
 	if timeout <= 0 {
 		timeout = DefaultTimeoutSeconds
 	}
+	endpoint := r.Endpoint
+	// Store.Load 不归一化：手改 keys.json 带入的纯空白 base_url 视为未设置。
+	if base := strings.TrimSpace(key.BaseURL); base != "" {
+		endpoint = messagesEndpoint(base)
+	}
 	provider := aipkg.NewAnthropicProvider(aipkg.AnthropicConfig{
 		APIKey:          key.APIKey,
 		Model:           model,
-		Endpoint:        r.Endpoint,
+		Endpoint:        endpoint,
 		MaxOutputTokens: r.MaxOutputTokens,
 		Timeout:         time.Duration(timeout) * time.Second,
 		HTTPClient:      r.HTTPClient,
 	})
 	return provider.Generate(ctx, req)
+}
+
+// messagesEndpoint 把基础 URL 归一为完整 Messages 端点；规则与
+// config.ClaudeConfig.AnthropicMessagesEndpoint 一致。
+func messagesEndpoint(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if strings.HasSuffix(base, "/v1/messages") {
+		return base
+	}
+	return base + "/v1/messages"
 }
 
 // recordOutcome 按错误码语义更新 Key 运行态。

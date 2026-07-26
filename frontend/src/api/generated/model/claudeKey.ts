@@ -16,6 +16,8 @@ export interface ClaudeKey {
   /** Key 的短指纹（sha256: 前缀），用于区分密钥而不泄露内容。 */
   fingerprint: string;
   model: string;
+  /** 该 Key 专属的 Anthropic base URL；空字符串表示未设置，使用部署侧 ANTHROPIC_BASE_URL。 */
+  base_url?: string;
   enabled: boolean;
   /** @minimum 0 */
   priority: number;

@@ -202,6 +202,62 @@ func TestStoreUpdatePreservesOmittedSecretAndRejectsBlankReplacement(t *testing.
 	}
 }
 
+func TestStoreBaseURLRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.json")
+	s := NewStore(path)
+	k, err := s.Create(Key{Name: "gw", APIKey: syntheticSecret("base-url"), Model: "claude-test", BaseURL: "  https://gw1.example  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.BaseURL != "https://gw1.example" {
+		t.Fatalf("Create 应 TrimSpace base_url: %q", k.BaseURL)
+	}
+	keys, err := NewStore(path).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].BaseURL != "https://gw1.example" {
+		t.Fatalf("base_url 应随 keys.json 往返: %+v", keys)
+	}
+	// 更新语义：nil=保持；空串=清除；非空=设置。
+	name := "gw2"
+	if _, err := s.Update(k.ID, KeyPatch{Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Load(); got[0].BaseURL != "https://gw1.example" {
+		t.Fatalf("nil 补丁不得改动 base_url: %q", got[0].BaseURL)
+	}
+	empty := ""
+	if _, err := s.Update(k.ID, KeyPatch{BaseURL: &empty}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Load(); got[0].BaseURL != "" {
+		t.Fatalf("空串补丁应清除 base_url: %q", got[0].BaseURL)
+	}
+	replacement := "https://gw2.example"
+	if _, err := s.Update(k.ID, KeyPatch{BaseURL: &replacement}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Load(); got[0].BaseURL != "https://gw2.example" {
+		t.Fatalf("非空补丁应设置 base_url: %q", got[0].BaseURL)
+	}
+}
+
+func TestStoreLegacyKeysJSONWithoutBaseURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.json")
+	legacy := `{"keys":[{"id":"ck_old","name":"old","api_key":"sk-ant-old","model":"m","enabled":true,"priority":1,"weight":1}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := NewStore(path).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].BaseURL != "" {
+		t.Fatalf("旧格式应兼容加载且 base_url 为空: %+v", keys)
+	}
+}
+
 func TestStoreWriteFailureDoesNotPublishUnpersistedMutation(t *testing.T) {
 	tests := []struct {
 		name   string

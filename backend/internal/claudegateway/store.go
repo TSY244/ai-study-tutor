@@ -30,6 +30,7 @@ type Key struct {
 	Name                   string    `json:"name"`
 	APIKey                 string    `json:"api_key"`
 	Model                  string    `json:"model"`
+	BaseURL                string    `json:"base_url,omitempty"`
 	Enabled                bool      `json:"enabled"`
 	Priority               int       `json:"priority"`
 	Weight                 int       `json:"weight"`
@@ -150,6 +151,7 @@ func (s *Store) Create(k Key) (Key, error) {
 	k.APIKey = strings.TrimSpace(k.APIKey)
 	k.Name = strings.TrimSpace(k.Name)
 	k.Model = strings.TrimSpace(k.Model)
+	k.BaseURL = strings.TrimSpace(k.BaseURL)
 	if k.APIKey == "" || k.Name == "" || k.Model == "" {
 		return Key{}, fmt.Errorf("%w: api_key/name/model 不能为空", ErrInvalidKey)
 	}
@@ -187,6 +189,7 @@ type KeyPatch struct {
 	APIKey                 *string
 	Name                   *string
 	Model                  *string
+	BaseURL                *string
 	Enabled                *bool
 	Priority               *int
 	Weight                 *int
@@ -227,6 +230,9 @@ func (s *Store) Update(id string, patch KeyPatch) (Key, error) {
 		}
 		if patch.Model != nil {
 			k.Model = strings.TrimSpace(*patch.Model)
+		}
+		if patch.BaseURL != nil {
+			k.BaseURL = strings.TrimSpace(*patch.BaseURL)
 		}
 		if patch.Enabled != nil {
 			k.Enabled = *patch.Enabled
@@ -404,6 +410,7 @@ type SafeKey struct {
 	MaskedKey              string  `json:"masked_key"`
 	Fingerprint            string  `json:"fingerprint"`
 	Model                  string  `json:"model"`
+	BaseURL                string  `json:"base_url"`
 	Enabled                bool    `json:"enabled"`
 	Priority               int     `json:"priority"`
 	Weight                 int     `json:"weight"`
@@ -429,6 +436,7 @@ func safeView(k Key, st KeyState) SafeKey {
 		MaskedKey:              MaskKey(k.APIKey),
 		Fingerprint:            Fingerprint(k.APIKey),
 		Model:                  k.Model,
+		BaseURL:                k.BaseURL,
 		Enabled:                k.Enabled,
 		Priority:               k.Priority,
 		Weight:                 k.Weight,

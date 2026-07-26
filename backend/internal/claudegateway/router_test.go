@@ -882,3 +882,123 @@ func TestGatewayOnlyURLImportNeverUsesLegacy(t *testing.T) {
 		}
 	})
 }
+
+// TestRouterAttemptUsesKeyBaseURL：Key.base_url 优先于 Router.Endpoint；
+// 基础 URL 自动补全 /v1/messages 后缀。同优先级同权重按文件顺序首选，
+// srvA 的 Key 必须排第一以保证断言确定；httptest 是 http —— 绕开 handler
+// 校验直接写 keys.json（store 层不校验 scheme）。
+func TestRouterAttemptUsesKeyBaseURL(t *testing.T) {
+	var mu sync.Mutex
+	var pathsA, pathsB []string
+	mk := func(paths *[]string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			*paths = append(*paths, r.URL.Path)
+			mu.Unlock()
+			writeAnthropicSuccess(w)
+		}))
+	}
+	srvA := mk(&pathsA)
+	srvB := mk(&pathsB)
+	defer srvA.Close()
+	defer srvB.Close()
+
+	keyA := routerTestKey("base-url-a", 10, 1)
+	keyA.BaseURL = srvA.URL
+	keyB := routerTestKey("base-url-b", 10, 1)
+	keyB.BaseURL = srvB.URL
+	router, _ := newTestRouter(t, []Key{keyA, keyB}, nil)
+	router.Endpoint = "http://unused.example/v1/messages"
+
+	if _, err := router.Generate(context.Background(), routerTestRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(pathsA) != 1 || pathsA[0] != "/v1/messages" {
+		t.Fatalf("应请求 Key 的 base_url 并补全 /v1/messages: %v", pathsA)
+	}
+	if len(pathsB) != 0 {
+		t.Fatalf("不应请求第二个 Key 的 base_url: %v", pathsB)
+	}
+}
+
+// TestRouterAttemptFallsBackToRouterEndpoint：Key 无 base_url 时原样使用
+// Router.Endpoint（进程级默认端点，行为与现状一致）。
+func TestRouterAttemptFallsBackToRouterEndpoint(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		writeAnthropicSuccess(w)
+	}))
+	defer server.Close()
+	router, _ := newTestRouter(t, []Key{routerTestKey("no-base-url", 10, 1)}, server)
+	router.Endpoint = server.URL + "/v1/messages"
+
+	if _, err := router.Generate(context.Background(), routerTestRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "/v1/messages" {
+		t.Fatalf("Key 无 base_url 时应回退 Router.Endpoint 原样端点: %v", paths)
+	}
+}
+
+// TestRouterGenerateForKeyUsesKeyBaseURL：GenerateForKey 经 attempt 继承
+// Key 的 base_url。
+func TestRouterGenerateForKeyUsesKeyBaseURL(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		writeAnthropicSuccess(w)
+	}))
+	defer server.Close()
+	key := routerTestKey("target-base-url", 10, 1)
+	key.BaseURL = server.URL
+	router, _ := newTestRouter(t, []Key{key}, nil)
+	router.Endpoint = "http://unused.example/v1/messages"
+
+	if _, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "/v1/messages" {
+		t.Fatalf("GenerateForKey 应使用 Key 的 base_url: %v", paths)
+	}
+}
+
+// TestRouterFailoverReResolvesEndpointPerAttempt：故障转移时端点按各 Key
+// 的 base_url 逐次重解析 —— 首选 Key 的 base_url 返回 503（可转移错误，
+// 对齐既有 server error 用例）后，下一个 Key 的请求发向它自己的 base_url。
+func TestRouterFailoverReResolvesEndpointPerAttempt(t *testing.T) {
+	var mu sync.Mutex
+	var pathsA, pathsB []string
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pathsA = append(pathsA, r.URL.Path)
+		mu.Unlock()
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srvA.Close()
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pathsB = append(pathsB, r.URL.Path)
+		mu.Unlock()
+		writeAnthropicSuccess(w)
+	}))
+	defer srvB.Close()
+
+	// 同优先级同权重按文件顺序首选：srvA 的 Key 排第一，先 503 再转移。
+	keyA := routerTestKey("failover-base-url-a", 10, 1)
+	keyA.BaseURL = srvA.URL
+	keyB := routerTestKey("failover-base-url-b", 10, 1)
+	keyB.BaseURL = srvB.URL
+	router, _ := newTestRouter(t, []Key{keyA, keyB}, nil)
+	router.Endpoint = "http://unused.example/v1/messages"
+
+	if _, err := router.Generate(context.Background(), routerTestRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if len(pathsA) != 1 || pathsA[0] != "/v1/messages" {
+		t.Fatalf("首选 Key 应请求自己的 base_url: %v", pathsA)
+	}
+	if len(pathsB) != 1 || pathsB[0] != "/v1/messages" {
+		t.Fatalf("故障转移应请求下一个 Key 自己的 base_url: %v", pathsB)
+	}
+}

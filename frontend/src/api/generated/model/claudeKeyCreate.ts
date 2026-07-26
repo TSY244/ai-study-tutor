@@ -20,6 +20,8 @@ export interface ClaudeKeyCreate {
      * @maxLength 100
      */
   model: string;
+  /** 可选；非空必须是 https URL（无 userinfo），存储时去尾 /。 */
+  base_url?: string;
   enabled?: boolean;
   /** @minimum 0 */
   priority?: number;

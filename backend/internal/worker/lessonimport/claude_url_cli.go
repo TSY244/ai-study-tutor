@@ -22,8 +22,8 @@ import (
 //     -p <prompt> --output-format json`；WebFetch 是 CLI 客户端工具，抓取
 //     发生在 worker 容器（需出网访问白名单站点），不经网关 server tool；
 //   - 凭证来自 claudegateway keys.json：选当前优先级最高的启用 Key，
-//     api_key 注入 CLI 的 ANTHROPIC_AUTH_TOKEN；base_url 来自进程级
-//     ANTHROPIC_BASE_URL（keys.json 的 Key 记录没有 base_url 字段）；
+//     api_key 注入 CLI 的 ANTHROPIC_AUTH_TOKEN；base_url 按 Key.base_url
+//     优先、进程级 ANTHROPIC_BASE_URL 兜底解析；
 //   - api_key 只允许出现在子进程 env（容器内 argv/env 可接受），绝不进入
 //     日志、错误 detail、ai_runs 或任何持久化位置；
 //   - 错误映射保持既有稳定码：超时/429/5xx 类 → 可重试
@@ -51,8 +51,8 @@ type ClaudeURLCLIExtractor struct {
 	// KeysFile 是 claudegateway keys.json 路径（worker 已挂载，热重载由
 	// Store 负责，每次提取重新选择当前优先级最高的启用 Key）。
 	KeysFile string
-	// BaseURL 是进程级 ANTHROPIC_BASE_URL（中转网关）；为空则不注入
-	// ANTHROPIC_BASE_URL，由 CLI 使用默认端点。
+	// BaseURL 是进程级 ANTHROPIC_BASE_URL（中转网关）；Key.base_url 非空时
+	// 优先于它，两者皆空则不注入 ANTHROPIC_BASE_URL，由 CLI 使用默认端点。
 	BaseURL string
 	// Home 是 CLI 子进程的 HOME（容器内必须可写，如 /var/lib/ai-study-tutor）。
 	Home string
@@ -90,6 +90,12 @@ func (x *ClaudeURLCLIExtractor) Extract(ctx context.Context, workDir string, req
 	if err != nil {
 		return aipkg.Response{}, err
 	}
+	// base_url 解析：Key.base_url 优先，进程级 ANTHROPIC_BASE_URL 兜底；
+	// 纯空白视为未设置（Store.Load 不归一化）。
+	baseURL := strings.TrimSpace(key.BaseURL)
+	if baseURL == "" {
+		baseURL = x.BaseURL
+	}
 
 	timeout := x.Timeout
 	if timeout <= 0 {
@@ -107,7 +113,7 @@ func (x *ClaudeURLCLIExtractor) Extract(ctx context.Context, workDir string, req
 		Args: []string{"--allowedTools", claudeCLIAllowedTools,
 			"-p", buildClaudeCLIPrompt(req.WebFetch.URL), "--output-format", "json"},
 		Dir: workDir,
-		Env: x.env(key.APIKey),
+		Env: x.env(key.APIKey, baseURL),
 	})
 	// Job 取消/总时限优先：原样返回 ctx 错误，由 worker 运行器归类。
 	if ctx.Err() != nil {
@@ -199,9 +205,11 @@ func (x *ClaudeURLCLIExtractor) selectKey() (claudegateway.Key, error) {
 
 // env 构造 CLI 子进程的白名单环境：只放行 HOME/PATH/SHELL/CI/NO_COLOR
 // 与 Anthropic 凭证，不继承父进程其余变量。api_key 只出现在这里。
+// baseURL 是解析后的注入值（Key.base_url 优先于 x.BaseURL）；为空则不注入
+// ANTHROPIC_BASE_URL。
 // SHELL 必须显式设置且指向 bash：CLI 的 Bash 工具没有它时报 "No
 // suitable shell found"，busybox sh 不被接受（镜像已安装 bash）。
-func (x *ClaudeURLCLIExtractor) env(apiKey string) []string {
+func (x *ClaudeURLCLIExtractor) env(apiKey, baseURL string) []string {
 	env := []string{
 		"HOME=" + x.Home,
 		"PATH=" + os.Getenv("PATH"),
@@ -210,8 +218,8 @@ func (x *ClaudeURLCLIExtractor) env(apiKey string) []string {
 		"NO_COLOR=1",
 		"ANTHROPIC_AUTH_TOKEN=" + apiKey,
 	}
-	if strings.TrimSpace(x.BaseURL) != "" {
-		env = append(env, "ANTHROPIC_BASE_URL="+strings.TrimRight(strings.TrimSpace(x.BaseURL), "/"))
+	if strings.TrimSpace(baseURL) != "" {
+		env = append(env, "ANTHROPIC_BASE_URL="+strings.TrimRight(strings.TrimSpace(baseURL), "/"))
 	}
 	return env
 }

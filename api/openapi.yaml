@@ -1656,6 +1656,9 @@ components:
           description: 'Key 的短指纹（sha256: 前缀），用于区分密钥而不泄露内容。'
         model:
           type: string
+        base_url:
+          type: string
+          description: 该 Key 专属的 Anthropic base URL；空字符串表示未设置，使用部署侧 ANTHROPIC_BASE_URL。
         enabled:
           type: boolean
         priority:
@@ -1761,6 +1764,9 @@ components:
           type: string
           minLength: 1
           maxLength: 100
+        base_url:
+          type: string
+          description: 可选；非空必须是 https URL（无 userinfo），存储时去尾 /。
         enabled:
           type: boolean
           default: true
@@ -1806,6 +1812,9 @@ components:
           type: string
           minLength: 1
           maxLength: 100
+        base_url:
+          type: string
+          description: 可选；省略保持不变，空字符串表示清除（回退部署侧 ANTHROPIC_BASE_URL）。
         enabled:
           type: boolean
         priority:

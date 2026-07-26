@@ -239,6 +239,165 @@ func TestClaudeKeyManagementLifecycleNeverReturnsSecret(t *testing.T) {
 	}
 }
 
+func TestClaudeKeyBaseURLCreateUpdateAndList(t *testing.T) {
+	env := newGatewayHandlerEnv(t, true)
+	secret := strings.Join([]string{"runtime", "base-url", uuid.NewString()}, "-")
+
+	// 创建：合法 base_url 去尾 / 后持久化并出现在安全视图。
+	body, err := json.Marshal(map[string]any{
+		"api_key": secret, "name": "Gateway A", "model": "claude-test",
+		"base_url": "https://gw1.example/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := apitest.Do(t, env.engine, http.MethodPost, "/api/v1/system/claude-keys",
+		map[string]string{"Idempotency-Key": uuid.NewString()}, string(body))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	assertSafeGatewayResponse(t, create.Body.Bytes(), secret)
+	apitest.Load(t).ValidateJSONResponse(t, http.MethodPost, "/api/v1/system/claude-keys", http.StatusCreated, create.Body.Bytes())
+	var created SafeKey
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.BaseURL != "https://gw1.example" {
+		t.Fatalf("创建响应 base_url 应去尾 /: %q", created.BaseURL)
+	}
+
+	// 创建：非 https 或含 userinfo 的 base_url 一律 400。
+	for _, raw := range []string{"http://insecure.example", "https://user:pw@gw.example"} {
+		badBody, err := json.Marshal(map[string]any{
+			"api_key": secret, "name": "Bad", "model": "claude-test", "base_url": raw,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bad := apitest.Do(t, env.engine, http.MethodPost, "/api/v1/system/claude-keys",
+			map[string]string{"Idempotency-Key": uuid.NewString()}, string(badBody))
+		if bad.Code != http.StatusBadRequest {
+			t.Fatalf("base_url=%q status=%d body=%s", raw, bad.Code, bad.Body.String())
+		}
+		assertSafeGatewayResponse(t, bad.Body.Bytes(), secret)
+	}
+
+	// 更新：非空设置生效；省略保持不变；空串清除。
+	patch := apitest.Do(t, env.engine, http.MethodPatch, "/api/v1/system/claude-keys/"+created.ID,
+		nil, `{"base_url":"https://gw2.example"}`)
+	if patch.Code != http.StatusOK {
+		t.Fatalf("patch set status=%d body=%s", patch.Code, patch.Body.String())
+	}
+	assertSafeGatewayResponse(t, patch.Body.Bytes(), secret)
+	apitest.Load(t).ValidateJSONResponse(t, http.MethodPatch, "/api/v1/system/claude-keys/{key_id}", http.StatusOK, patch.Body.Bytes())
+	var patched SafeKey
+	if err := json.Unmarshal(patch.Body.Bytes(), &patched); err != nil {
+		t.Fatal(err)
+	}
+	if patched.BaseURL != "https://gw2.example" {
+		t.Fatalf("更新响应 base_url 未生效: %q", patched.BaseURL)
+	}
+
+	patch = apitest.Do(t, env.engine, http.MethodPatch, "/api/v1/system/claude-keys/"+created.ID,
+		nil, `{"name":"Renamed"}`)
+	if patch.Code != http.StatusOK {
+		t.Fatalf("patch keep status=%d body=%s", patch.Code, patch.Body.String())
+	}
+	if err := json.Unmarshal(patch.Body.Bytes(), &patched); err != nil {
+		t.Fatal(err)
+	}
+	if patched.BaseURL != "https://gw2.example" {
+		t.Fatalf("省略 base_url 的 PATCH 不得改动该字段: %q", patched.BaseURL)
+	}
+
+	patch = apitest.Do(t, env.engine, http.MethodPatch, "/api/v1/system/claude-keys/"+created.ID,
+		nil, `{"base_url":""}`)
+	if patch.Code != http.StatusOK {
+		t.Fatalf("patch clear status=%d body=%s", patch.Code, patch.Body.String())
+	}
+	if err := json.Unmarshal(patch.Body.Bytes(), &patched); err != nil {
+		t.Fatal(err)
+	}
+	if patched.BaseURL != "" {
+		t.Fatalf("空串 PATCH 应清除 base_url: %q", patched.BaseURL)
+	}
+	persisted, err := env.store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.BaseURL != "" {
+		t.Fatalf("清除后持久化的 base_url 应为空: %q", persisted.BaseURL)
+	}
+
+	badPatch := apitest.Do(t, env.engine, http.MethodPatch, "/api/v1/system/claude-keys/"+created.ID,
+		nil, `{"base_url":"http://insecure.example"}`)
+	if badPatch.Code != http.StatusBadRequest {
+		t.Fatalf("非法 base_url 的 PATCH status=%d body=%s", badPatch.Code, badPatch.Body.String())
+	}
+	assertSafeGatewayResponse(t, badPatch.Body.Bytes(), secret)
+
+	// 列表响应同样携带 base_url。
+	list := apitest.Do(t, env.engine, http.MethodGet, "/api/v1/system/claude-keys", nil, "")
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	assertSafeGatewayResponse(t, list.Body.Bytes(), secret)
+	apitest.Load(t).ValidateJSONResponse(t, http.MethodGet, "/api/v1/system/claude-keys", http.StatusOK, list.Body.Bytes())
+	var listed struct {
+		Items []SafeKey `json:"items"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range listed.Items {
+		if item.ID == created.ID {
+			found = true
+			if item.BaseURL != "" {
+				t.Fatalf("列表响应 base_url 应为空（已清除）: %q", item.BaseURL)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("列表响应缺少刚创建的 Key")
+	}
+}
+
+func TestWriteClaudeCodeSettingsBaseURLOverride(t *testing.T) {
+	readEnv := func(t *testing.T, path string) map[string]string {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved struct {
+			Env map[string]string `json:"env"`
+		}
+		if err := json.Unmarshal(raw, &saved); err != nil {
+			t.Fatal(err)
+		}
+		return saved.Env
+	}
+
+	// Key 有 base_url 时写入该值。
+	custom := filepath.Join(t.TempDir(), "settings.json")
+	if err := writeClaudeCodeSettings(custom, Key{APIKey: "sk-ant-unit", BaseURL: "https://gw1.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readEnv(t, custom)["ANTHROPIC_BASE_URL"]; got != "https://gw1.example" {
+		t.Fatalf("Key 有 base_url 时应覆盖导出: %q", got)
+	}
+
+	// Key 无 base_url 时回退既有硬编码默认值。
+	fallback := filepath.Join(t.TempDir(), "settings.json")
+	if err := writeClaudeCodeSettings(fallback, Key{APIKey: "sk-ant-unit"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readEnv(t, fallback)["ANTHROPIC_BASE_URL"]; got != "https://app.haoshuai.cc.cd" {
+		t.Fatalf("Key 无 base_url 时应保留默认值: %q", got)
+	}
+}
+
 func TestClaudeKeyWritesCanBeDisabledAndErrorsNeverEchoSecret(t *testing.T) {
 	env := newGatewayHandlerEnv(t, false)
 	secret := strings.Join([]string{"runtime", "rejected", uuid.NewString()}, "-")

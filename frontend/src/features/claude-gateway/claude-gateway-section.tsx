@@ -213,10 +213,7 @@ export function ClaudeGatewaySection() {
             </p>
           ) : null}
           {claudeCodeSavedKeyName ? (
-            <p
-              role="status"
-              className="mt-3 rounded-md bg-ok-bg px-3 py-2 text-sm text-ok"
-            >
+            <p role="status" className="mt-3 rounded-md bg-ok-bg px-3 py-2 text-sm text-ok">
               已将「{claudeCodeSavedKeyName}」保存到 Claude Code。
             </p>
           ) : null}
@@ -414,6 +411,7 @@ function KeyCard({
 
       <dl className="mt-3 grid gap-x-5 gap-y-2 border-t border-border pt-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
         <Metric label="模型" value={keyRecord.model} />
+        <Metric label="Base URL" value={keyRecord.base_url || '默认（环境变量）'} mono />
         <Metric label="路由" value={`优先级 ${keyRecord.priority} · 权重 ${keyRecord.weight}`} />
         <Metric
           label="超时 / 冷却"

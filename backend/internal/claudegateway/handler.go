@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -96,6 +97,7 @@ type createKeyRequest struct {
 	APIKey                 string `json:"api_key"`
 	Name                   string `json:"name"`
 	Model                  string `json:"model"`
+	BaseURL                string `json:"base_url"`
 	Enabled                *bool  `json:"enabled"`
 	Priority               *int   `json:"priority"`
 	Weight                 *int   `json:"weight"`
@@ -113,10 +115,16 @@ func (h *Handler) createKey(c *gin.Context) {
 		badRequest(c, "请求体不是有效的 JSON。")
 		return
 	}
+	baseURL, ok := validateBaseURL(req.BaseURL)
+	if !ok {
+		badRequest(c, "base_url 必须是 https URL，且不得包含用户名密码。")
+		return
+	}
 	key := Key{
 		APIKey:                 strings.TrimSpace(req.APIKey),
 		Name:                   strings.TrimSpace(req.Name),
 		Model:                  strings.TrimSpace(req.Model),
+		BaseURL:                baseURL,
 		Enabled:                true,
 		Priority:               DefaultPriority,
 		Weight:                 DefaultWeight,
@@ -179,6 +187,7 @@ type updateKeyRequest struct {
 	APIKey                 *string `json:"api_key"`
 	Name                   *string `json:"name"`
 	Model                  *string `json:"model"`
+	BaseURL                *string `json:"base_url"`
 	Enabled                *bool   `json:"enabled"`
 	Priority               *int    `json:"priority"`
 	Weight                 *int    `json:"weight"`
@@ -201,6 +210,7 @@ func (h *Handler) updateKey(c *gin.Context) {
 		APIKey:                 req.APIKey,
 		Name:                   req.Name,
 		Model:                  req.Model,
+		BaseURL:                req.BaseURL,
 		Enabled:                req.Enabled,
 		Priority:               req.Priority,
 		Weight:                 req.Weight,
@@ -232,6 +242,14 @@ func (h *Handler) updateKey(c *gin.Context) {
 			return
 		}
 		patch.Model = &trimmed
+	}
+	if patch.BaseURL != nil {
+		v, ok := validateBaseURL(*patch.BaseURL)
+		if !ok {
+			badRequest(c, "base_url 必须是 https URL，且不得包含用户名密码。")
+			return
+		}
+		patch.BaseURL = &v // 空串 = 清除，回退环境变量
 	}
 	if !validatePatchLimits(c, patch) {
 		return
@@ -326,7 +344,11 @@ func writeClaudeCodeSettings(path string, key Key) error {
 		return errors.New("Claude Code settings file is not configured")
 	}
 	doc := claudeCodeSettingsDocument{Schema: "https://json.schemastore.org/claude-code-settings.json"}
-	doc.Env.AnthropicBaseURL = "https://app.haoshuai.cc.cd"
+	baseURL := strings.TrimRight(strings.TrimSpace(key.BaseURL), "/") // 纯空白视为未设置（Store.Load 不归一化）；去尾 / 与其他消费方一致
+	if baseURL == "" {
+		baseURL = "https://app.haoshuai.cc.cd" // 既有默认，未设置 base_url 的 Key 行为不变
+	}
+	doc.Env.AnthropicBaseURL = baseURL
 	doc.Env.AnthropicAuthToken = key.APIKey
 	doc.Env.DisableNonessentialTraffic = "1"
 	doc.Env.AttributionHeader = "0"
@@ -352,6 +374,20 @@ func (h *Handler) writeStoreError(c *gin.Context, err error) {
 
 func badRequest(c *gin.Context, detail string) {
 	httpserver.AbortWithProblem(c, http.StatusBadRequest, "bad_request", "请求无效", detail)
+}
+
+// validateBaseURL 校验并归一化 per-Key base_url：空输入表示未设置（合
+// 法）；非空必须是 https、有 host、无 userinfo，存储前去尾 /。
+func validateBaseURL(raw string) (string, bool) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", true
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return "", false
+	}
+	return strings.TrimRight(v, "/"), true
 }
 
 // validateKeyFields 校验必填字符串；错误响应绝不回显 Key 值。

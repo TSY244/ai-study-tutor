@@ -219,6 +219,12 @@ func TestClaudeURLCLIExtractErrorMapping(t *testing.T) {
 		{"exit non-zero", proc.Static(nil, &proc.ExitError{
 			Code: 1, StderrTail: "boom " + cliKeySentinel,
 		}), aipkg.ErrMaterialFetchFailed, false},
+		// CLI 非零退出但 stdout 仍携带信封（api_error_status）时按信封
+		// 状态映射：403 → 非重试 claude_auth_failed。
+		{"exit non-zero envelope 403", proc.Static(cliEnvelopeJSON(t, map[string]any{
+			"type": "result", "subtype": "error", "is_error": true,
+			"api_error_status": 403,
+		}), &proc.ExitError{Code: 1, StderrTail: "x"}), aipkg.ErrAuthFailed, false},
 		{"missing cli", proc.Static(nil, &proc.MissingToolError{
 			Tool: "claude",
 		}), aipkg.ErrNotConfigured, false},
@@ -434,5 +440,50 @@ func TestReadExtractedFilesJSON(t *testing.T) {
 	}
 	if got := readExtractedFilesJSON(dir); got != nil {
 		t.Fatalf("文件不齐应返回 nil: %q", got)
+	}
+}
+
+// TestClaudeURLCLIEnvBaseURLPrecedence：ANTHROPIC_BASE_URL 注入优先级 ——
+// Key.base_url > 构造 BaseURL > 不注入。
+func TestClaudeURLCLIEnvBaseURLPrecedence(t *testing.T) {
+	keyWithURL := cliTestKey("k", cliKeySentinel, 1, 100, true)
+	keyWithURL["base_url"] = "https://key-gw.example"
+	cases := []struct {
+		name        string
+		key         map[string]any
+		ctorBaseURL string
+		wantEnv     string // 为空表示 env 不得含 ANTHROPIC_BASE_URL
+	}{
+		{"key_base_url_wins", keyWithURL, "https://gateway.example", "ANTHROPIC_BASE_URL=https://key-gw.example"},
+		{"constructor_fallback", cliTestKey("k", cliKeySentinel, 1, 100, true), "https://gateway.example", "ANTHROPIC_BASE_URL=https://gateway.example"},
+		{"empty_no_injection", cliTestKey("k", cliKeySentinel, 1, 100, true), "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			keysFile := writeCLIGatewayKeys(t, tc.key)
+			fake := proc.NewFake()
+			fake.Enqueue(proc.Static(cliEnvelopeJSON(t, map[string]any{
+				"type": "result", "subtype": "success", "is_error": false,
+				"result": `{"title":"t","raw_text_markdown":"x","extraction_note":"n"}`,
+			}), nil))
+			x := newCLIExtractor(keysFile, fake)
+			x.BaseURL = tc.ctorBaseURL
+			if _, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc")); err != nil {
+				t.Fatal(err)
+			}
+			calls := fake.Calls()
+			if len(calls) != 1 {
+				t.Fatalf("应恰好一次子进程调用: %d", len(calls))
+			}
+			got := ""
+			for _, e := range calls[0].Env {
+				if strings.HasPrefix(e, "ANTHROPIC_BASE_URL=") {
+					got = e
+				}
+			}
+			if got != tc.wantEnv {
+				t.Fatalf("ANTHROPIC_BASE_URL = %q, want %q (env=%v)", got, tc.wantEnv, calls[0].Env)
+			}
+		})
 	}
 }

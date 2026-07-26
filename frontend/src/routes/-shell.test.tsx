@@ -176,6 +176,59 @@ describe('App Shell', () => {
     patchCapture.stop()
   })
 
+  it('设置：创建 Key 留空 Base URL 时 POST 省略 base_url', async () => {
+    const user = userEvent.setup()
+    const { requests, stop } = captureRequests('POST', '/api/v1/system/claude-keys')
+    renderWithRouter('/settings')
+
+    await user.click(await screen.findByRole('button', { name: '添加 Key' }))
+    await user.type(screen.getByLabelText(/^名称/), '默认网关线路')
+    await user.type(screen.getByLabelText(/^模型/), 'claude-test')
+    await user.type(screen.getByLabelText(/^Anthropic API Key/), 'runtime-blank-base-url')
+    // Base URL 留空：创建时不发送该字段（回退部署环境变量）。
+    await user.click(screen.getByRole('button', { name: '创建 Key' }))
+
+    expect(await screen.findByText('默认网关线路')).toBeInTheDocument()
+    await waitFor(() => expect(requests).toHaveLength(1))
+    expect(requests[0]?.body).not.toHaveProperty('base_url')
+    stop()
+  })
+
+  it('设置：编辑 Key 清空 Base URL 时 PATCH 发送 base_url 空串', async () => {
+    const user = userEvent.setup()
+    const patchCapture = captureRequests('PATCH', '/api/v1/system/claude-keys/ck_demo_primary')
+    renderWithRouter('/settings')
+
+    await user.click(await screen.findByRole('button', { name: '编辑主线路' }))
+    const baseUrlInput = screen.getByLabelText('Base URL')
+    expect(baseUrlInput).toHaveValue('https://gw-primary.example')
+    await user.clear(baseUrlInput)
+    await user.click(screen.getByRole('button', { name: '保存修改' }))
+
+    // 编辑时空串表示清除（回退环境变量），必须显式发送。
+    await waitFor(() => expect(patchCapture.requests).toHaveLength(1))
+    await waitFor(() => expect(patchCapture.requests[0]?.body).not.toBeNull())
+    expect(patchCapture.requests[0]?.body).toHaveProperty('base_url', '')
+    patchCapture.stop()
+  })
+
+  it('设置：Base URL 非 https 时前端拦截且不提交', async () => {
+    const user = userEvent.setup()
+    const { requests, stop } = captureRequests('POST', '/api/v1/system/claude-keys')
+    renderWithRouter('/settings')
+
+    await user.click(await screen.findByRole('button', { name: '添加 Key' }))
+    await user.type(screen.getByLabelText(/^名称/), '非法网关')
+    await user.type(screen.getByLabelText(/^模型/), 'claude-test')
+    await user.type(screen.getByLabelText(/^Anthropic API Key/), 'runtime-invalid-base-url')
+    await user.type(screen.getByLabelText('Base URL'), 'http://insecure.example')
+    await user.click(screen.getByRole('button', { name: '创建 Key' }))
+
+    expect(await screen.findByText('Base URL 必须是 https:// 开头的地址')).toBeInTheDocument()
+    expect(requests).toHaveLength(0)
+    stop()
+  })
+
   it('设置：保存指定 Key 到 Claude Code 前要求确认，且浏览器不发送完整 Key', async () => {
     const user = userEvent.setup()
     const saveCapture = captureRequests(

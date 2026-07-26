@@ -23,6 +23,8 @@ export interface ClaudeKeyUpdate {
      * @maxLength 100
      */
   model?: string;
+  /** 可选；省略保持不变，空字符串表示清除（回退部署侧 ANTHROPIC_BASE_URL）。 */
+  base_url?: string;
   enabled?: boolean;
   /** @minimum 0 */
   priority?: number;
