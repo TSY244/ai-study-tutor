@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -507,4 +508,141 @@ func TestTextMaterialExistsOnlyForImportFixture(t *testing.T) {
 	// 防止未使用的 material import 在本测试包退化；lesson_import 的 AI
 	// 扩展测试位于 internal/worker 包，复用 B5 fixture。
 	_ = material.KindText
+}
+
+// fakeQuizCLIGenerator 记录 workDir 输入文件内容并返回编排响应。
+type fakeQuizCLIGenerator struct {
+	calls  int
+	raw    string
+	notes  string
+	prompt string
+	resp   ai.Response
+	err    error
+}
+
+func (f *fakeQuizCLIGenerator) Generate(_ context.Context, workDir string, req ai.Request) (ai.Response, error) {
+	f.calls++
+	f.prompt = req.User
+	b, err := os.ReadFile(filepath.Join(workDir, "raw_text.md"))
+	if err != nil {
+		return ai.Response{}, err
+	}
+	f.raw = string(b)
+	b, err = os.ReadFile(filepath.Join(workDir, "student_notes.md"))
+	if err != nil {
+		return ai.Response{}, err
+	}
+	f.notes = string(b)
+	return f.resp, f.err
+}
+
+func newEnvWithQuizCLI(t *testing.T, gen aihandlers.QuizGenerator) *env {
+	t.Helper()
+	pool := databasetest.New(t)
+	store, err := filestore.New(pool, t.TempDir(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := worker.NewRegistry()
+	aihandlers.Register(reg, aihandlers.Deps{Pool: pool, Provider: ai.NotConfiguredProvider{}, QuizCLI: gen})
+	return &env{
+		pool:  pool,
+		store: store,
+		runner: &worker.Runner{
+			Pool: pool, Registry: reg, Files: store, WorkerID: "ai-test-worker",
+			Lease: 5 * time.Second, HeartbeatInterval: 200 * time.Millisecond,
+			CancelPollInterval: 50 * time.Millisecond, PollInterval: 10 * time.Millisecond,
+			Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		},
+	}
+}
+
+func TestQuizGenerationViaCLIPublishesReadyQuiz(t *testing.T) {
+	for _, tc := range []struct {
+		kind   string
+		source string
+	}{
+		{job.KindQuizGenerate, "regular"},
+		{job.KindReviewQuizGenerate, "retest"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			gen := &fakeQuizCLIGenerator{resp: ai.Response{
+				JSON: json.RawMessage(`{
+					"title":"CLI 生成试卷",
+					"questions":[{
+						"type":"single_choice","stem":"极限描述什么？",
+						"options":{"A":"趋势","B":"随机数"},"correct_answer":"A",
+						"explanation":"极限描述趋势。","tested_concepts":["极限"],
+						"difficulty":"easy","cognitive_level":"recall","score":5
+					}]
+				}`), Model: "claude-cli-test", ProviderRequestID: "sess_quiz_cli"}}
+			e := newEnvWithQuizCLI(t, gen)
+			_, lessonID := seedLesson(t, e.pool)
+			publishDoc(t, e.pool, lessonID, document.KindRawText, "学习资料：极限定义。")
+			publishDoc(t, e.pool, lessonID, document.KindStudentNotes, "学生笔记：极限描述趋势。")
+			family := job.GenerationFamilyLessonGeneration
+			jobID := newJob(t, e.pool, &job.Job{
+				Kind: tc.kind, AggregateType: "lesson", AggregateID: lessonID, GenerationFamily: &family,
+				Payload:     mustJSON(t, map[string]any{"lesson_id": lessonID.String(), "question_count": 1, "title": nil}),
+				MaxAttempts: 1,
+			})
+
+			e.runOnce(t)
+
+			j := getJob(t, e.pool, jobID)
+			if j.Status != job.StatusSucceeded {
+				t.Fatalf("CLI 任务应成功: %s %v", j.Status, j.ErrorCode)
+			}
+			var count int
+			var source string
+			if err := e.pool.QueryRow(context.Background(), `SELECT count(*), max(source) FROM quizzes WHERE lesson_id = $1`, lessonID).Scan(&count, &source); err != nil {
+				t.Fatal(err)
+			}
+			if count != 1 || source != tc.source {
+				t.Fatalf("试卷发布错误: count=%d source=%s", count, source)
+			}
+			if aiRunCount(t, e.pool, jobID) != 1 {
+				t.Fatal("CLI quiz 生成应记录一条脱敏 ai_run")
+			}
+			if gen.calls != 1 {
+				t.Fatalf("应恰好一次 CLI 生成调用: %d", gen.calls)
+			}
+			if gen.raw != "学习资料：极限定义。" || gen.notes != "学生笔记：极限描述趋势。" {
+				t.Fatalf("写盘资料内容错误: raw=%q notes=%q", gen.raw, gen.notes)
+			}
+			if strings.Contains(gen.prompt, "极限定义") {
+				t.Fatal("CLI prompt 不得包含资料正文")
+			}
+		})
+	}
+}
+
+func TestQuizGenerationCLIFailureDoesNotPublish(t *testing.T) {
+	gen := &fakeQuizCLIGenerator{err: ai.ErrorForCode(ai.ErrInvalidJSON, "Claude 未写出有效的题目 JSON，将自动重试。")}
+	e := newEnvWithQuizCLI(t, gen)
+	_, lessonID := seedLesson(t, e.pool)
+	publishDoc(t, e.pool, lessonID, document.KindRawText, "学习资料：极限定义。")
+	family := job.GenerationFamilyLessonGeneration
+	jobID := newJob(t, e.pool, &job.Job{
+		Kind: job.KindQuizGenerate, AggregateType: "lesson", AggregateID: lessonID, GenerationFamily: &family,
+		Payload:     mustJSON(t, map[string]any{"lesson_id": lessonID.String()}),
+		MaxAttempts: 1,
+	})
+
+	e.runOnce(t)
+
+	j := getJob(t, e.pool, jobID)
+	if j.Status != job.StatusFailed || j.ErrorCode == nil || *j.ErrorCode != worker.ErrCodeClaudeInvalidJSON {
+		t.Fatalf("CLI 失败应稳定归类: status=%s code=%v", j.Status, j.ErrorCode)
+	}
+	if aiRunCount(t, e.pool, jobID) != 1 {
+		t.Fatal("CLI 失败也应记录一条脱敏 ai_run")
+	}
+	var quizzes int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM quizzes WHERE lesson_id = $1`, lessonID).Scan(&quizzes); err != nil {
+		t.Fatal(err)
+	}
+	if quizzes != 0 {
+		t.Fatalf("CLI 失败不得发布试卷: %d", quizzes)
+	}
 }

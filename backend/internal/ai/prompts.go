@@ -15,6 +15,8 @@ const (
 	PromptStudentNotesV1     = "lesson-student-notes/v1"
 	PromptQuizV1             = "quiz/v1"
 	PromptReviewQuizV1       = "review-quiz/v1"
+	PromptQuizCLIV1          = "quiz-cli/v1"
+	PromptReviewQuizCLIV1    = "review-quiz-cli/v1"
 	PromptGradeV1            = "attempt-grade/v1"
 	PromptWrongAnalyzeV1     = "wrong-answer-analyze/v1"
 	PromptSummaryV1          = "summary-evaluate/v1"

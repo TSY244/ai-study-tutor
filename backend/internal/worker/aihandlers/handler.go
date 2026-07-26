@@ -24,6 +24,9 @@ import (
 type Deps struct {
 	Pool     *pgxpool.Pool
 	Provider aipkg.Provider
+	// QuizCLI 非 nil 时测验/复习测验生成走 Claude Code CLI 文件契约；
+	// nil 保持 Messages API 路径。
+	QuizCLI QuizGenerator
 }
 
 func Register(reg *worker.Registry, deps Deps) {
@@ -33,8 +36,8 @@ func Register(reg *worker.Registry, deps Deps) {
 	b := base{Pool: deps.Pool, Provider: deps.Provider}
 	reg.Register(job.KindClaudeConnectivityTest, connectivityHandler{base: b})
 	reg.Register(job.KindLessonRegenerate, lessonRegenerateHandler{base: b})
-	reg.Register(job.KindQuizGenerate, quizGenerateHandler{base: b, Review: false})
-	reg.Register(job.KindReviewQuizGenerate, quizGenerateHandler{base: b, Review: true})
+	reg.Register(job.KindQuizGenerate, quizGenerateHandler{base: b, Review: false, QuizCLI: deps.QuizCLI})
+	reg.Register(job.KindReviewQuizGenerate, quizGenerateHandler{base: b, Review: true, QuizCLI: deps.QuizCLI})
 	reg.Register(job.KindAttemptGrade, attemptGradeHandler{base: b})
 	reg.Register(job.KindWrongAnswerAnalyze, wrongAnswerAnalyzeHandler{base: b})
 	reg.Register(job.KindSummaryEvaluate, summaryEvaluateHandler{base: b})
@@ -268,6 +271,7 @@ func (h lessonRegenerateHandler) FinalizeCancel(ctx context.Context, tx pgx.Tx, 
 type quizGenerateHandler struct {
 	base
 	Review  bool
+	QuizCLI QuizGenerator
 	lessons lesson.Repository
 	docs    document.Repository
 	quiz    *quiz.AssemblyService
@@ -315,16 +319,32 @@ func (h quizGenerateHandler) Execute(ctx context.Context, ex *worker.Execution) 
 	if err := ex.Stage(ctx, choose(h.Review, "planning_review", "planning"), 25, "生成出题计划"); err != nil {
 		return nil, err
 	}
-	req, err := aipkg.BuildQuizRequest(aipkg.QuizPromptInput{
-		LessonTitle: les.Title, RawText: raw, StudentNotes: student, QuestionCount: int(count), Review: h.Review,
-	})
-	if err != nil {
-		return nil, err
+	var req aipkg.Request
+	generate := h.Provider.Generate
+	if h.QuizCLI != nil {
+		if err := writeQuizCLIInputs(ex.WorkDir, raw, student); err != nil {
+			return nil, worker.WrapError(worker.ErrCodeInternal, "写入出题上下文失败，将自动重试。", true, err)
+		}
+		req = buildQuizCLIRequest(ex.WorkDir, quizCLIPromptInput{
+			LessonTitle: les.Title, QuestionCount: int(count), Review: h.Review,
+		})
+		quizCLI := h.QuizCLI
+		workDir := ex.WorkDir
+		generate = func(ctx context.Context, r aipkg.Request) (aipkg.Response, error) {
+			return quizCLI.Generate(ctx, workDir, r)
+		}
+	} else {
+		req, err = aipkg.BuildQuizRequest(aipkg.QuizPromptInput{
+			LessonTitle: les.Title, RawText: raw, StudentNotes: student, QuestionCount: int(count), Review: h.Review,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := ex.Stage(ctx, "generating_questions", 55, "调用 Claude 生成题目"); err != nil {
 		return nil, err
 	}
-	resp, runID, err := h.call(ctx, ex, req)
+	resp, runID, err := h.callWith(ctx, ex, req, generate)
 	if err != nil {
 		return nil, err
 	}

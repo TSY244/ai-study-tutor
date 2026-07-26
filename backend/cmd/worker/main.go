@@ -122,6 +122,7 @@ func main() {
 	aihandlers.Register(registry, aihandlers.Deps{
 		Pool:     pool,
 		Provider: aiProvider,
+		QuizCLI:  providers.QuizCLI,
 	})
 	// B 站 Cookie 可用性检测：每次执行实时读取 Cookie 文件（热加载）。
 	registry.Register(job.KindBilibiliCookieTest, &cookiecheck.Handler{
@@ -174,6 +175,9 @@ type claudeProviders struct {
 	// URLExtractor 是 URL 素材的 Claude Code CLI 提取器（与 URLImportAI
 	// 同条件装配；凭证同样取自网关 keys.json）。
 	URLExtractor lessonimport.URLExtractor
+	// QuizCLI 是测验生成的 Claude Code CLI 生成器（与 URLExtractor 同条件
+	// 装配；凭证同样取自网关 keys.json）。
+	QuizCLI aihandlers.QuizGenerator
 }
 
 // buildClaudeProviders 是 Worker 的唯一 Claude Provider 装配入口。网关
@@ -225,6 +229,15 @@ func buildClaudeProviders(cfg config.Config, anthropicKey string, claudeOK bool,
 		// 凭证取自网关 keys.json（每次提取重选最高优先级启用 Key），
 		// base_url 取进程级 ANTHROPIC_BASE_URL；HOME 指向可写数据目录。
 		providers.URLExtractor = &lessonimport.ClaudeURLCLIExtractor{
+			Proc:      proc.ExecRunner{},
+			KeysFile:  cfg.Claude.GatewayConfigFile,
+			BaseURL:   cfg.Claude.AnthropicBaseURL,
+			Home:      cfg.DataDir,
+			ClaudeBin: "claude",
+		}
+		// 测验生成走 worker 容器内 Claude Code CLI 文件契约（资料落盘、
+		// agent 自读、quiz.json 产出），绕开单响应 max_tokens 截断。
+		providers.QuizCLI = &aihandlers.ClaudeQuizCLIGenerator{
 			Proc:      proc.ExecRunner{},
 			KeysFile:  cfg.Claude.GatewayConfigFile,
 			BaseURL:   cfg.Claude.AnthropicBaseURL,
