@@ -137,6 +137,9 @@ func TestBuildClaudeProvidersURLImportRequiresGatewayKey(t *testing.T) {
 	if providers.URLImportAI == nil {
 		t.Fatal("存在网关配置时必须装配 URL 专用 Provider")
 	}
+	if providers.URLExtractor == nil {
+		t.Fatal("存在网关配置时必须装配 URL 专用 CLI 提取器")
+	}
 	if providers.URLImportAvailable == nil || providers.URLImportAvailable() {
 		t.Fatal("零网关启用 Key 时 URL 导入必须不可用（legacy 直连 Key 不是替代品）")
 	}
@@ -205,7 +208,7 @@ func TestBuildClaudeProvidersURLImportHasNoLegacyOrFakeSubstitute(t *testing.T) 
 		if providers.Gateway != nil {
 			t.Fatal("无网关配置时不应装配 Gateway")
 		}
-		if providers.URLImportAI != nil || providers.URLImportAvailable != nil {
+		if providers.URLImportAI != nil || providers.URLImportAvailable != nil || providers.URLExtractor != nil {
 			t.Fatal("legacy 直连 Key 不得成为 URL 导入替代品")
 		}
 		if providers.AI == nil || providers.LessonImportAI == nil {
@@ -216,7 +219,7 @@ func TestBuildClaudeProvidersURLImportHasNoLegacyOrFakeSubstitute(t *testing.T) 
 	t.Run("fake provider", func(t *testing.T) {
 		cfg := config.Config{Claude: config.ClaudeConfig{Provider: "fake", Model: "claude-test"}}
 		providers := buildClaudeProviders(cfg, "", false, nil)
-		if providers.URLImportAI != nil || providers.URLImportAvailable != nil {
+		if providers.URLImportAI != nil || providers.URLImportAvailable != nil || providers.URLExtractor != nil {
 			t.Fatal("fake Provider 不得成为 URL 导入替代品")
 		}
 	})

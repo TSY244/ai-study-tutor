@@ -111,6 +111,7 @@ func main() {
 		AIAvailable:        providers.LessonImportAvailable,
 		URLImportAI:        providers.URLImportAI,
 		URLImportAvailable: providers.URLImportAvailable,
+		URLExtractor:       providers.URLExtractor,
 		URLAllowlist:       cfg.Material.URLAllowlist,
 		MaxDownloadBytes:   cfg.Material.MaxDownloadBytes,
 		TranscriptionMode:  cfg.Material.TranscriptionMode,
@@ -163,6 +164,9 @@ type claudeProviders struct {
 	// fake/非 Anthropic Provider 永不是 URL 导入替代品（字段保持 nil）。
 	URLImportAI        aipkg.Provider
 	URLImportAvailable func() bool
+	// URLExtractor 是 URL 素材的 Claude Code CLI 提取器（与 URLImportAI
+	// 同条件装配；凭证同样取自网关 keys.json）。
+	URLExtractor lessonimport.URLExtractor
 }
 
 // buildClaudeProviders 是 Worker 的唯一 Claude Provider 装配入口。网关
@@ -209,6 +213,16 @@ func buildClaudeProviders(cfg config.Config, anthropicKey string, claudeOK bool,
 		providers.URLImportAI = gateway.GatewayOnly()
 		providers.URLImportAvailable = func() bool {
 			return gateway.EnabledKeyCount() > 0
+		}
+		// URL 提取走 worker 容器内 Claude Code CLI（WebFetch 客户端抓取）：
+		// 凭证取自网关 keys.json（每次提取重选最高优先级启用 Key），
+		// base_url 取进程级 ANTHROPIC_BASE_URL；HOME 指向可写数据目录。
+		providers.URLExtractor = &lessonimport.ClaudeURLCLIExtractor{
+			Proc:      proc.ExecRunner{},
+			KeysFile:  cfg.Claude.GatewayConfigFile,
+			BaseURL:   cfg.Claude.AnthropicBaseURL,
+			Home:      cfg.DataDir,
+			ClaudeBin: "claude",
 		}
 		return providers
 	}

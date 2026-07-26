@@ -108,13 +108,19 @@ type Handler struct {
 	AIAvailable func() bool
 
 	// URLImportAI 是 URL 素材专用的网关限定 Provider（GatewayOnly，无
-	// legacy 回退）。nil 或 URLImportAvailable()=false 时 URL 导入以
-	// 非重试 claude_not_configured 失败：不做旧的 raw-text-only 降级，
-	// 也不回退 legacy 直连 Key 或本地下载管线。
+	// legacy 回退），只负责教纲/笔记生成（普通 Messages 调用经中转网关）。
+	// nil 或 URLImportAvailable()=false 时 URL 导入以非重试
+	// claude_not_configured 失败：不做旧的 raw-text-only 降级，也不回退
+	// legacy 直连 Key 或本地下载管线。
 	URLImportAI aipkg.Provider
-	// URLImportAvailable 可选，热重载判定网关当前是否有启用 Key；
-	// nil 视为可用（测试便捷）。
+	// URLImportAvailable 可选，热重载判定网关当前是否有启用 Key（也是
+	// CLI 提取的凭证来源）；nil 视为可用（测试便捷）。
 	URLImportAvailable func() bool
+
+	// URLExtractor 是 URL 素材的链接内容提取器（worker 容器内 Claude
+	// Code CLI + WebFetch 客户端抓取，凭证取自 claudegateway keys.json）。
+	// nil 时 URL 导入同样以非重试 claude_not_configured 失败。
+	URLExtractor URLExtractor
 
 	// 外部工具名（参数数组调用，无 shell）。
 	YtDlpBin     string
@@ -305,12 +311,13 @@ func (h *Handler) acquire(ctx context.Context, ex *worker.Execution, p payload, 
 	return nil, worker.NewError(worker.ErrCodeUnsupportedType, "未知素材类型。", false)
 }
 
-// executeURL 运行 URL 素材的 Claude Web Fetch 管线：canonical 再校验 ->
-// Claude 提取 -> 规范化/切分 -> 同一网关限定 Provider 生成两份文档 ->
-// 一次性发布（publishFunc 事务保持 all-or-nothing）。
-// 全程不经过本地 DNS、重定向预检、yt-dlp、FFmpeg 或 Whisper。
+// executeURL 运行 URL 素材的 Claude 提取管线：canonical 再校验 ->
+// worker 容器内 Claude Code CLI（WebFetch 客户端抓取）提取 -> 规范化/切分
+// -> 同一网关限定 Provider 生成两份文档 -> 一次性发布（publishFunc 事务
+// 保持 all-or-nothing）。全程不经过本地 DNS、重定向预检、yt-dlp、FFmpeg
+// 或 Whisper。
 func (h *Handler) executeURL(ctx context.Context, ex *worker.Execution, p payload, m *material.Material) (*worker.Outcome, error) {
-	if h.URLImportAI == nil || (h.URLImportAvailable != nil && !h.URLImportAvailable()) {
+	if h.URLExtractor == nil || h.URLImportAI == nil || (h.URLImportAvailable != nil && !h.URLImportAvailable()) {
 		return nil, worker.NewError(worker.ErrCodeClaudeNotConfigured,
 			"Claude 网关未配置启用的 Key，无法导入链接素材；请配置后重试。", false)
 	}
@@ -336,7 +343,7 @@ func (h *Handler) executeURL(ctx context.Context, ex *worker.Execution, p payloa
 	if err := ex.Stage(ctx, StageExtracting, progressExtracting, "Claude 提取链接内容"); err != nil {
 		return nil, err
 	}
-	res, err := h.generateClaudeURL(ctx, ex.Job.ID, req)
+	res, err := h.generateClaudeURL(ctx, ex.Job.ID, ex.WorkDir, req)
 	if err != nil {
 		return nil, err
 	}
@@ -385,12 +392,12 @@ func (h *Handler) executeURL(ctx context.Context, ex *worker.Execution, p payloa
 	}, nil
 }
 
-// generateClaudeURL 调用 URL 专用 Provider 提取链接正文，并按
+// generateClaudeURL 经 worker 容器内的 Claude Code CLI 提取链接正文，并按
 // generateMarkdown 同款模式恰好记录一条 purpose=lesson_url_extract 的
-// 脱敏 ai_run；Claude 错误经 claudeWorkerError 保留错误码与重试标志
+// 脱敏 ai_run；提取错误经 claudeWorkerError 保留错误码与重试标志
 // （ErrMaterialFetchFailed -> worker.ErrCodeMaterialFetchFailed）。
-func (h *Handler) generateClaudeURL(ctx context.Context, jobID uuid.UUID, req aipkg.Request) (claudeURLResult, error) {
-	resp, callErr := h.URLImportAI.Generate(ctx, req)
+func (h *Handler) generateClaudeURL(ctx context.Context, jobID uuid.UUID, workDir string, req aipkg.Request) (claudeURLResult, error) {
+	resp, callErr := h.URLExtractor.Extract(ctx, workDir, req)
 	var res claudeURLResult
 	runErr := callErr
 	if callErr == nil {

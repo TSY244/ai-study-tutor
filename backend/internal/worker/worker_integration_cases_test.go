@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,11 +19,12 @@ import (
 	"github.com/TSY244/ai-study-tutor/backend/internal/document"
 	"github.com/TSY244/ai-study-tutor/backend/internal/job"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker"
+	"github.com/TSY244/ai-study-tutor/backend/internal/worker/lessonimport"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker/proc"
 )
 
-// URL 导入走 Claude Web Fetch 后的脱敏哨兵：只准出现在 prompt/上游响应中，
-// 绝不持久化到 ai_runs 或 Job error/result。
+// URL 导入走 Claude Code CLI（WebFetch 客户端抓取）后的脱敏哨兵：只准
+// 出现在 CLI prompt/env/上游结果中，绝不持久化到 ai_runs 或 Job error/result。
 const (
 	urlQuerySentinel  = "SENTINEL-URL-QUERY-7f3a"
 	promptSentinel    = "SENTINEL-PROMPT-9b2c"
@@ -29,14 +32,63 @@ const (
 	keyLikeSentinel   = "sk-ant-SENTINEL-KEY-1a2b"
 )
 
-// useClaudeURLImport 给 handler 装配 URL 专用的 fake Provider（模拟
-// GatewayOnly 注入）并标记可用。
-func (e *env) useClaudeURLImport(t *testing.T) *ai.FakeProvider {
+// useClaudeURLImport 给 handler 装配：URL 专用的 fake Provider（模拟
+// GatewayOnly 注入，只承担教纲/笔记生成）+ Claude Code CLI 提取器（fake
+// proc.Runner，keys.json 内含 keyLikeSentinel 作为 api_key，验证 Key 只
+// 进入子进程 env、绝不泄漏到 ai_runs/Job error）。返回两者供编排。
+func (e *env) useClaudeURLImport(t *testing.T) (*ai.FakeProvider, *proc.Fake) {
 	t.Helper()
 	fakeAI := ai.NewFakeProvider()
 	e.handler.URLImportAI = fakeAI
 	e.handler.URLImportAvailable = func() bool { return true }
-	return fakeAI
+	keysFile := filepath.Join(t.TempDir(), "keys.json")
+	keysRaw, err := json.Marshal(map[string]any{"keys": []map[string]any{{
+		"id": "ck_url", "name": "url", "api_key": keyLikeSentinel, "model": "claude-test",
+		"enabled": true, "priority": 10, "weight": 100,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keysFile, keysRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cliFake := proc.NewFake()
+	e.handler.URLExtractor = &lessonimport.ClaudeURLCLIExtractor{
+		Proc:      cliFake,
+		KeysFile:  keysFile,
+		BaseURL:   "https://gateway.example",
+		Home:      t.TempDir(),
+		ClaudeBin: "claude",
+		Timeout:   time.Minute,
+	}
+	return fakeAI, cliFake
+}
+
+// claudeCLISuccessEnvelope 编排一次成功的 CLI 提取：result 为严格 JSON。
+func claudeCLISuccessEnvelope(t *testing.T, result string) *proc.Result {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success", "is_error": false,
+		"result": result, "duration_ms": 1000, "session_id": "sess-test",
+		"usage": map[string]any{"input_tokens": 10, "output_tokens": 20},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &proc.Result{Stdout: raw}
+}
+
+// claudeCLIErrorEnvelope 编排一次失败的 CLI 提取（is_error=true）。
+func claudeCLIErrorEnvelope(t *testing.T, result string, apiErrorStatus int) *proc.Result {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"type": "result", "subtype": "error", "is_error": true,
+		"result": result, "api_error_status": apiErrorStatus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &proc.Result{Stdout: raw}
 }
 
 // forbidLocalURLAccess 把本地 DNS 解析、HTTP 传输与子进程全部配置为一访问
@@ -237,15 +289,12 @@ func TestDuplicateUploadsBothSucceed(t *testing.T) {
 	}
 }
 
-// TestImportTimeout：Claude 提取挂起 + 任务总时限 -> job_timeout 可重试（回 queued）。
+// TestImportTimeout：Claude CLI 提取挂起 + 任务总时限 -> job_timeout 可重试（回 queued）。
 func TestImportTimeout(t *testing.T) {
 	e := newEnv(t)
 	e.runner.JobTimeout = 300 * time.Millisecond
-	fakeAI := e.useClaudeURLImport(t)
-	fakeAI.OnGenerate = func(ctx context.Context, _ ai.Request) (ai.Response, error) {
-		<-ctx.Done()
-		return ai.Response{}, ctx.Err()
-	}
+	_, cliFake := e.useClaudeURLImport(t)
+	cliFake.OnRun = proc.BlockUntilDone()
 	lessonID := e.newLesson(t)
 	_, jobID := e.newURLImport(t, lessonID, "https://www.youtube.com/watch?v=x", nil)
 
@@ -264,11 +313,8 @@ func TestImportTimeout(t *testing.T) {
 // 课时回 draft（无发布文档）。
 func TestImportCancelRequested(t *testing.T) {
 	e := newEnv(t)
-	fakeAI := e.useClaudeURLImport(t)
-	fakeAI.OnGenerate = func(ctx context.Context, _ ai.Request) (ai.Response, error) {
-		<-ctx.Done()
-		return ai.Response{}, ctx.Err()
-	}
+	_, cliFake := e.useClaudeURLImport(t)
+	cliFake.OnRun = proc.BlockUntilDone()
 	lessonID := e.newLesson(t)
 	materialID, jobID := e.newURLImport(t, lessonID, "https://www.youtube.com/watch?v=x", nil)
 
@@ -303,14 +349,15 @@ func TestImportCancelRequested(t *testing.T) {
 	}
 }
 
-// TestClaudeURLImportSuccess：URL 素材全链路成功——Claude Web Fetch 提取、
-// 恰好发布 raw_text+teacher_outline+student_notes、来源元数据标记
-// claude_web_fetch、ai_runs 恰好一条 lesson_url_extract，全程不触碰本地
-// DNS/HTTP/子进程，哨兵不落入 ai_runs 与 Job result。
+// TestClaudeURLImportSuccess：URL 素材全链路成功——worker 容器内 Claude
+// Code CLI（WebFetch 客户端抓取）提取、恰好发布
+// raw_text+teacher_outline+student_notes、来源元数据标记 claude_web_fetch、
+// ai_runs 恰好一条 lesson_url_extract，全程不触碰本地 DNS/HTTP/本地工具，
+// 哨兵不落入 ai_runs 与 Job result。
 func TestClaudeURLImportSuccess(t *testing.T) {
 	e := newEnv(t)
 	e.forbidLocalURLAccess(t)
-	fakeAI := e.useClaudeURLImport(t)
+	fakeAI, cliFake := e.useClaudeURLImport(t)
 	lessonID := e.newLesson(t)
 	// 课时标题注入 prompt/key 哨兵：只进入文档生成 prompt，绝不持久化。
 	if _, err := e.pool.Exec(context.Background(), `UPDATE lessons SET title = $1 WHERE id = $2`,
@@ -320,11 +367,9 @@ func TestClaudeURLImportSuccess(t *testing.T) {
 	rawURL := "https://www.youtube.com/watch?v=abc&utm_source=" + urlQuerySentinel
 	materialID, jobID := e.newURLImport(t, lessonID, rawURL, nil)
 
-	fakeAI.Enqueue(ai.Response{
-		JSON:              json.RawMessage(`{"title":"极限入门","raw_text_markdown":"` + rawSourceSentinel + ` 大家好，今天讲极限","extraction_note":"含字幕原文"}`),
-		Model:             "claude-test",
-		ProviderRequestID: "req_extract",
-	})
+	// CLI 提取成功；教纲/笔记仍走 URL 专用 Provider（恰好两次调用）。
+	cliFake.Enqueue(proc.Static(claudeCLISuccessEnvelope(t,
+		`{"title":"极限入门","raw_text_markdown":"`+rawSourceSentinel+` 大家好，今天讲极限","extraction_note":"含字幕原文"}`), nil))
 	fakeAI.Enqueue(ai.Response{
 		JSON:              json.RawMessage(`{"markdown":"# 教师教纲\n围绕极限概念授课。"}`),
 		Model:             "claude-test",
@@ -361,22 +406,29 @@ func TestClaudeURLImportSuccess(t *testing.T) {
 		}
 	}
 
-	// 恰好三次 Claude 调用，第一次是 canonical URL 的 Web Fetch 提取。
+	// CLI 恰好一次调用：prompt 含剥离追踪参数的 canonical URL。
+	cliCalls := cliFake.Calls()
+	if len(cliCalls) != 1 {
+		t.Fatalf("CLI 调用次数 = %d, want 1", len(cliCalls))
+	}
+	cliArgs := strings.Join(cliCalls[0].Args, " ")
+	if !strings.Contains(cliArgs, "https://www.youtube.com/watch?v=abc") {
+		t.Fatalf("CLI prompt 应含 canonical URL: %q", cliArgs)
+	}
+	if strings.Contains(cliArgs, urlQuerySentinel) {
+		t.Fatalf("CLI prompt 不应携带追踪参数哨兵: %q", cliArgs)
+	}
+	if !strings.Contains(cliArgs, "Bash Read Write WebFetch") {
+		t.Fatalf("CLI 工具白名单错误: %q", cliArgs)
+	}
+
+	// 教纲/笔记生成恰好两次 Messages 调用（提取不再走 Provider）。
 	reqs := fakeAI.Requests()
-	if len(reqs) != 3 {
-		t.Fatalf("Claude 调用次数 = %d, want 3", len(reqs))
+	if len(reqs) != 2 {
+		t.Fatalf("文档生成调用次数 = %d, want 2", len(reqs))
 	}
-	extract := reqs[0]
-	if extract.Purpose != ai.PurposeLessonURLExtract || extract.WebFetch == nil {
-		t.Fatalf("第一次调用应为 lesson_url_extract Web Fetch 请求: %+v", extract.Purpose)
-	}
-	if extract.WebFetch.URL != "https://www.youtube.com/watch?v=abc" {
-		t.Fatalf("Web Fetch URL 应为剥离追踪参数的 canonical URL: %q", extract.WebFetch.URL)
-	}
-	if len(extract.WebFetch.AllowedDomains) != 2 ||
-		extract.WebFetch.AllowedDomains[0] != "www.youtube.com" ||
-		extract.WebFetch.AllowedDomains[1] != "youtube.com" {
-		t.Fatalf("allowed_domains 错误: %v", extract.WebFetch.AllowedDomains)
+	if reqs[0].Purpose != ai.PurposeTeacherOutline || reqs[1].Purpose != ai.PurposeStudentNotes {
+		t.Fatalf("文档生成 purpose 错误: %v %v", reqs[0].Purpose, reqs[1].Purpose)
 	}
 
 	// 来源元数据标记 Claude Web Fetch 提取路径。
@@ -464,8 +516,7 @@ func TestClaudeURLImportNotConfigured(t *testing.T) {
 	t.Run("provider unavailable", func(t *testing.T) {
 		e := newEnv(t)
 		e.forbidLocalURLAccess(t)
-		fakeAI := ai.NewFakeProvider()
-		e.handler.URLImportAI = fakeAI
+		fakeAI, cliFake := e.useClaudeURLImport(t)
 		e.handler.URLImportAvailable = func() bool { return false }
 		lessonID := e.newLesson(t)
 		_, jobID := e.newURLImport(t, lessonID, "https://www.youtube.com/watch?v=x", nil)
@@ -479,16 +530,19 @@ func TestClaudeURLImportNotConfigured(t *testing.T) {
 		if len(fakeAI.Requests()) != 0 {
 			t.Fatalf("能力谓词为 false 时不应发起 Claude 调用: %d", len(fakeAI.Requests()))
 		}
+		if len(cliFake.Calls()) != 0 {
+			t.Fatalf("能力谓词为 false 时不应调用 CLI: %+v", cliFake.Calls())
+		}
 		assertNoActiveDocs(t, e, lessonID)
 	})
 }
 
 // TestClaudeURLImportSSRFBlocked：Worker 侧再校验发现非白名单主机 ->
-// url_blocked 终态（不重试），不调用 Claude 也不调用本地工具。
+// url_blocked 终态（不重试），不调用 Claude/CLI 也不调用本地工具。
 func TestClaudeURLImportSSRFBlocked(t *testing.T) {
 	e := newEnv(t)
 	e.forbidLocalURLAccess(t)
-	fakeAI := e.useClaudeURLImport(t)
+	fakeAI, cliFake := e.useClaudeURLImport(t)
 	lessonID := e.newLesson(t)
 	_, jobID := e.newURLImport(t, lessonID, "https://evil.example.com/watch?v=x", nil)
 
@@ -504,25 +558,27 @@ func TestClaudeURLImportSSRFBlocked(t *testing.T) {
 	if len(fakeAI.Requests()) != 0 {
 		t.Fatalf("URL 校验失败前不应调用 Claude: %d", len(fakeAI.Requests()))
 	}
+	if len(cliFake.Calls()) != 0 {
+		t.Fatalf("URL 校验失败前不应调用 CLI: %+v", cliFake.Calls())
+	}
 	if len(e.fake.Calls()) != 0 {
 		t.Fatalf("URL 校验失败前不应调用外部进程: %+v", e.fake.Calls())
 	}
 	assertNoActiveDocs(t, e, lessonID)
 }
 
-// TestClaudeURLImportMaterialFetchFailed：Claude 无法提取链接内容 ->
+// TestClaudeURLImportMaterialFetchFailed：CLI 无法提取链接内容 ->
 // material_fetch_failed；不可重试直接终态，可重试回 queued。
 // 上游错误原因的哨兵不得落入 ai_runs 或 Job error/result。
 func TestClaudeURLImportMaterialFetchFailed(t *testing.T) {
 	t.Run("non-retryable terminal", func(t *testing.T) {
 		e := newEnv(t)
 		e.forbidLocalURLAccess(t)
-		fakeAI := e.useClaudeURLImport(t)
+		_, cliFake := e.useClaudeURLImport(t)
 		lessonID := e.newLesson(t)
 		materialID, jobID := e.newURLImport(t, lessonID, "https://www.youtube.com/watch?v=x", nil)
-		fakeAI.EnqueueError(ai.WrapError(ai.ErrMaterialFetchFailed,
-			"Claude 无法提取该链接内容。",
-			errors.New("upstream echoed "+keyLikeSentinel+" and "+rawSourceSentinel)))
+		cliFake.Enqueue(proc.Static(claudeCLIErrorEnvelope(t,
+			"upstream echoed "+keyLikeSentinel+" and "+rawSourceSentinel, 0), nil))
 
 		e.runOnce(t)
 
@@ -564,10 +620,10 @@ func TestClaudeURLImportMaterialFetchFailed(t *testing.T) {
 	t.Run("retryable requeues", func(t *testing.T) {
 		e := newEnv(t)
 		e.forbidLocalURLAccess(t)
-		fakeAI := e.useClaudeURLImport(t)
+		_, cliFake := e.useClaudeURLImport(t)
 		lessonID := e.newLesson(t)
 		_, jobID := e.newURLImport(t, lessonID, "https://www.youtube.com/watch?v=x", nil)
-		fakeAI.EnqueueError(ai.MaterialFetchError(true))
+		cliFake.Enqueue(proc.Static(claudeCLIErrorEnvelope(t, "rate limited", 429), nil))
 
 		e.runOnce(t)
 
@@ -582,19 +638,17 @@ func TestClaudeURLImportMaterialFetchFailed(t *testing.T) {
 	})
 }
 
-// TestClaudeURLImportTooLarge：Claude 提取的正文超过上限 ->
+// TestClaudeURLImportTooLarge：CLI 提取的正文超过上限 ->
 // material_too_large 终态，不发布任何文档。
 func TestClaudeURLImportTooLarge(t *testing.T) {
 	e := newEnv(t)
 	e.forbidLocalURLAccess(t)
-	fakeAI := e.useClaudeURLImport(t)
+	_, cliFake := e.useClaudeURLImport(t)
 	e.handler.MaxTextRunes = 10
 	lessonID := e.newLesson(t)
 	_, jobID := e.newURLImport(t, lessonID, "https://www.youtube.com/watch?v=x", nil)
-	fakeAI.Enqueue(ai.Response{
-		JSON:  json.RawMessage(`{"title":"极限入门","raw_text_markdown":"这段文本远远超出允许的字符上限。","extraction_note":""}`),
-		Model: "claude-test",
-	})
+	cliFake.Enqueue(proc.Static(claudeCLISuccessEnvelope(t,
+		`{"title":"极限入门","raw_text_markdown":"这段文本远远超出允许的字符上限。","extraction_note":""}`), nil))
 
 	e.runOnce(t)
 
@@ -610,13 +664,11 @@ func TestClaudeURLImportTooLarge(t *testing.T) {
 func TestClaudeURLImportDocumentFailure(t *testing.T) {
 	e := newEnv(t)
 	e.forbidLocalURLAccess(t)
-	fakeAI := e.useClaudeURLImport(t)
+	fakeAI, cliFake := e.useClaudeURLImport(t)
 	lessonID := e.newLesson(t)
 	_, jobID := e.newURLImport(t, lessonID, "https://www.youtube.com/watch?v=x", nil)
-	fakeAI.Enqueue(ai.Response{
-		JSON:  json.RawMessage(`{"title":"极限入门","raw_text_markdown":"大家好，今天讲极限","extraction_note":""}`),
-		Model: "claude-test",
-	})
+	cliFake.Enqueue(proc.Static(claudeCLISuccessEnvelope(t,
+		`{"title":"极限入门","raw_text_markdown":"大家好，今天讲极限","extraction_note":""}`), nil))
 	fakeAI.EnqueueError(ai.ErrorForCode(ai.ErrRefused, "Claude 拒绝了文档生成请求。"))
 
 	e.runOnce(t)
@@ -756,11 +808,11 @@ func TestFailureKeepsActiveDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 第二次导入失败（URL 素材 Claude 提取硬错误）。
+	// 第二次导入失败（URL 素材 CLI 提取硬错误）。
 	e.forbidLocalURLAccess(t)
-	fakeAI := e.useClaudeURLImport(t)
+	_, cliFake := e.useClaudeURLImport(t)
 	_, jobID2 := e.newURLImport(t, lessonID, "https://www.youtube.com/watch?v=x", nil)
-	fakeAI.EnqueueError(ai.MaterialFetchError(false))
+	cliFake.Enqueue(proc.Static(claudeCLIErrorEnvelope(t, "fetch failed", 0), nil))
 	e.runOnce(t)
 	if j := getJob(t, e.pool, jobID2); j.Status != job.StatusFailed {
 		t.Fatalf("第二次导入应失败: %s", j.Status)

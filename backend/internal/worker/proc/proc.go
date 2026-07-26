@@ -27,10 +27,13 @@ const (
 )
 
 // Cmd 描述一次子进程调用。Dir 是工作目录（Job 隔离临时目录）。
+// Env 非空时完整替换子进程环境（白名单放行，形如 KEY=VALUE）；
+// 为空时继承父进程环境。
 type Cmd struct {
 	Name string
 	Args []string
 	Dir  string
+	Env  []string
 }
 
 // Result 是有界采集的子进程输出。
@@ -99,6 +102,9 @@ func (ExecRunner) Run(ctx context.Context, cmd Cmd) (*Result, error) {
 	c := exec.CommandContext(ctx, cmd.Name, cmd.Args...)
 	if cmd.Dir != "" {
 		c.Dir = cmd.Dir
+	}
+	if cmd.Env != nil {
+		c.Env = cmd.Env
 	}
 	stdout := &boundedWriter{max: maxStdoutBytes}
 	stderr := &boundedWriter{max: maxStderrBytes}
