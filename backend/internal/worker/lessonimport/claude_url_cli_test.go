@@ -141,7 +141,7 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 	if !strings.Contains(prompt, "https://www.youtube.com/watch?v=abc") {
 		t.Fatalf("prompt 应含 canonical URL: %q", prompt)
 	}
-	for _, want := range []string{"yt-dlp", "--skip-download", "--cookies", "untrusted", "<<<RAW_TEXT_MARKDOWN>>>"} {
+	for _, want := range []string{"yt-dlp", "--skip-download", "--cookies", "untrusted", "extracted_raw_text.md"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt 缺少 %q: %q", want, prompt)
 		}
@@ -376,5 +376,63 @@ func TestClaudeURLCLIExtractMarkedResult(t *testing.T) {
 	}
 	if res.Title != "极限入门" || res.RawTextMarkdown != "大家好，\"引用原文\" 不需要转义" || res.ExtractionNote != "含字幕" {
 		t.Fatalf("标记格式 result 映射错误: %+v", res)
+	}
+}
+
+// TestClaudeURLCLIExtractFileContract：模型把结果写入 extracted_*.txt/md
+// 文件（长字幕契约）时，即使 result 只是短确认行也按文件内容提取；
+// 长原文（超出 stdout token 上限的场景）逐字节保留。
+func TestClaudeURLCLIExtractFileContract(t *testing.T) {
+	keysFile := writeCLIGatewayKeys(t, cliTestKey("winner", cliKeySentinel, 10, 100, true))
+	longRaw := "# 定投完全攻略\n\n" + strings.Repeat("一条视频把定投所有细节讲清楚，投之前怎么准备。", 500)
+	fake := proc.NewFake()
+	fake.Enqueue(func(_ context.Context, cmd proc.Cmd) (*proc.Result, error) {
+		files := map[string]string{
+			"extracted_title.txt":   "【定投完全攻略】定投从开户到退休怎么做",
+			"extracted_raw_text.md": longRaw,
+			"extracted_note.txt":    "B 站 AI 字幕（ai-zh)，经 cookie 获取",
+		}
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(cmd.Dir, name), []byte(content), 0o600); err != nil {
+				return nil, err
+			}
+		}
+		return cliEnvelopeJSON(t, map[string]any{
+			"type": "result", "subtype": "success", "is_error": false,
+			"result":      "done",
+			"duration_ms": 90000, "session_id": "sess-files",
+			"usage": map[string]any{"input_tokens": 300, "output_tokens": 120},
+		}), nil
+	})
+	x := newCLIExtractor(keysFile, fake)
+	resp, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.bilibili.com/video/BV1xx411c7mD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := parseClaudeURLResult(resp.JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Title != "【定投完全攻略】定投从开户到退休怎么做" ||
+		res.RawTextMarkdown != longRaw ||
+		res.ExtractionNote != "B 站 AI 字幕（ai-zh)，经 cookie 获取" {
+		t.Fatalf("文件契约映射错误: title=%q raw_len=%d note=%q", res.Title, len(res.RawTextMarkdown), res.ExtractionNote)
+	}
+	if resp.ProviderRequestID != "sess-files" || resp.Latency != 90*time.Second {
+		t.Fatalf("信封元数据应保留: %+v", resp)
+	}
+}
+
+// TestReadExtractedFilesJSON：任一文件缺失返回 nil（回退 result 解析）。
+func TestReadExtractedFilesJSON(t *testing.T) {
+	dir := t.TempDir()
+	if got := readExtractedFilesJSON(dir); got != nil {
+		t.Fatalf("空目录应返回 nil: %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "extracted_title.txt"), []byte("t"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readExtractedFilesJSON(dir); got != nil {
+		t.Fatalf("文件不齐应返回 nil: %q", got)
 	}
 }
