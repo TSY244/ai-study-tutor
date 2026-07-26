@@ -148,6 +148,7 @@ make docker-seed      # 可选：写入演示课程数据（幂等，可重复�
 | `WHISPER_MODEL_PATH` | 空 | 本地 Whisper 模型路径（启用本地转写时用，仅上传音视频） |
 | `BACKUP_DIR` / `IMPORT_REPORT_DIR` / `LEGACY_SOURCE_DIR` | `../backups` 等 | 一次性工具容器挂载的宿主机目录，相对 `deploy/` |
 | `CLAUDE_GATEWAY_CONFIG_DIR` | `../data/claude-gateway` | Claude 多 Key 网关配置目录（`keys.json`），只挂载进 `api`/`worker`，init 脚本创建为 0700 |
+| `deploy/cookies/` | `./cookies` | 站点登录 cookie 目录（如 `bilibili.txt` 放 B 站 `SESSDATA`,Netscape 格式，权限 600，已 gitignore），只读挂载进 `worker` 的 `/config/cookies`；B 站字幕需登录才能获取（含 AI 字幕 ai-zh)，无 cookie 时 bilibili 链接只能提取页面文本；cookie 过期后重新导出替换即可 |
 | `CLAUDE_CODE_SETTINGS_DIR` | 当前用户的 `~/.claude` | Claude Code 设置目录，只挂载进 `api`；init 脚本写入绝对路径，保存操作覆盖其中的 `settings.json` |
 | `TOOLS_UID` / `TOOLS_GID` | `10001` | 工具容器运行 UID/GID；Linux 上 init 脚本自动改为当前用户 |
 
