@@ -18,12 +18,16 @@ import (
 	"time"
 
 	"github.com/TSY244/ai-study-tutor/backend/internal/api"
+	"github.com/TSY244/ai-study-tutor/backend/internal/claudegateway"
 	"github.com/TSY244/ai-study-tutor/backend/internal/filestore"
+	"github.com/TSY244/ai-study-tutor/backend/internal/job"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/config"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/database"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/httpserver"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/id"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/logging"
+	"github.com/TSY244/ai-study-tutor/backend/internal/sitecookie"
+	"github.com/TSY244/ai-study-tutor/backend/internal/system"
 )
 
 func main() {
@@ -61,13 +65,43 @@ func main() {
 		},
 	})
 
+	// Claude 多 Key 网关：仅在配置 CLAUDE_GATEWAY_CONFIG_FILE 时注册管理端点。
+	// API 进程看不到 Anthropic secret；legacy_fallback 由 Worker 心跳推导。
+	var claudeGateway *claudegateway.Handler
+	if cfg.Claude.GatewayConfigFile != "" {
+		statusSvc := system.NewStatusService(pool, cfg.DataDir, cfg.Version)
+		claudeGateway = &claudegateway.Handler{
+			Pool:                   pool,
+			Store:                  claudegateway.NewStore(cfg.Claude.GatewayConfigFile),
+			State:                  claudegateway.NewStateTracker(claudegateway.StatePathFor(cfg.Claude.GatewayConfigFile), logger),
+			Jobs:                   job.NewService(pool),
+			WriteEnabled:           cfg.Claude.GatewayWriteEnabled,
+			LegacyFallback:         statusSvc.WorkerClaudeConfigured,
+			ClaudeCodeSettingsFile: cfg.Claude.ClaudeCodeSettingsFile,
+		}
+	}
+
+	// B 站 Cookie 管理：仅在配置 SITE_COOKIES_FILE 时注册管理端点。
+	// API 写共享挂载的 Cookie 文件；可用性检测由 Worker 任务执行（API 无 egress）。
+	var bilibiliCookie *sitecookie.Handler
+	if cfg.SiteCookiesFile != "" {
+		bilibiliCookie = &sitecookie.Handler{
+			Store: sitecookie.NewStore(cfg.SiteCookiesFile),
+			Jobs:  job.NewService(pool),
+		}
+	}
+
 	// 注册 /api/v1 业务路由（B3 主链路：课程/课时/素材/文档/出题/导出）。
 	api.RegisterRoutes(server.Engine(), api.Deps{
-		Pool:           pool,
-		Files:          files,
-		Version:        cfg.Version,
-		BodyLimitBytes: cfg.HTTP.BodyLimitBytes,
-		UploadMaxBytes: cfg.HTTP.UploadMaxBytes,
+		Pool:                 pool,
+		Files:                files,
+		Version:              cfg.Version,
+		URLAllowlist:         cfg.Material.URLAllowlist,
+		SkipURLDNSValidation: !cfg.Material.APIDNSValidation,
+		BodyLimitBytes:       cfg.HTTP.BodyLimitBytes,
+		UploadMaxBytes:       cfg.HTTP.UploadMaxBytes,
+		ClaudeGateway:        claudeGateway,
+		BilibiliCookie:       bilibiliCookie,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

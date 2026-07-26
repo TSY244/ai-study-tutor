@@ -658,7 +658,7 @@ curl -fsS http://127.0.0.1:8080/readyz
 http://127.0.0.1:8080
 ```
 
-首次启动后在系统设置中执行 Claude 连通性测试。
+首次启动后在系统设置中执行 Claude 连通性测试。若需要导入 bilibili 视频链接的登录可见字幕，在同一设置页的「B 站 Cookie」中保存 SESSDATA 并执行「检测可用性」。
 
 若为了无 AI 的本地开发暂时使用空的 `anthropic_api_key.txt`，系统应以降级模式启动；所有依赖 Claude 的新操作返回 `claude_not_configured`。正式学习流程仍要求写入有效 Key。部署演练改用 `AI_PROVIDER=fake`，不需要真实 Key。
 

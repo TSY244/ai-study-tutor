@@ -192,6 +192,28 @@ func (s *StatusService) workerStatus(ctx context.Context) (ComponentStatus, work
 	}
 }
 
+// WorkerClaudeConfigured 报告最新一条未过期 Worker 心跳是否显示 Claude
+// 已配置（unknown/ok 词汇；unavailable/degraded 视为未配置）。API 进程
+// 看不到 Anthropic secret，这是 Claude 网关 legacy_fallback 的唯一信号通道。
+func (s *StatusService) WorkerClaudeConfigured(ctx context.Context) bool {
+	if s.pool == nil {
+		return false
+	}
+	var (
+		status string
+		fresh  bool
+	)
+	err := s.pool.QueryRow(ctx, `
+		SELECT claude_status, last_heartbeat_at > now() - $1::interval
+		FROM worker_heartbeats
+		ORDER BY last_heartbeat_at DESC
+		LIMIT 1`, workerHeartbeatTTL.String()).Scan(&status, &fresh)
+	if err != nil {
+		return false
+	}
+	return fresh && (status == "unknown" || status == "ok")
+}
+
 func (s *StatusService) claudeStatus(ctx context.Context, capability workerCapability) ComponentStatus {
 	if !capability.fresh {
 		return ComponentStatus{Status: "unknown", Message: message("Worker 心跳不可用，无法确认当前 Claude 能力。")}

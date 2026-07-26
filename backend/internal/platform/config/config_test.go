@@ -85,6 +85,26 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Material.TranscriptionMode != "subtitle_only" {
 		t.Fatalf("转写模式默认值错误：%q", cfg.Material.TranscriptionMode)
 	}
+	if !cfg.Material.APIDNSValidation {
+		t.Fatal("API URL DNS validation should default to enabled")
+	}
+}
+
+func TestLoadMaterialURLPolicy(t *testing.T) {
+	cfg, err := LoadFrom(ServiceAPI, env(
+		"DATABASE_URL", "postgres://u:x@db/t",
+		"URL_ALLOWLIST", "youtube.com, bilibili.com",
+		"URL_API_DNS_VALIDATION", "false",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.Material.URLAllowlist, ","); got != "youtube.com,bilibili.com" {
+		t.Fatalf("URL allowlist = %q", got)
+	}
+	if cfg.Material.APIDNSValidation {
+		t.Fatal("URL_API_DNS_VALIDATION=false was ignored")
+	}
 }
 
 func TestClaudeKeyMissingIsDegradationNotError(t *testing.T) {
@@ -146,6 +166,60 @@ func TestAPIServiceDoesNotReadAnthropicKeyFile(t *testing.T) {
 	}
 }
 
+func TestLoadClaudeGatewayConfigWithoutReadingWorkerSecret(t *testing.T) {
+	cfg, err := LoadFrom(ServiceAPI, env(
+		"DATABASE_URL", "postgres://u:x@db/t",
+		"ANTHROPIC_API_KEY_FILE", writeSecret(t, "api-must-not-read-this"),
+		"CLAUDE_GATEWAY_CONFIG_FILE", "/config/claude-gateway/keys.json",
+		"CLAUDE_GATEWAY_WRITE_ENABLED", "true",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Claude.Configured() || cfg.Claude.KeyFilePresent {
+		t.Fatal("API 进程不得读取或探测 Worker-only Anthropic secret")
+	}
+	if cfg.Claude.GatewayConfigFile != "/config/claude-gateway/keys.json" || !cfg.Claude.GatewayWriteEnabled {
+		t.Fatalf("Claude 网关配置加载错误: %+v", cfg.Claude)
+	}
+}
+
+func TestLoadClaudeCodeSettingsFileWithoutReadingWorkerSecret(t *testing.T) {
+	cfg, err := LoadFrom(ServiceAPI, env(
+		"DATABASE_URL", "postgres://u:x@db/t",
+		"ANTHROPIC_API_KEY_FILE", writeSecret(t, "api-must-not-read-this"),
+		"CLAUDE_CODE_SETTINGS_FILE", "/claude-code/settings.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Claude.Configured() || cfg.Claude.KeyFilePresent {
+		t.Fatal("API 进程不得读取或探测 Worker-only Anthropic secret")
+	}
+	if cfg.Claude.ClaudeCodeSettingsFile != "/claude-code/settings.json" {
+		t.Fatalf("Claude Code 设置文件配置加载错误: %q", cfg.Claude.ClaudeCodeSettingsFile)
+	}
+	if cfg.SafeSummary()["claude_code_settings_configured"] != true {
+		t.Fatalf("SafeSummary 未报告 Claude Code 设置能力: %v", cfg.SafeSummary())
+	}
+}
+
+func TestLoadClaudeBaseURLBuildsMessagesEndpoint(t *testing.T) {
+	cfg, err := LoadFrom(ServiceWorker, env(
+		"DATABASE_URL", "postgres://u:x@db/t",
+		"ANTHROPIC_BASE_URL", "https://gateway.example/",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Claude.AnthropicBaseURL != "https://gateway.example" {
+		t.Fatalf("Claude Base URL=%q want canonical gateway base", cfg.Claude.AnthropicBaseURL)
+	}
+	if got, want := cfg.Claude.AnthropicMessagesEndpoint(), "https://gateway.example/v1/messages"; got != want {
+		t.Fatalf("Claude messages endpoint=%q want %q", got, want)
+	}
+}
+
 func TestToolsServiceDoesNotReadAnthropicKeyFile(t *testing.T) {
 	cfg, err := LoadFrom(ServiceBackup, env(
 		"DATABASE_URL", "postgres://u:x@db/t",
@@ -181,6 +255,7 @@ func TestInvalidValuesFailFast(t *testing.T) {
 		{"MAINTENANCE_HEARTBEAT_INTERVAL", "60s"}, // >= lease 45s
 		{"TRANSCRIPTION_MODE", "cloud"},
 		{"MAX_UPLOAD_BYTES", "-1"},
+		{"CLAUDE_GATEWAY_WRITE_ENABLED", "not-a-bool"},
 	} {
 		_, err := LoadFrom(ServiceAPI, env(append(base, tc[0], tc[1])...))
 		if err == nil {

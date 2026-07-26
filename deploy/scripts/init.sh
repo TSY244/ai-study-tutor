@@ -16,6 +16,67 @@ if [ ! -f "$deploy_dir/.env" ]; then
   cp "$deploy_dir/.env.example" "$deploy_dir/.env"
 fi
 
+if ! grep -q '^ANTHROPIC_BASE_URL=' "$deploy_dir/.env"; then
+  printf '\nANTHROPIC_BASE_URL=https://api.anthropic.com\n' >> "$deploy_dir/.env"
+fi
+
+if ! grep -q '^URL_ALLOWLIST=' "$deploy_dir/.env"; then
+  printf '\nURL_ALLOWLIST=youtube.com,bilibili.com\n' >> "$deploy_dir/.env"
+fi
+if ! grep -q '^URL_API_DNS_VALIDATION=' "$deploy_dir/.env"; then
+  printf 'URL_API_DNS_VALIDATION=false\n' >> "$deploy_dir/.env"
+fi
+
+# Compose resolves relative bind-mount paths from deploy/; honor an operator's
+# CLAUDE_GATEWAY_CONFIG_DIR override rather than always creating the default.
+gateway_config_value=$(sed -n 's/^[[:space:]]*CLAUDE_GATEWAY_CONFIG_DIR[[:space:]]*=[[:space:]]*//p' "$deploy_dir/.env")
+gateway_config_value=$(printf '%s' "$gateway_config_value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+if [ -z "$gateway_config_value" ]; then
+  gateway_config_value="../data/claude-gateway"
+fi
+case "$gateway_config_value" in
+  /*) gateway_config_dir="$gateway_config_value" ;;
+  *) gateway_config_dir="$deploy_dir/$gateway_config_value" ;;
+esac
+mkdir -p "$gateway_config_dir"
+chmod 700 "$gateway_config_dir"
+
+# Claude Code 本地配置目录只映射给 API 容器。首次初始化记录调用者的
+# 绝对 ~/.claude 路径；已有目录不改变其权限，避免干扰用户现有配置。
+claude_code_settings_value=$(sed -n 's/^[[:space:]]*CLAUDE_CODE_SETTINGS_DIR[[:space:]]*=[[:space:]]*//p' "$deploy_dir/.env")
+claude_code_settings_value=$(printf '%s' "$claude_code_settings_value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+if [ -z "$claude_code_settings_value" ]; then
+  claude_code_settings_dir="${HOME:?HOME must be set}/.claude"
+  printf '\nCLAUDE_CODE_SETTINGS_DIR=%s\n' "$claude_code_settings_dir" >> "$deploy_dir/.env"
+else
+  claude_code_settings_dir="$claude_code_settings_value"
+fi
+case "$claude_code_settings_dir" in
+  /*) ;;
+  *)
+    echo "CLAUDE_CODE_SETTINGS_DIR 必须是绝对路径" >&2
+    exit 1
+    ;;
+esac
+if [ ! -d "$claude_code_settings_dir" ]; then
+  mkdir -p "$claude_code_settings_dir"
+  chmod 700 "$claude_code_settings_dir"
+fi
+
+# 站点 Cookie 配置目录（B 站 bilibili.txt）：API 读写、Worker 只读；
+# 同样支持 COOKIES_CONFIG_DIR 覆盖。
+cookies_config_value=$(sed -n 's/^[[:space:]]*COOKIES_CONFIG_DIR[[:space:]]*=[[:space:]]*//p' "$deploy_dir/.env")
+cookies_config_value=$(printf '%s' "$cookies_config_value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+if [ -z "$cookies_config_value" ]; then
+  cookies_config_value="../data/cookies"
+fi
+case "$cookies_config_value" in
+  /*) cookies_config_dir="$cookies_config_value" ;;
+  *) cookies_config_dir="$deploy_dir/$cookies_config_value" ;;
+esac
+mkdir -p "$cookies_config_dir"
+chmod 700 "$cookies_config_dir"
+
 if [ "$(uname -s)" = "Linux" ]; then
   if ! grep -q '^TOOLS_UID=' "$deploy_dir/.env"; then
     printf '\nTOOLS_UID=%s\n' "$(id -u)" >> "$deploy_dir/.env"

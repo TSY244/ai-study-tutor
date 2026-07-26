@@ -1,5 +1,6 @@
 import type {
   Attempt,
+  ClaudeKey,
   Course,
   Document,
   Job,
@@ -39,6 +40,54 @@ export const systemStatusDegraded: SystemStatus = {
   status: 'degraded',
   claude: { status: 'unavailable', message: 'Claude 暂时不可用，非 AI 能力不受影响' },
 }
+
+/** Claude 网关只维护安全视图；fixture 永远不包含 api_key。 */
+export const demoClaudeKeys: ClaudeKey[] = [
+  {
+    id: 'ck_demo_primary',
+    name: '主线路',
+    masked_key: 'sk-ant-...7K2P',
+    fingerprint: 'sha256:4f91a7c2d310',
+    model: 'claude-sonnet-4-5',
+    enabled: true,
+    priority: 10,
+    weight: 100,
+    timeout_seconds: 300,
+    cooldown_seconds: 300,
+    max_consecutive_failures: 2,
+    status: 'healthy',
+    consecutive_failures: 0,
+    last_error_code: null,
+    last_success_at: '2026-07-25T09:40:00Z',
+    last_failure_at: null,
+    cooldown_until: null,
+    last_latency_ms: 842,
+    created_at: '2026-07-25T08:00:00Z',
+    updated_at: '2026-07-25T09:40:00Z',
+  },
+  {
+    id: 'ck_demo_backup',
+    name: '备用线路',
+    masked_key: 'sk-ant-...3M8Q',
+    fingerprint: 'sha256:9b3078d14ace',
+    model: 'claude-sonnet-4-5',
+    enabled: false,
+    priority: 20,
+    weight: 50,
+    timeout_seconds: 300,
+    cooldown_seconds: 300,
+    max_consecutive_failures: 2,
+    status: 'disabled',
+    consecutive_failures: 0,
+    last_error_code: null,
+    last_success_at: null,
+    last_failure_at: null,
+    cooldown_until: null,
+    last_latency_ms: null,
+    created_at: '2026-07-25T08:05:00Z',
+    updated_at: '2026-07-25T08:05:00Z',
+  },
+]
 
 export const COURSE_STATS_ID = '11111111-1111-4111-8111-111111111111'
 export const COURSE_LINALG_ID = '22222222-2222-4222-8222-222222222222'

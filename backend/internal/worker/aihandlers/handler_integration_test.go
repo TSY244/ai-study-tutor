@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,14 +38,19 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	fake := ai.NewFakeProvider()
+	return newEnvWithProvider(t, fake, fake)
+}
+
+func newEnvWithProvider(t *testing.T, provider ai.Provider, fake *ai.FakeProvider) *env {
+	t.Helper()
 	pool := databasetest.New(t)
 	store, err := filestore.New(pool, t.TempDir(), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fake := ai.NewFakeProvider()
 	reg := worker.NewRegistry()
-	aihandlers.Register(reg, aihandlers.Deps{Pool: pool, Provider: fake})
+	aihandlers.Register(reg, aihandlers.Deps{Pool: pool, Provider: provider})
 	return &env{
 		pool:  pool,
 		store: store,
@@ -56,6 +62,35 @@ func newEnv(t *testing.T) *env {
 			Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 		},
 	}
+}
+
+type targetedFakeProvider struct {
+	normal *ai.FakeProvider
+	target *ai.FakeProvider
+
+	mu     sync.Mutex
+	keyIDs []string
+}
+
+func newTargetedFakeProvider() *targetedFakeProvider {
+	return &targetedFakeProvider{normal: ai.NewFakeProvider(), target: ai.NewFakeProvider()}
+}
+
+func (f *targetedFakeProvider) Generate(ctx context.Context, req ai.Request) (ai.Response, error) {
+	return f.normal.Generate(ctx, req)
+}
+
+func (f *targetedFakeProvider) GenerateForKey(ctx context.Context, keyID string, req ai.Request) (ai.Response, error) {
+	f.mu.Lock()
+	f.keyIDs = append(f.keyIDs, keyID)
+	f.mu.Unlock()
+	return f.target.Generate(ctx, req)
+}
+
+func (f *targetedFakeProvider) KeyIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.keyIDs...)
 }
 
 func (e *env) runOnce(t *testing.T) {
@@ -165,6 +200,54 @@ func TestConnectivityJobRecordsAIRun(t *testing.T) {
 	}
 	if aiRunCount(t, e.pool, jobID) != 1 {
 		t.Fatal("connectivity 应记录一条脱敏 ai_run")
+	}
+}
+
+func TestConnectivityJobTargetsOnlyRequestedGatewayKey(t *testing.T) {
+	provider := newTargetedFakeProvider()
+	provider.target.Enqueue(ai.Response{JSON: json.RawMessage(`{"ok":true}`), Model: "fake-claude", ProviderRequestID: "req_target"})
+	e := newEnvWithProvider(t, provider, nil)
+	jobID := newJob(t, e.pool, &job.Job{
+		Kind: job.KindClaudeConnectivityTest, AggregateType: "system", AggregateID: uuid.New(),
+		Payload: mustJSON(t, map[string]string{"key_id": "ck-target"}), MaxAttempts: 1,
+	})
+
+	e.runOnce(t)
+
+	j := getJob(t, e.pool, jobID)
+	if j.Status != job.StatusSucceeded {
+		t.Fatalf("targeted connectivity 应成功: %s %v", j.Status, j.ErrorCode)
+	}
+	if got := provider.KeyIDs(); len(got) != 1 || got[0] != "ck-target" {
+		t.Fatalf("应仅调用指定 Key，got=%v", got)
+	}
+	if got := len(provider.normal.Requests()); got != 0 {
+		t.Fatalf("定向测试不应走全局路由，normal calls=%d", got)
+	}
+	if got := len(provider.target.Requests()); got != 1 {
+		t.Fatalf("定向测试应调用一次，target calls=%d", got)
+	}
+	if aiRunCount(t, e.pool, jobID) != 1 {
+		t.Fatal("定向 connectivity 应记录一条脱敏 ai_run")
+	}
+}
+
+func TestConnectivityJobRejectsInvalidTargetPayload(t *testing.T) {
+	provider := newTargetedFakeProvider()
+	e := newEnvWithProvider(t, provider, nil)
+	jobID := newJob(t, e.pool, &job.Job{
+		Kind: job.KindClaudeConnectivityTest, AggregateType: "system", AggregateID: uuid.New(),
+		Payload: []byte(`{"key_id":42}`), MaxAttempts: 1,
+	})
+
+	e.runOnce(t)
+
+	j := getJob(t, e.pool, jobID)
+	if j.Status != job.StatusFailed || j.ErrorCode == nil || *j.ErrorCode != worker.ErrCodeClaudeInvalidRequest {
+		t.Fatalf("无效 payload 应稳定失败: status=%s code=%v", j.Status, j.ErrorCode)
+	}
+	if len(provider.KeyIDs()) != 0 || len(provider.normal.Requests()) != 0 {
+		t.Fatal("无效 payload 不应调用任何 Provider")
 	}
 }
 

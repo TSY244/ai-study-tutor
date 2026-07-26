@@ -26,7 +26,7 @@ export function AppShell() {
         跳到主要内容
       </a>
       <header className="border-b border-border bg-surface">
-        <div className="mx-auto flex h-12 max-w-6xl items-center gap-3 px-4">
+        <div className="mx-auto flex h-12 max-w-6xl items-center gap-3 px-4 xl:max-w-7xl 2xl:max-w-[92rem]">
           <Link
             to="/dashboard"
             className="shrink-0 rounded-sm font-semibold text-text"
@@ -66,7 +66,9 @@ export function AppShell() {
       <main
         id="main-content"
         tabIndex={-1}
-        className={cn('mx-auto w-full max-w-6xl flex-1 px-4 py-5 outline-none')}
+        className={cn(
+          'mx-auto w-full max-w-6xl flex-1 px-4 py-5 outline-none xl:max-w-7xl 2xl:max-w-[92rem]',
+        )}
       >
         <Outlet />
       </main>

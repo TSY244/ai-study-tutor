@@ -21,6 +21,7 @@ export const KNOWN_PROBLEM_CODES = [
   'too_many_requests',
   'claude_unavailable',
   'claude_not_configured',
+  'claude_code_settings_unavailable',
   'maintenance_mode',
   'storage_full',
   // 文档规定（02 §7 / 08）但发布契约尚未枚举：POST /jobs/{id}/retry 的 409。

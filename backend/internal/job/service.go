@@ -4,6 +4,7 @@ package job
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -41,6 +42,27 @@ func NewService(pool *pgxpool.Pool) *Service {
 // CreateConnectivity creates the Worker-owned Claude connectivity job. The
 // API never reads provider credentials or calls Claude directly.
 func (s *Service) CreateConnectivity(ctx context.Context, rec *idempotency.Record) (int, *Accepted, error) {
+	return s.createSystemJob(ctx, rec, KindClaudeConnectivityTest, []byte(`{}`))
+}
+
+// CreateKeyConnectivity creates the same claude_connectivity_test job kind
+// targeting a single Claude gateway key (payload {"key_id": ...}).
+// The payload never contains the key material itself.
+func (s *Service) CreateKeyConnectivity(ctx context.Context, rec *idempotency.Record, keyID string) (int, *Accepted, error) {
+	payload, err := json.Marshal(map[string]string{"key_id": keyID})
+	if err != nil {
+		return 0, nil, err
+	}
+	return s.createSystemJob(ctx, rec, KindClaudeConnectivityTest, payload)
+}
+
+// CreateBilibiliCookieTest creates the Worker-owned B 站 Cookie 可用性检测
+// 任务。API 进程没有外网 egress，也不直接接触目标站点。
+func (s *Service) CreateBilibiliCookieTest(ctx context.Context, rec *idempotency.Record) (int, *Accepted, error) {
+	return s.createSystemJob(ctx, rec, KindBilibiliCookieTest, []byte(`{}`))
+}
+
+func (s *Service) createSystemJob(ctx context.Context, rec *idempotency.Record, kind string, payload []byte) (int, *Accepted, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, nil, err
@@ -50,10 +72,10 @@ func (s *Service) CreateConnectivity(ctx context.Context, rec *idempotency.Recor
 		return 0, nil, err
 	}
 	j := &Job{
-		Kind:             KindClaudeConnectivityTest,
+		Kind:             kind,
 		AggregateType:    "system",
 		AggregateID:      uuid.Nil,
-		Payload:          []byte(`{}`),
+		Payload:          payload,
 		IdempotencyScope: &rec.Scope,
 		IdempotencyKey:   &rec.Key,
 	}

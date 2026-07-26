@@ -75,12 +75,14 @@ services:
       CLAUDE_GATEWAY_CONFIG_FILE: /config/claude-gateway/keys.json
       CLAUDE_GATEWAY_WRITE_ENABLED: "true"
       CLAUDE_CODE_SETTINGS_FILE: /claude-code/settings.json
+      SITE_COOKIES_FILE: /config/cookies/bilibili.txt
     secrets:
       - postgres_password
     volumes:
       - app_data:/var/lib/ai-study-tutor
       - ${CLAUDE_GATEWAY_CONFIG_DIR:-../data/claude-gateway}:/config/claude-gateway
       - ${CLAUDE_CODE_SETTINGS_DIR:?Run make docker-init to set CLAUDE_CODE_SETTINGS_DIR}:/claude-code
+      - ${COOKIES_CONFIG_DIR:-../data/cookies}:/config/cookies
     networks:
       - frontend
       - backend
@@ -124,13 +126,14 @@ services:
       URL_ALLOWLIST: ${URL_ALLOWLIST:-youtube.com,bilibili.com}
       TRANSCRIPTION_MODE: ${TRANSCRIPTION_MODE}
       WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH}
+      SITE_COOKIES_FILE: /config/cookies/bilibili.txt
     secrets:
       - postgres_password
       - anthropic_api_key
     volumes:
       - app_data:/var/lib/ai-study-tutor
       - ${CLAUDE_GATEWAY_CONFIG_DIR:-../data/claude-gateway}:/config/claude-gateway
-      - ./cookies:/config/cookies:ro
+      - ${COOKIES_CONFIG_DIR:-../data/cookies}:/config/cookies:ro
     networks:
       - backend
       - egress

@@ -54,6 +54,8 @@ export function createAppQueryClient(): QueryClient {
  */
 export const queryKeys = {
   systemStatus: () => ['system', 'status'] as const,
+  claudeKeys: () => ['system', 'claude-keys'] as const,
+  bilibiliCookie: () => ['system', 'bilibili-cookie'] as const,
   courses: (filters?: Record<string, unknown>) => ['courses', filters ?? {}] as const,
   course: (courseId: string) => ['course', courseId] as const,
   lessons: (courseId: string) => ['lessons', courseId] as const,

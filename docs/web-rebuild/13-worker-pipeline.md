@@ -38,6 +38,7 @@ Job kind/stage 表、素材错误码、外部工具契约与演示数据。架�
 | `attempt_grade` | B6 | 见 03 §6.4 |
 | `wrong_answer_analyze` / `summary_evaluate` | B6 | 见 03 §6.4 |
 | `claude_connectivity_test` | B6 | `connecting → validating` |
+| `bilibili_cookie_test` | 已实现 | `loading_cookie:20 → checking:60 → publishing:90` |
 | `lesson_export` | B7 | `collecting → rendering → packaging → publishing` |
 
 lesson_import 的 `generating_teacher_outline/generating_student_notes`
@@ -104,7 +105,20 @@ fLaC/OggS，audio/video 结合扩展名区分）、合法 UTF-8 文本兜底为
 4. 元数据：Extractor=`claude_web_fetch`、ParserVersion=
    `claude-web-fetch/v1`；ai_runs 记录 purpose=`lesson_url_extract`
    （usage/duration/session_id 取自 CLI JSON envelope）；
-5. 错误映射：CLI 超时或信封 `api_error_status` 为 429/5xx →
+5. bilibili 登录 Cookie：设置页「B 站 Cookie」管理（粘贴 SESSDATA /
+   Cookie 头串 / Netscape 导出内容，API 归一化后以 0600 原子写入
+   共享挂载的 `cookies/bilibili.txt`，仅保留 bilibili.com 条目，
+   保存即生效无需重启）；有 Cookie 时 yt-dlp 经 `--cookies` 获取登录
+   可见字幕（含 ai-zh AI 字幕），无 Cookie 时回退为页面文本；
+6. 可用性检测：设置页「检测可用性」创建 `bilibili_cookie_test`
+   任务，Worker 用已保存 Cookie 请求 B 站 `x/web-interface/nav`
+   （API 容器无出网，检测只能由 Worker 执行）。错误码：
+   未保存 → `bilibili_cookie_not_configured`；本地有效期已过 →
+   `bilibili_cookie_expired`；B 站返回未登录 →
+   `bilibili_cookie_invalid`（均终态）；网络/远端异常 →
+   `bilibili_check_failed`（可重试）。成功结果只含 mid/uname 等
+   非敏感信息，完整 Cookie 绝不进入 Job 结果、错误或日志；
+7. 错误映射：CLI 超时或信封 `api_error_status` 为 429/5xx →
    `material_fetch_failed`（可重试）；exit 非零、is_error 或内容不可
    访问 → `material_fetch_failed`（终态）；401/403 →
    `claude_auth_failed`（终态）；result JSON 畸形 →

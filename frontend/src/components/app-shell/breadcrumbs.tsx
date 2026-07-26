@@ -49,7 +49,7 @@ export function Breadcrumbs() {
 
   return (
     <nav aria-label="面包屑" className="border-b border-border">
-      <ol className="mx-auto flex max-w-6xl items-center gap-1 overflow-x-auto px-4 py-2 text-sm">
+      <ol className="mx-auto flex max-w-6xl items-center gap-1 overflow-x-auto px-4 py-2 text-sm xl:max-w-7xl 2xl:max-w-[92rem]">
         {items.map((item, index) => {
           const isLast = index === items.length - 1
           const label = (

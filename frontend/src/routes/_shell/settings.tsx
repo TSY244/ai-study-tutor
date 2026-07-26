@@ -21,6 +21,8 @@ import { ErrorState } from '@/components/ui/error-state'
 import { FormAlert } from '@/components/ui/form-alert'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ClaudeGatewaySection } from '@/features/claude-gateway/claude-gateway-section'
+import { BilibiliCookieSection } from '@/features/site-cookie/bilibili-cookie-section'
 import {
   beginIdempotencyIntent,
   resolveIdempotencyIntent,
@@ -30,9 +32,9 @@ import { presentProblem } from '@/api/problem-messages'
 import { systemStatusMeta } from '@/lib/status'
 
 /**
- * 设置：连接状态、系统信息与本地诊断。
- * 安全边界：Claude API Key 只存在于服务端 Worker 的 Docker secret，
- * 此页面（及整个前端）不显示、不输入、不保存任何密钥。
+ * 设置：Claude 网关、连接状态、系统信息与本地诊断。
+ * 安全边界：完整 Key 只在新增/替换表单中短暂存在并直送本机 API；
+ * 前端存储、查询缓存、响应、任务与诊断都不得保存完整 Key。
  */
 export const Route = createFileRoute('/_shell/settings')({
   component: SettingsPage,
@@ -40,9 +42,11 @@ export const Route = createFileRoute('/_shell/settings')({
 
 function SettingsPage() {
   return (
-    <div className="max-w-2xl space-y-6">
-      <PageHeader title="设置" description="本地部署的连接状态与诊断信息。" />
+    <div className="mx-auto max-w-4xl space-y-6">
+      <PageHeader title="设置" description="管理本地 Claude 网关、连接状态与诊断信息。" />
       <ClaudeSection />
+      <ClaudeGatewaySection />
+      <BilibiliCookieSection />
       <SystemSection />
       {import.meta.env.DEV ? <StreamDiagnosticsSection /> : null}
       <DiagnosticsSection />
@@ -79,7 +83,7 @@ function useSystemStatus() {
 function ClaudeSection() {
   const statusQuery = useSystemStatus()
   return (
-    <Section id="claude-heading" title="Claude 连接">
+    <Section id="claude-heading" title="Claude 网关连接">
       {statusQuery.isPending ? <Skeleton className="h-4 w-40" /> : null}
       {statusQuery.isError ? (
         <ErrorState error={statusQuery.error} onRetry={() => void statusQuery.refetch()} />
@@ -99,8 +103,8 @@ function ClaudeSection() {
       ) : null}
       <ClaudeConnectivityTestButton />
       <p className="mt-3 border-t border-border pt-3 text-sm text-text-muted">
-        Claude API Key 仅保存在服务端 Worker 的 Docker secret 中。此界面不显示、不输入、
-        不保存任何密钥；连通性测试由服务端发起。
+        此测试通过当前网关路由执行，会按优先级、权重与故障转移策略选择 Key。 旧单 Key
+        配置仅在网关没有启用 Key 时回退使用。
       </p>
     </Section>
   )
@@ -146,7 +150,7 @@ function ClaudeConnectivityTestButton() {
         }}
       >
         <PlugZap aria-hidden="true" className="h-4 w-4" />
-        {testMutation.isPending ? '创建测试任务中…' : '测试 Claude 连接'}
+        {testMutation.isPending ? '创建测试任务中…' : '测试 Claude 网关连接'}
       </Button>
       {presentation ? (
         <FormAlert

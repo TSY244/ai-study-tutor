@@ -45,6 +45,11 @@ const (
 	ErrCodeClaudeSchemaInvalid   = "claude_schema_invalid"
 	ErrCodeClaudeDomainInvalid   = "claude_domain_invalid"
 	ErrCodeClaudeUnavailable     = "claude_unavailable"
+	// 站点 Cookie 可用性检测（bilibili_cookie_test 任务）。
+	ErrCodeBilibiliCookieNotConfigured = "bilibili_cookie_not_configured" // 未保存 Cookie（不可重试）
+	ErrCodeBilibiliCookieExpired       = "bilibili_cookie_expired"        // SESSDATA 已过本地有效期（不可重试）
+	ErrCodeBilibiliCookieInvalid       = "bilibili_cookie_invalid"        // B 站返回未登录（不可重试）
+	ErrCodeBilibiliCheckFailed         = "bilibili_check_failed"          // 网络/远端暂时性失败（可重试）
 )
 
 // Error 是 Handler 返回的分类错误：Runner 据此决定重试与终态。

@@ -20,6 +20,7 @@ const (
 	KindWrongAnswerAnalyze     = "wrong_answer_analyze"
 	KindSummaryEvaluate        = "summary_evaluate"
 	KindLessonExport           = "lesson_export"
+	KindBilibiliCookieTest     = "bilibili_cookie_test"
 )
 
 // GenerationFamilyLessonImport 族：同一 Lesson 的内容变更与出题互斥。

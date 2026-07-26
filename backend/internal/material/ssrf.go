@@ -39,17 +39,19 @@ func (s *Service) validateSourceURL(ctx context.Context, raw string) (string, *h
 	if !hostAllowed(host, s.urlAllowlist) {
 		return "", urlFieldErr("url_not_allowed", "该站点不在允许的 URL 白名单内。")
 	}
-	resolve := s.HostResolver
-	if resolve == nil {
-		resolve = defaultHostResolver
-	}
-	ips, err := resolve(ctx, host)
-	if err != nil || len(ips) == 0 {
-		return "", urlFieldErr("url_unresolvable", "URL 主机名无法解析。")
-	}
-	for _, ip := range ips {
-		if !isPublicIP(ip) {
-			return "", urlFieldErr("url_private", "URL 指向非公网地址，已拒绝。")
+	if !s.SkipURLDNSValidation {
+		resolve := s.HostResolver
+		if resolve == nil {
+			resolve = defaultHostResolver
+		}
+		ips, err := resolve(ctx, host)
+		if err != nil || len(ips) == 0 {
+			return "", urlFieldErr("url_unresolvable", "URL 主机名无法解析。")
+		}
+		for _, ip := range ips {
+			if !isPublicIP(ip) {
+				return "", urlFieldErr("url_private", "URL 指向非公网地址，已拒绝。")
+			}
 		}
 	}
 	// 规范化：scheme/host 小写化，去掉 fragment，其余部分保持不变。

@@ -21,6 +21,9 @@ import type {
   AttemptAnswer,
   AttemptSubmitAccepted,
   AttemptSubmitCompleted,
+  ClaudeKey,
+  ClaudeKeyCreate,
+  ClaudeKeyUpdate,
   Course,
   CourseCreate,
   CourseUpdate,
@@ -47,6 +50,7 @@ import {
   demoAttempt,
   demoAttemptFailed,
   demoAttemptFailedWithJob,
+  demoClaudeKeys,
   demoCourses,
   demoDocuments,
   demoJobEvents,
@@ -147,6 +151,7 @@ const createdCourses: Course[] = []
 const createdLessons: Lesson[] = []
 const createdMaterials: Material[] = []
 const createdJobs: Job[] = []
+const claudeKeysStore: ClaudeKey[] = []
 const courseOverrides = new Map<string, Course>()
 const lessonOverrides = new Map<string, Lesson>()
 const jobOverrides = new Map<string, Job>()
@@ -168,6 +173,12 @@ function seedAttempts(): void {
 }
 seedAttempts()
 
+function seedClaudeKeys(): void {
+  claudeKeysStore.length = 0
+  claudeKeysStore.push(...demoClaudeKeys.map((key) => structuredClone(key)))
+}
+seedClaudeKeys()
+
 /** 测试隔离：清空全部运行时状态（setup.ts afterEach 调用）。 */
 export function resetMockState(): void {
   createdCourses.length = 0
@@ -181,6 +192,7 @@ export function resetMockState(): void {
   deletedLessonIds.clear()
   idempotencyLog.clear()
   seedAttempts()
+  seedClaudeKeys()
 }
 
 function nowIso(): string {
@@ -385,6 +397,45 @@ function newQuizGenerationJob(lessonId: string): Job {
     completed_at: null,
     updated_at: now,
   }
+}
+
+function newConnectivityJob(): Job {
+  const now = nowIso()
+  return {
+    id: globalThis.crypto.randomUUID(),
+    kind: 'claude_connectivity_test',
+    aggregate_type: 'system',
+    aggregate_id: null,
+    generation_family: null,
+    retry_of_job_id: null,
+    status: 'queued',
+    stage: '排队中',
+    progress: 0,
+    message: null,
+    attempt_count: 0,
+    max_attempts: 3,
+    retryable: false,
+    cancel_requested: false,
+    error: null,
+    created_at: now,
+    started_at: null,
+    completed_at: null,
+    updated_at: now,
+  }
+}
+
+function maskGatewaySecret(secret: string): string {
+  return secret.length <= 8 ? '...' : `${secret.slice(0, 7)}...${secret.slice(-4)}`
+}
+
+async function fingerprintGatewaySecret(secret: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(secret.trim()),
+  )
+  return `sha256:${Array.from(new Uint8Array(digest).slice(0, 6), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}`
 }
 
 // ---------------------------------------------------------------------------
@@ -604,6 +655,130 @@ const curatedHandlers = [
   http.get('*/healthz', ({ request }) => json(request, { status: 'ok' })),
   http.get('*/readyz', ({ request }) => json(request, { status: 'ok' })),
   http.get('*/api/v1/system/status', ({ request }) => json(request, systemStatusOk)),
+
+  // Claude 多 Key 网关：只保存/返回安全视图，完整 Key 仅在单次请求处理栈中存在。
+  http.get('*/api/v1/system/claude-keys', ({ request }) =>
+    json(request, {
+      items: claudeKeysStore.map((key) => ({ ...key })),
+      routing: 'priority_failover',
+      legacy_fallback: false,
+      write_enabled: true,
+    }),
+  ),
+  http.post('*/api/v1/system/claude-keys', async ({ request }) => {
+    const body = (await request.json().catch(() => null)) as ClaudeKeyCreate | null
+    if (!body || !body.api_key?.trim() || !body.name?.trim() || !body.model?.trim()) {
+      return validationProblem(request, [
+        { field: 'api_key', code: 'required', message: '请输入 Anthropic API Key。' },
+      ])
+    }
+    const fingerprint = await fingerprintGatewaySecret(body.api_key)
+    const requestFingerprint = JSON.stringify({ ...body, api_key: fingerprint })
+    const replay = replayIdempotent<ClaudeKey>(request, requestFingerprint)
+    if (replay && 'conflict' in replay) return idempotencyConflictProblem(request)
+    if (replay) return json(request, replay.replay, { status: 201 })
+
+    const now = nowIso()
+    const key: ClaudeKey = {
+      id: `ck_${globalThis.crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`,
+      name: body.name.trim(),
+      masked_key: maskGatewaySecret(body.api_key.trim()),
+      fingerprint,
+      model: body.model.trim(),
+      enabled: body.enabled ?? true,
+      priority: body.priority ?? 10,
+      weight: body.weight ?? 100,
+      timeout_seconds: body.timeout_seconds ?? 300,
+      cooldown_seconds: body.cooldown_seconds ?? 300,
+      max_consecutive_failures: body.max_consecutive_failures ?? 2,
+      status: body.enabled === false ? 'disabled' : 'unknown',
+      consecutive_failures: 0,
+      last_error_code: null,
+      last_success_at: null,
+      last_failure_at: null,
+      cooldown_until: null,
+      last_latency_ms: null,
+      created_at: now,
+      updated_at: now,
+    }
+    claudeKeysStore.push(key)
+    rememberIdempotent(request, requestFingerprint, key)
+    return json(request, key, { status: 201 })
+  }),
+  http.patch('*/api/v1/system/claude-keys/:keyId', async ({ request, params }) => {
+    const index = claudeKeysStore.findIndex((key) => key.id === params.keyId)
+    if (index < 0) return notFound(request, 'Claude Key 不存在或已删除。')
+    const body = (await request.json().catch(() => null)) as ClaudeKeyUpdate | null
+    if (!body) return validationProblem(request, [])
+    const current = claudeKeysStore[index] as ClaudeKey
+    let maskedKey = current.masked_key
+    let fingerprint = current.fingerprint
+    if (body.api_key !== undefined) {
+      maskedKey = maskGatewaySecret(body.api_key.trim())
+      fingerprint = await fingerprintGatewaySecret(body.api_key)
+    }
+    const enabled = body.enabled ?? current.enabled
+    const { api_key: _discardedSecret, ...safePatch } = body
+    const updated: ClaudeKey = {
+      ...current,
+      ...safePatch,
+      name: body.name?.trim() ?? current.name,
+      model: body.model?.trim() ?? current.model,
+      enabled,
+      masked_key: maskedKey,
+      fingerprint,
+      status: enabled
+        ? body.api_key
+          ? 'unknown'
+          : current.status === 'disabled'
+            ? 'unknown'
+            : current.status
+        : 'disabled',
+      ...(body.api_key
+        ? { consecutive_failures: 0, last_error_code: null, cooldown_until: null }
+        : {}),
+      updated_at: nowIso(),
+    }
+    claudeKeysStore[index] = updated
+    return json(request, updated)
+  }),
+  http.delete('*/api/v1/system/claude-keys/:keyId', ({ request, params }) => {
+    const index = claudeKeysStore.findIndex((key) => key.id === params.keyId)
+    if (index < 0) return notFound(request, 'Claude Key 不存在或已删除。')
+    claudeKeysStore.splice(index, 1)
+    return new HttpResponse(null, { status: 204, headers: echoRequestId(request) })
+  }),
+  http.post('*/api/v1/system/claude-keys/:keyId/test', ({ request, params }) => {
+    if (!claudeKeysStore.some((key) => key.id === params.keyId)) {
+      return notFound(request, 'Claude Key 不存在或已删除。')
+    }
+    const job = newConnectivityJob()
+    const fingerprint = `claude-key-test:${String(params.keyId)}`
+    const replay = replayIdempotent<AsyncAccepted>(request, fingerprint)
+    if (replay && 'conflict' in replay) return idempotencyConflictProblem(request)
+    if (replay) return json(request, replay.replay, { status: 202 })
+    createdJobs.unshift(job)
+    const accepted: AsyncAccepted = { job }
+    rememberIdempotent(request, fingerprint, accepted)
+    return json(request, accepted, { status: 202 })
+  }),
+  http.post('*/api/v1/system/claude-keys/:keyId/claude-code-settings', ({ request, params }) => {
+    if (!claudeKeysStore.some((key) => key.id === params.keyId)) {
+      return notFound(request, 'Claude Key 不存在或已删除。')
+    }
+    return json(request, { status: 'saved', target: '~/.claude/settings.json' })
+  }),
+  http.post('*/api/v1/system/claude-tests', ({ request }) => {
+    const job = newConnectivityJob()
+    const fingerprint = 'claude-gateway-test'
+    const replay = replayIdempotent<AsyncAccepted>(request, fingerprint)
+    if (replay && 'conflict' in replay) return idempotencyConflictProblem(request)
+    if (replay) return json(request, replay.replay, { status: 202 })
+    createdJobs.unshift(job)
+    const accepted: AsyncAccepted = { job }
+    rememberIdempotent(request, fingerprint, accepted)
+    return json(request, accepted, { status: 202 })
+  }),
 
   // 课程
   http.get('*/api/v1/courses', ({ request }) => {

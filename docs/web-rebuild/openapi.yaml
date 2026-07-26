@@ -85,6 +85,161 @@ paths:
           $ref: "#/components/responses/AsyncAccepted"
         default:
           $ref: "#/components/responses/Problem"
+  /api/v1/system/claude-keys:
+    get:
+      tags: [System]
+      operationId: listClaudeKeys
+      summary: 查询 Claude 网关密钥列表（安全视图，绝不含完整 Key）
+      responses:
+        "200":
+          description: Claude 网关密钥列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeKeyList"
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      tags: [System]
+      operationId: createClaudeKey
+      summary: 创建 Claude 网关密钥
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaudeKeyCreate"
+      responses:
+        "201":
+          description: Claude 网关密钥已创建
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeKey"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/claude-keys/{key_id}:
+    parameters:
+      - $ref: "#/components/parameters/ClaudeKeyId"
+    patch:
+      tags: [System]
+      operationId: updateClaudeKey
+      summary: 更新 Claude 网关密钥（省略 api_key 表示保留原 Key）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaudeKeyUpdate"
+      responses:
+        "200":
+          description: Claude 网关密钥已更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeKey"
+        default:
+          $ref: "#/components/responses/Problem"
+    delete:
+      tags: [System]
+      operationId: deleteClaudeKey
+      summary: 删除 Claude 网关密钥
+      responses:
+        "204":
+          description: 已删除
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/claude-keys/{key_id}/test:
+    parameters:
+      - $ref: "#/components/parameters/ClaudeKeyId"
+    post:
+      tags: [System]
+      operationId: createClaudeKeyTest
+      summary: 创建单个 Claude 网关密钥的连通性测试任务（Worker 后台执行）
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          $ref: "#/components/responses/AsyncAccepted"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/claude-keys/{key_id}/claude-code-settings:
+    parameters:
+      - $ref: "#/components/parameters/ClaudeKeyId"
+    post:
+      tags: [System]
+      operationId: saveClaudeKeyToClaudeCodeSettings
+      summary: 将指定 Claude Key 保存到本机 Claude Code 设置
+      responses:
+        "200":
+          description: Claude Code 设置已覆盖保存；响应绝不包含完整 Key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeCodeSettingsSaved"
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/bilibili-cookie:
+    get:
+      tags: [System]
+      operationId: getBilibiliCookieStatus
+      summary: 查询 B 站 Cookie 状态（安全视图，绝不含完整 Cookie）
+      responses:
+        "200":
+          description: B 站 Cookie 状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BilibiliCookieStatus"
+        default:
+          $ref: "#/components/responses/Problem"
+    put:
+      tags: [System]
+      operationId: saveBilibiliCookie
+      summary: 保存 B 站 Cookie（Netscape 导出内容、Cookie 头串或 SESSDATA；仅保留 bilibili.com 条目）
+      description: PUT 天然幂等（相同内容重复保存结果一致，写盘原子），不要求 Idempotency-Key。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BilibiliCookieUpsert"
+      responses:
+        "200":
+          description: B 站 Cookie 已保存；响应为安全视图，绝不回读完整 Cookie
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BilibiliCookieStatus"
+        default:
+          $ref: "#/components/responses/Problem"
+    delete:
+      tags: [System]
+      operationId: deleteBilibiliCookie
+      summary: 删除已保存的 B 站 Cookie
+      responses:
+        "204":
+          description: 已删除
+        default:
+          $ref: "#/components/responses/Problem"
+  /api/v1/system/bilibili-cookie/tests:
+    post:
+      tags: [System]
+      operationId: createBilibiliCookieTest
+      summary: 创建 B 站 Cookie 可用性检测任务（Worker 后台执行）
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          $ref: "#/components/responses/AsyncAccepted"
+        default:
+          $ref: "#/components/responses/Problem"
 
   /api/v1/courses:
     get:
@@ -1164,6 +1319,13 @@ components:
       schema:
         type: string
         format: uuid
+    ClaudeKeyId:
+      name: key_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^ck_[0-9a-f]+$'
 
   headers:
     RequestId:
@@ -1306,6 +1468,247 @@ components:
           type: boolean
         reason:
           type: [string, "null"]
+
+    ClaudeKey:
+      description: Claude 网关密钥的安全视图；绝不包含完整 api_key。
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - masked_key
+        - fingerprint
+        - model
+        - enabled
+        - priority
+        - weight
+        - timeout_seconds
+        - cooldown_seconds
+        - max_consecutive_failures
+        - status
+        - consecutive_failures
+        - last_error_code
+        - last_success_at
+        - last_failure_at
+        - cooldown_until
+        - last_latency_ms
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        masked_key:
+          type: string
+          description: 脱敏展示形式（如 sk-ant-...WXYZ）；无法反推完整 Key。
+        fingerprint:
+          type: string
+          description: "Key 的短指纹（sha256: 前缀），用于区分密钥而不泄露内容。"
+        model:
+          type: string
+        enabled:
+          type: boolean
+        priority:
+          type: integer
+          minimum: 0
+        weight:
+          type: integer
+          minimum: 1
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 3600
+        cooldown_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+        max_consecutive_failures:
+          type: integer
+          minimum: 1
+          maximum: 100
+        status:
+          type: string
+          enum: [unknown, healthy, cooling_down, auth_failed, disabled, testing]
+        consecutive_failures:
+          type: integer
+          minimum: 0
+        last_error_code:
+          type: [string, "null"]
+        last_success_at:
+          type: [string, "null"]
+          format: date-time
+        last_failure_at:
+          type: [string, "null"]
+          format: date-time
+        cooldown_until:
+          type: [string, "null"]
+          format: date-time
+        last_latency_ms:
+          type: [integer, "null"]
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ClaudeKeyList:
+      type: object
+      additionalProperties: false
+      required: [items, routing, legacy_fallback, write_enabled]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClaudeKey"
+        routing:
+          type: string
+          enum: [priority_failover]
+        legacy_fallback:
+          type: boolean
+          description: keys.json 无启用 Key 且 Worker 仍通过旧 ANTHROPIC_API_KEY_FILE 单 Key 工作时为 true。
+        write_enabled:
+          type: boolean
+
+    ClaudeKeyCreate:
+      type: object
+      additionalProperties: false
+      required: [api_key, name, model]
+      properties:
+        api_key:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: 完整 Anthropic API Key；仅用于写入，任何响应都不会回读。
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        model:
+          type: string
+          minLength: 1
+          maxLength: 100
+        enabled:
+          type: boolean
+          default: true
+        priority:
+          type: integer
+          minimum: 0
+          default: 10
+        weight:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 100
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 3600
+          default: 300
+        cooldown_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+          default: 300
+        max_consecutive_failures:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 2
+
+    ClaudeKeyUpdate:
+      description: 全部字段可选；省略 api_key 表示保留原 Key，提供则替换。
+      type: object
+      additionalProperties: false
+      properties:
+        api_key:
+          type: string
+          minLength: 1
+          writeOnly: true
+          description: 提供时替换完整 Key；任何响应都不会回读。
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        model:
+          type: string
+          minLength: 1
+          maxLength: 100
+        enabled:
+          type: boolean
+        priority:
+          type: integer
+          minimum: 0
+        weight:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 3600
+        cooldown_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+        max_consecutive_failures:
+          type: integer
+          minimum: 1
+          maximum: 100
+
+    ClaudeCodeSettingsSaved:
+      description: Claude Code 设置已从指定已保存 Key 覆盖写入的安全确认。
+      type: object
+      additionalProperties: false
+      required: [status, target]
+      properties:
+        status:
+          type: string
+          enum: [saved]
+        target:
+          type: string
+          enum: ["~/.claude/settings.json"]
+
+    BilibiliCookieUpsert:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          writeOnly: true
+          description: Netscape Cookie 导出内容、Cookie 头串（SESSDATA=xxx; ...）或单个 SESSDATA 值；仅用于写入，任何响应都不会回读。
+
+    BilibiliCookieStatus:
+      description: B 站 Cookie 的安全视图；绝不包含完整 Cookie。
+      type: object
+      additionalProperties: false
+      required: [configured, updated_at, sessdata_expires_at, expired, masked_sessdata, cookie_count]
+      properties:
+        configured:
+          type: boolean
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+          description: Cookie 文件最后保存时间；未配置时为 null。
+        sessdata_expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: SESSDATA 本地有效期；会话级（无 expires）时为 null。
+        expired:
+          type: boolean
+          description: SESSDATA 是否已超过本地有效期（以 B 站实际登录状态为准，检测任务可确认）。
+        masked_sessdata:
+          type: string
+          description: 脱敏 SESSDATA（前 7 位 + 后 4 位）；未配置时为空串。
+        cookie_count:
+          type: integer
+          minimum: 0
+          description: 保存的 bilibili.com 域名 Cookie 条目数。
 
     CourseCreate:
       type: object
@@ -1912,6 +2315,7 @@ components:
         - wrong_answer_analyze
         - summary_evaluate
         - lesson_export
+        - bilibili_cookie_test
 
     JobError:
       type: object

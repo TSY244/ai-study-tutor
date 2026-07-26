@@ -29,9 +29,11 @@ import (
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/config"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/database"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/logging"
+	"github.com/TSY244/ai-study-tutor/backend/internal/sitecookie"
 	"github.com/TSY244/ai-study-tutor/backend/internal/system"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker/aihandlers"
+	"github.com/TSY244/ai-study-tutor/backend/internal/worker/cookiecheck"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker/lessonimport"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker/proc"
 )
@@ -120,6 +122,11 @@ func main() {
 	aihandlers.Register(registry, aihandlers.Deps{
 		Pool:     pool,
 		Provider: aiProvider,
+	})
+	// B 站 Cookie 可用性检测：每次执行实时读取 Cookie 文件（热加载）。
+	registry.Register(job.KindBilibiliCookieTest, &cookiecheck.Handler{
+		Store:   sitecookie.NewStore(cfg.SiteCookiesFile),
+		Checker: sitecookie.NewChecker(nil),
 	})
 	runner := &worker.Runner{
 		Pool:       pool,

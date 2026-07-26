@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/TSY244/ai-study-tutor/backend/internal/attempt"
+	"github.com/TSY244/ai-study-tutor/backend/internal/claudegateway"
 	"github.com/TSY244/ai-study-tutor/backend/internal/course"
 	"github.com/TSY244/ai-study-tutor/backend/internal/document"
 	"github.com/TSY244/ai-study-tutor/backend/internal/export"
@@ -24,6 +25,7 @@ import (
 	"github.com/TSY244/ai-study-tutor/backend/internal/material"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/httpserver"
 	"github.com/TSY244/ai-study-tutor/backend/internal/quiz"
+	"github.com/TSY244/ai-study-tutor/backend/internal/sitecookie"
 	"github.com/TSY244/ai-study-tutor/backend/internal/system"
 )
 
@@ -42,10 +44,19 @@ type Deps struct {
 	Version string
 	// URLAllowlist 为 nil 时使用 DefaultURLAllowlist。
 	URLAllowlist []string
+	// SkipURLDNSValidation is used by the no-egress API deployment. Worker DNS
+	// and redirect validation remains mandatory before any remote fetch.
+	SkipURLDNSValidation bool
 	// BodyLimitBytes 是 JSON 端点请求体上限；<=0 时默认 1 MiB。
 	BodyLimitBytes int64
 	// UploadMaxBytes 是 multipart 上传上限；<=0 时由 material 模块默认。
 	UploadMaxBytes int64
+	// ClaudeGateway 是 Claude 多 Key 网关管理端点；nil 表示未配置网关
+	//（/system/claude-keys 不注册）。由 cmd/api 按 CLAUDE_GATEWAY_CONFIG_FILE 注入。
+	ClaudeGateway *claudegateway.Handler
+	// BilibiliCookie 是 B 站 Cookie 管理端点；nil 表示未配置
+	//（/system/bilibili-cookie 不注册）。由 cmd/api 按 SITE_COOKIES_FILE 注入。
+	BilibiliCookie *sitecookie.Handler
 }
 
 // RegisterRoutes 在引擎上注册全部 /api/v1 业务端点。
@@ -66,8 +77,9 @@ func RegisterRoutes(engine *gin.Engine, d Deps) {
 
 	course.NewHandler(course.NewService(d.Pool), idem).RegisterRoutes(rg, jsonLimit)
 	lesson.NewHandler(lesson.NewService(d.Pool), idem).RegisterRoutes(rg, jsonLimit)
-	material.NewHandler(material.NewService(d.Pool, d.Files, d.URLAllowlist),
-		idem, d.UploadMaxBytes, 0, d.BodyLimitBytes).RegisterRoutes(rg)
+	materialSvc := material.NewService(d.Pool, d.Files, d.URLAllowlist)
+	materialSvc.SkipURLDNSValidation = d.SkipURLDNSValidation
+	material.NewHandler(materialSvc, idem, d.UploadMaxBytes, 0, d.BodyLimitBytes).RegisterRoutes(rg)
 	document.NewHandler(document.NewService(d.Pool), idem).RegisterRoutes(rg, jsonLimit)
 
 	// 出题生成：常规练习接真实策略门禁（掌握度提前停止 → 422 practice_not_needed）；
@@ -89,5 +101,11 @@ func RegisterRoutes(engine *gin.Engine, d Deps) {
 	job.NewHandler(job.NewService(d.Pool), idem).RegisterRoutes(rg, jsonLimit)
 	system.NewHandler(job.NewService(d.Pool), idem,
 		system.NewStatusService(d.Pool, d.Files.DataDir(), d.Version)).RegisterRoutes(rg, jsonLimit)
+	if d.ClaudeGateway != nil {
+		d.ClaudeGateway.RegisterRoutes(rg, jsonLimit, idem)
+	}
+	if d.BilibiliCookie != nil {
+		d.BilibiliCookie.RegisterRoutes(rg, jsonLimit, idem)
+	}
 	export.NewHandler(export.NewService(d.Pool, d.Files)).RegisterRoutes(rg, jsonLimit)
 }

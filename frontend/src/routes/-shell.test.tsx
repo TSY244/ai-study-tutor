@@ -107,12 +107,12 @@ describe('App Shell', () => {
     expect(await screen.findByRole('combobox', { name: '搜索命令' })).toBeInTheDocument()
   })
 
-  it('设置：创建 Claude 连通性测试任务并跳转到任务详情', async () => {
+  it('设置：创建 Claude 网关级连通性测试任务并跳转到任务详情', async () => {
     const user = userEvent.setup()
     const { requests, stop } = captureRequests('POST', '/api/v1/system/claude-tests')
     const { router } = renderWithRouter('/settings')
 
-    await user.click(await screen.findByRole('button', { name: '测试 Claude 连接' }))
+    await user.click(await screen.findByRole('button', { name: '测试 Claude 网关连接' }))
 
     await waitFor(() => {
       expect(router.state.location.pathname).toMatch(/^\/jobs\/[0-9a-f-]{36}$/)
@@ -120,5 +120,103 @@ describe('App Shell', () => {
     expect(requests).toHaveLength(1)
     expect(isIdempotencyKey(requests[0]?.key ?? '')).toBe(true)
     stop()
+  })
+
+  it('设置：安全展示 Claude Key，并通过密码框新增但不回显完整 Key', async () => {
+    const user = userEvent.setup()
+    const { requests, stop } = captureRequests('POST', '/api/v1/system/claude-keys')
+    renderWithRouter('/settings')
+
+    expect(await screen.findByText('主线路')).toBeInTheDocument()
+    expect(screen.getByText('sk-ant-...7K2P')).toBeInTheDocument()
+    expect(screen.getByText('已启用 1')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '添加 Key' }))
+    const secretInput = screen.getByLabelText(/^Anthropic API Key/)
+    expect(secretInput).toHaveAttribute('type', 'password')
+    const transientSecret = ['runtime', 'browser', 'credential'].join('-')
+    await user.type(screen.getByLabelText(/^名称/), '浏览器新增')
+    await user.type(secretInput, transientSecret)
+    await user.type(screen.getByLabelText(/^模型/), 'claude-test')
+    await user.click(screen.getByRole('button', { name: '显示 API Key' }))
+    expect(secretInput).toHaveAttribute('type', 'text')
+    await user.click(screen.getByRole('button', { name: '创建 Key' }))
+
+    expect(await screen.findByText('浏览器新增')).toBeInTheDocument()
+    await waitFor(() => expect(requests[0]?.body).not.toBeNull())
+    expect((requests[0]?.body as Record<string, unknown>).api_key).toBe(transientSecret)
+    expect(isIdempotencyKey(requests[0]?.key ?? '')).toBe(true)
+    expect(screen.queryByText(transientSecret)).not.toBeInTheDocument()
+    stop()
+  })
+
+  it('设置：编辑 Key 留空密钥时 PATCH 省略 api_key，并确认停用', async () => {
+    const user = userEvent.setup()
+    const patchCapture = captureRequests('PATCH', '/api/v1/system/claude-keys/ck_demo_primary')
+    renderWithRouter('/settings')
+
+    await user.click(await screen.findByRole('button', { name: '编辑主线路' }))
+    const secretInput = screen.getByLabelText('Anthropic API Key（可选）')
+    expect(secretInput).toHaveValue('')
+    const nameInput = screen.getByLabelText(/^名称/)
+    await user.clear(nameInput)
+    await user.type(nameInput, '主线路·已编辑')
+    await user.click(screen.getByRole('button', { name: '保存修改' }))
+
+    expect(await screen.findByText('主线路·已编辑')).toBeInTheDocument()
+    await waitFor(() => expect(patchCapture.requests[0]?.body).not.toBeNull())
+    expect(patchCapture.requests[0]?.body).not.toHaveProperty('api_key')
+
+    await user.click(screen.getByRole('button', { name: '停用主线路·已编辑' }))
+    const dialog = screen.getByRole('dialog', { name: '停用 Claude Key' })
+    await user.click(within(dialog).getByRole('button', { name: '停用' }))
+    await waitFor(() => expect(patchCapture.requests).toHaveLength(2))
+    expect(patchCapture.requests[1]?.body).toEqual({ enabled: false })
+    expect(await screen.findByText(/已停用 2/)).toBeInTheDocument()
+    patchCapture.stop()
+  })
+
+  it('设置：保存指定 Key 到 Claude Code 前要求确认，且浏览器不发送完整 Key', async () => {
+    const user = userEvent.setup()
+    const saveCapture = captureRequests(
+      'POST',
+      '/api/v1/system/claude-keys/ck_demo_primary/claude-code-settings',
+    )
+    renderWithRouter('/settings')
+
+    await user.click(await screen.findByRole('button', { name: '保存主线路到 Claude Code' }))
+    const dialog = screen.getByRole('dialog', { name: '保存 Claude Code 配置' })
+    expect(dialog).toHaveTextContent('~/.claude/settings.json')
+    expect(saveCapture.requests).toHaveLength(0)
+
+    await user.click(within(dialog).getByRole('button', { name: '覆盖保存' }))
+    await waitFor(() => expect(saveCapture.requests).toHaveLength(1))
+    expect(saveCapture.requests[0]?.body).toBeNull()
+    expect(screen.queryByText('sk-ant-demo-primary-DO-NOT-LEAK')).not.toBeInTheDocument()
+    saveCapture.stop()
+  })
+
+  it('设置：单 Key 测试跳转任务详情，删除操作需要确认', async () => {
+    const user = userEvent.setup()
+    const testCapture = captureRequests('POST', '/api/v1/system/claude-keys/ck_demo_primary/test')
+    const deleteCapture = captureRequests('DELETE', '/api/v1/system/claude-keys/ck_demo_backup')
+    const { router } = renderWithRouter('/settings')
+
+    await user.click(await screen.findByRole('button', { name: '测试主线路' }))
+    await waitFor(() => {
+      expect(router.state.location.pathname).toMatch(/^\/jobs\/[0-9a-f-]{36}$/)
+    })
+    expect(testCapture.requests).toHaveLength(1)
+    expect(isIdempotencyKey(testCapture.requests[0]?.key ?? '')).toBe(true)
+
+    await router.navigate({ to: '/settings' })
+    await user.click(await screen.findByRole('button', { name: '删除备用线路' }))
+    const dialog = screen.getByRole('dialog', { name: '删除 Claude Key' })
+    expect(deleteCapture.requests).toHaveLength(0)
+    await user.click(within(dialog).getByRole('button', { name: '删除' }))
+    await waitFor(() => expect(deleteCapture.requests).toHaveLength(1))
+    expect(screen.queryByText('备用线路')).not.toBeInTheDocument()
+    testCapture.stop()
+    deleteCapture.stop()
   })
 })

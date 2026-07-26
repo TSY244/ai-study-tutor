@@ -47,11 +47,16 @@ func TestClaudeConnectivityCreatesIdempotentWorkerJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	var kind string
-	if err := pool.QueryRow(context.Background(), `SELECT kind FROM jobs WHERE id=$1`, jobID).Scan(&kind); err != nil {
+	var payload []byte
+	if err := pool.QueryRow(context.Background(), `SELECT kind, payload FROM jobs WHERE id=$1`, jobID).Scan(&kind, &payload); err != nil {
 		t.Fatal(err)
 	}
 	if kind != job.KindClaudeConnectivityTest {
 		t.Fatalf("stored kind=%s", kind)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil || len(decoded) != 0 {
+		t.Fatalf("全局连通性测试 payload 应保持 {}，got=%s err=%v", payload, err)
 	}
 
 	replay := apitest.Do(t, engine, http.MethodPost, "/api/v1/system/claude-tests", map[string]string{"Idempotency-Key": key}, "")

@@ -60,7 +60,13 @@ function ProgressPage() {
             }
           />
         ) : (
-          <ul className="grid gap-4 sm:grid-cols-2">
+          <ul
+            className={
+              coursesQuery.data.items.length > 1
+                ? 'grid gap-4 sm:grid-cols-2'
+                : 'mx-auto grid max-w-2xl gap-4'
+            }
+          >
             {coursesQuery.data.items.map((course) => (
               <li key={course.id}>
                 <CourseProgressCard course={course} />

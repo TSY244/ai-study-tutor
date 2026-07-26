@@ -17,4 +17,5 @@ export const JobKind = {
   wrong_answer_analyze: 'wrong_answer_analyze',
   summary_evaluate: 'summary_evaluate',
   lesson_export: 'lesson_export',
+  bilibili_cookie_test: 'bilibili_cookie_test',
 } as const;

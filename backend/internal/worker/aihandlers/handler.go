@@ -47,7 +47,16 @@ type base struct {
 }
 
 func (b base) call(ctx context.Context, ex *worker.Execution, req aipkg.Request) (aipkg.Response, uuid.UUID, error) {
-	resp, err := b.Provider.Generate(ctx, req)
+	return b.callWith(ctx, ex, req, b.Provider.Generate)
+}
+
+func (b base) callWith(
+	ctx context.Context,
+	ex *worker.Execution,
+	req aipkg.Request,
+	generate func(context.Context, aipkg.Request) (aipkg.Response, error),
+) (aipkg.Response, uuid.UUID, error) {
+	resp, err := generate(ctx, req)
 	run := aipkg.NewRun(ex.Job.ID, req, resp, err)
 	if recErr := b.runs.Create(ctx, ex.Pool, run); recErr != nil {
 		return resp, uuid.Nil, worker.WrapError(worker.ErrCodeInternal, "记录 AI 调用审计失败，将自动重试。", true, recErr)
@@ -78,11 +87,36 @@ func noopCancel(context.Context, pgx.Tx, *job.Job) error       { return nil }
 
 type connectivityHandler struct{ base }
 
+type connectivityPayload struct {
+	KeyID string `json:"key_id"`
+}
+
+type keyTargetingProvider interface {
+	GenerateForKey(context.Context, string, aipkg.Request) (aipkg.Response, error)
+}
+
 func (h connectivityHandler) Execute(ctx context.Context, ex *worker.Execution) (*worker.Outcome, error) {
+	var payload connectivityPayload
+	if err := json.Unmarshal(ex.Job.Payload, &payload); err != nil {
+		return nil, worker.NewError(worker.ErrCodeClaudeInvalidRequest, "Claude 连通性测试配置无效。", false)
+	}
 	if err := ex.Stage(ctx, "connecting", 30, "连接 Claude"); err != nil {
 		return nil, err
 	}
-	resp, runID, err := h.call(ctx, ex, aipkg.BuildConnectivityRequest())
+	generate := h.Provider.Generate
+	if payload.KeyID != "" {
+		targeted, ok := h.Provider.(keyTargetingProvider)
+		if !ok {
+			generate = func(context.Context, aipkg.Request) (aipkg.Response, error) {
+				return aipkg.Response{}, aipkg.ErrorForCode(aipkg.ErrNotConfigured, "Claude 单 Key 测试仅在多 Key 网关启用时可用。")
+			}
+		} else {
+			generate = func(ctx context.Context, req aipkg.Request) (aipkg.Response, error) {
+				return targeted.GenerateForKey(ctx, payload.KeyID, req)
+			}
+		}
+	}
+	resp, runID, err := h.callWith(ctx, ex, aipkg.BuildConnectivityRequest(), generate)
 	if err != nil {
 		return nil, err
 	}

@@ -48,6 +48,11 @@ type Config struct {
 
 	DataDir   string
 	BackupDir string
+
+	// SiteCookiesFile 是 B 站 Cookie（Netscape 格式）的容器内路径；api 提供
+	// 管理端点（写），worker 的 URL 提取与可用性检测读取（热加载，无需重启）。
+	// 为空时不注册管理端点，检测任务报 bilibili_cookie_not_configured。
+	SiteCookiesFile string
 }
 
 type HTTPConfig struct {
@@ -176,6 +181,7 @@ func LoadFrom(service string, getEnv func(string) string) (Config, error) {
 
 	cfg.DataDir = envOr(getEnv, "APP_DATA_DIR", "./data")
 	cfg.BackupDir = envOr(getEnv, "APP_BACKUP_DIR", "./backups")
+	cfg.SiteCookiesFile = strings.TrimSpace(getEnv("SITE_COOKIES_FILE"))
 	return cfg, nil
 }
 
@@ -356,6 +362,7 @@ func (c Config) SafeSummary() map[string]any {
 		"claude_gateway_configured":       c.Claude.GatewayConfigFile != "",
 		"claude_gateway_write_enabled":    c.Claude.GatewayWriteEnabled,
 		"claude_code_settings_configured": c.Claude.ClaudeCodeSettingsFile != "",
+		"site_cookies_configured":         c.SiteCookiesFile != "",
 	}
 }
 

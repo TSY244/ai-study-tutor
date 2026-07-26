@@ -88,6 +88,10 @@ type Service struct {
 	// HostResolver 解析素材 URL 主机（SSRF 校验用）；nil 时使用系统 DNS。
 	// 测试注入桩以避免外网依赖。
 	HostResolver func(ctx context.Context, host string) ([]net.IP, error)
+	// SkipURLDNSValidation lets an API deployment without egress defer DNS and
+	// redirect-chain validation to the Worker. Scheme and host allowlist checks
+	// still run here, and the Worker must always revalidate before fetching.
+	SkipURLDNSValidation bool
 }
 
 // NewService 创建素材 Service。

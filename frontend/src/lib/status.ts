@@ -49,6 +49,7 @@ export const JOB_KIND_LABEL: Record<JobKind, string> = {
   wrong_answer_analyze: '错题分析',
   summary_evaluate: '总结评估',
   lesson_export: '课时导出',
+  bilibili_cookie_test: 'B 站 Cookie 检测',
 }
 
 export const LESSON_STATUS_META: Record<LessonStatus, StatusMeta> = {

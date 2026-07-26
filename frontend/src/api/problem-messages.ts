@@ -180,6 +180,22 @@ const JOB_ERROR_MESSAGES: Record<string, (retryable: boolean) => { title: string
       title: 'Claude 返回结果不完整',
       message: 'Claude 返回的结果缺少必需内容。请重试；若持续出现，请改用文本或文件导入。',
     }),
+    bilibili_cookie_not_configured: () => ({
+      title: '尚未保存 B 站 Cookie',
+      message: '请先在设置中保存 B 站 Cookie，然后重新检测。',
+    }),
+    bilibili_cookie_expired: () => ({
+      title: 'B 站 Cookie 已过期',
+      message: 'SESSDATA 已超过本地有效期。请重新获取并在设置中保存，然后再次检测。',
+    }),
+    bilibili_cookie_invalid: () => ({
+      title: 'B 站 Cookie 已失效',
+      message: 'B 站返回未登录。请重新获取 SESSDATA 并在设置中保存，然后再次检测。',
+    }),
+    bilibili_check_failed: () => ({
+      title: '暂时无法完成检测',
+      message: '无法连接 B 站完成检测。请稍后重试；若多次失败，请检查本机网络。',
+    }),
   }
 
 /**
