@@ -42,7 +42,15 @@ function useStatus(body: BilibiliCookieStatus) {
  */
 describe('BilibiliCookieSection', () => {
   it('未配置时显示空状态与保存入口', async () => {
-    useStatus(statusBody({ configured: false, updated_at: null, sessdata_expires_at: null, masked_sessdata: '', cookie_count: 0 }))
+    useStatus(
+      statusBody({
+        configured: false,
+        updated_at: null,
+        sessdata_expires_at: null,
+        masked_sessdata: '',
+        cookie_count: 0,
+      }),
+    )
     renderWithRouter('/settings')
 
     expect(await screen.findByText('尚未保存 B 站 Cookie')).toBeInTheDocument()
@@ -101,7 +109,15 @@ describe('BilibiliCookieSection', () => {
 
   it('保存失败时显示 code-first 错误提示', async () => {
     const user = userEvent.setup()
-    useStatus(statusBody({ configured: false, updated_at: null, sessdata_expires_at: null, masked_sessdata: '', cookie_count: 0 }))
+    useStatus(
+      statusBody({
+        configured: false,
+        updated_at: null,
+        sessdata_expires_at: null,
+        masked_sessdata: '',
+        cookie_count: 0,
+      }),
+    )
     server.use(
       http.put(STATUS_PATH, () =>
         HttpResponse.json(

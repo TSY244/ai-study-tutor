@@ -2,6 +2,8 @@ import { screen, within } from '@testing-library/react'
 import { http } from 'msw'
 import { describe, expect, it } from 'vitest'
 
+import { loadRecentLearning, recordRecentLearning } from '@/features/learning/recent-learning'
+import { COURSE_STATS_ID, LESSON_RANDOM_ID } from '@/mocks/fixtures'
 import { server } from '@/mocks/server'
 import { problemResponse } from '@/test/mock-helpers'
 import { renderWithRouter } from '@/test/utils'
@@ -45,5 +47,36 @@ describe('学习总览', () => {
     expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument()
     // 页面骨架仍在，不被错误清空
     expect(screen.getByRole('heading', { name: '学习总览' })).toBeInTheDocument()
+  })
+
+  it('无学习记录时「继续学习」展示空状态', async () => {
+    renderWithRouter('/dashboard')
+
+    expect(await screen.findByText('还没有学习记录')).toBeInTheDocument()
+  })
+
+  it('有学习记录时「继续学习」展示最近课时并链回课时工作区', async () => {
+    recordRecentLearning({
+      courseId: COURSE_STATS_ID,
+      lessonId: LESSON_RANDOM_ID,
+      lessonTitle: '随机变量与分布',
+    })
+    renderWithRouter('/dashboard')
+
+    const link = await screen.findByRole('link', { name: /随机变量与分布/ })
+    expect(link).toHaveAttribute('href', `/courses/${COURSE_STATS_ID}/lessons/${LESSON_RANDOM_ID}`)
+    expect(screen.getByText(/上次学习/)).toBeInTheDocument()
+    expect(screen.queryByText('还没有学习记录')).not.toBeInTheDocument()
+  })
+
+  it('打开课时工作区后写入学习记录', async () => {
+    const { router } = renderWithRouter(`/courses/${COURSE_STATS_ID}/lessons/${LESSON_RANDOM_ID}`)
+
+    expect(await screen.findByRole('heading', { name: '随机变量与分布' })).toBeInTheDocument()
+    expect(loadRecentLearning().map((entry) => entry.lessonId)).toContain(LESSON_RANDOM_ID)
+
+    // 回到学习总览：刚访问的课时出现在「继续学习」
+    await router.navigate({ to: '/dashboard' })
+    expect(await screen.findByRole('link', { name: /随机变量与分布/ })).toBeInTheDocument()
   })
 })

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -49,6 +50,19 @@ func NewService(pool *pgxpool.Pool) *Service {
 // notFound 映射稳定的 404。
 func notFound(detail string) *httpx.ProblemError {
 	return httpx.NewProblemError(http.StatusNotFound, "not_found", "资源不存在", detail)
+}
+
+// ListAttempts 按 started_at DESC, id DESC 游标分页返回课时作答历史；
+// 课时不存在返回 404。调用方按 limit+1 判定 hasMore。
+func (s *Service) ListAttempts(ctx context.Context, lessonID uuid.UUID,
+	afterStartedAt *time.Time, afterID *uuid.UUID, limit int) ([]SummaryRow, error) {
+	if _, err := s.lessons.GetByID(ctx, s.pool, lessonID); err != nil {
+		if errors.Is(err, lesson.ErrNotFound) {
+			return nil, notFound("请求的资源不存在或已删除。")
+		}
+		return nil, err
+	}
+	return s.repo.ListByLesson(ctx, s.pool, lessonID, afterStartedAt, afterID, limit+1)
 }
 
 // CreateAttempt 开始一次作答（201 + Location）。试卷必须已发布（ready）；

@@ -3,6 +3,8 @@ import { cleanup } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll } from 'vitest'
 
 import { resetAttemptDrafts } from '@/features/attempts/attempt-draft'
+import { resetRecentLearning } from '@/features/learning/recent-learning'
+import { resetLastEvaluationIds } from '@/features/summaries/last-evaluation'
 import { resetIdempotencyIntents } from '@/lib/idempotency'
 import { resetMockState } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
@@ -18,5 +20,7 @@ afterEach(() => {
   resetMockState()
   resetIdempotencyIntents()
   resetAttemptDrafts()
+  resetRecentLearning()
+  resetLastEvaluationIds()
 })
 afterAll(() => server.close())

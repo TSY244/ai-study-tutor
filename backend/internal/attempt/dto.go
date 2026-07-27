@@ -152,3 +152,33 @@ type SavedAnswerDTO struct {
 	AttemptVersion int64           `json:"attempt_version"`
 	SavedAt        string          `json:"saved_at"`
 }
+
+// AttemptSummaryDTO 是作答历史列表行（契约 AttemptSummary）。
+type AttemptSummaryDTO struct {
+	ID          string   `json:"id"`
+	QuizID      string   `json:"quiz_id"`
+	QuizTitle   string   `json:"quiz_title"`
+	Status      string   `json:"status"`
+	AutoScore   *float64 `json:"auto_score"`
+	FinalScore  *float64 `json:"final_score"`
+	MaxScore    *float64 `json:"max_score"`
+	StartedAt   string   `json:"started_at"`
+	SubmittedAt *string  `json:"submitted_at"`
+	GradedAt    *string  `json:"graded_at"`
+}
+
+// ToAttemptSummaryDTO 映射列表行。
+func ToAttemptSummaryDTO(r SummaryRow) AttemptSummaryDTO {
+	return AttemptSummaryDTO{
+		ID:          r.ID.String(),
+		QuizID:      r.QuizID.String(),
+		QuizTitle:   r.QuizTitle,
+		Status:      r.Status,
+		AutoScore:   r.AutoScore,
+		FinalScore:  r.FinalScore,
+		MaxScore:    r.MaxScore,
+		StartedAt:   formatTime(r.StartedAt),
+		SubmittedAt: formatTimePtr(r.SubmittedAt),
+		GradedAt:    formatTimePtr(r.GradedAt),
+	}
+}

@@ -595,6 +595,14 @@ Idempotency-Key: ...
 
 该接口只接受 `grading_failed` Attempt，要求答案和不可变 Quiz 快照完整，且当前不存在活动批阅 Job。成功返回 `202 AsyncAccepted` 并把 Attempt 更新为 `grading`；若原 `grading_job_id` 存在，新 Job 的 `retry_of_job_id` 指向原 Job。重复幂等键返回同一 Job；已有活动 Job 返回 `409 resource_busy`；答案不完整或旧数据被隔离时返回稳定、可行动错误，不创建 Job。
 
+### 10.6 课时作答历史列表
+
+```http
+GET /api/v1/lessons/{lesson_id}/attempts?cursor=...&limit=...
+```
+
+按 `started_at DESC, id DESC`（最新在前）返回该课时全部试卷的作答摘要 `AttemptList`（`AttemptSummary[]` + `page_info`），游标键为 `started_at` + `id`。摘要只含状态、分数与试卷标题，不含题目/答案快照；逐题结果与 AI 反馈仍走 `GET /attempts/{attempt_id}`（§10.2 的反馈可见性矩阵不变）。课时不存在返回 `404 not_found`；非法 `cursor`/`limit` 返回 `400 bad_request`。
+
 ## 11. Weakness 与 Progress API
 
 | Method | Path | 说明 |

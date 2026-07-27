@@ -139,6 +139,17 @@ export async function invalidateJobChanged(client: QueryClient, jobId?: string):
 }
 
 /**
+ * 总结评估任务已接受：评估查询由 SSE 终态对账驱动刷新；
+ * 这里只失效任务中心（新任务出现在列表/角标）。
+ */
+export async function invalidateSummaryEvaluationAccepted(
+  client: QueryClient,
+  jobId?: string,
+): Promise<void> {
+  await invalidateJobChanged(client, jobId)
+}
+
+/**
  * 文档可能已被生成任务重写（F4）：当前文档集合、各 kind 当前文档与
  * 历史版本列表一起失效；document-version 快照内容不可变，不失效。
  */

@@ -139,64 +139,65 @@ export function presentProblemCode(code: string): ProblemPresentation {
  * （链接、Key、prompt 一律不出现）。retryable 取自 Job 本身，
  * 调用方拿到的 presentation.retryable 始终与 Job 一致。
  */
-const JOB_ERROR_MESSAGES: Record<string, (retryable: boolean) => { title: string; message: string }> =
-  {
-    url_blocked: () => ({
-      title: '链接无法导入',
-      message: '该链接不在允许导入的范围内。请更换受支持的链接，或改用文本、文件导入。',
-    }),
-    material_fetch_failed: (retryable) =>
-      retryable
-        ? {
-            title: '链接内容提取失败',
-            message:
-              '提取链接内容时遇到暂时性问题。请稍后重试；若多次失败，请改用文本或文件导入。',
-          }
-        : {
-            title: '无法访问链接内容',
-            message: 'Claude 无法获取该链接的内容。请确认链接可公开访问，或改用文本、文件导入。',
-          },
-    material_empty_content: () => ({
-      title: '未提取到有效内容',
-      message: '该链接没有可提取的正文内容。请把需要的内容复制为文本导入，或改用文件上传。',
-    }),
-    material_too_large: () => ({
-      title: '链接内容超出大小限制',
-      message: '提取的内容超出可处理的长度。请截取需要的部分，改用文本或文件分批导入。',
-    }),
-    claude_timeout: () => ({
-      title: 'Claude 响应超时',
-      message: '等待 Claude 响应超时。任务和你的输入已保留，请稍后重试。',
-    }),
-    claude_invalid_request: () => ({
-      title: 'Claude 请求被拒绝',
-      message: '导入链接需要部署的网关支持 Claude Web Fetch。请检查部署配置后重试。',
-    }),
-    claude_invalid_json: () => ({
-      title: 'Claude 返回结果无法解析',
-      message: 'Claude 返回了格式异常的结果。请重试；若持续出现，请改用文本或文件导入。',
-    }),
-    claude_schema_invalid: () => ({
-      title: 'Claude 返回结果不完整',
-      message: 'Claude 返回的结果缺少必需内容。请重试；若持续出现，请改用文本或文件导入。',
-    }),
-    bilibili_cookie_not_configured: () => ({
-      title: '尚未保存 B 站 Cookie',
-      message: '请先在设置中保存 B 站 Cookie，然后重新检测。',
-    }),
-    bilibili_cookie_expired: () => ({
-      title: 'B 站 Cookie 已过期',
-      message: 'SESSDATA 已超过本地有效期。请重新获取并在设置中保存，然后再次检测。',
-    }),
-    bilibili_cookie_invalid: () => ({
-      title: 'B 站 Cookie 已失效',
-      message: 'B 站返回未登录。请重新获取 SESSDATA 并在设置中保存，然后再次检测。',
-    }),
-    bilibili_check_failed: () => ({
-      title: '暂时无法完成检测',
-      message: '无法连接 B 站完成检测。请稍后重试；若多次失败，请检查本机网络。',
-    }),
-  }
+const JOB_ERROR_MESSAGES: Record<
+  string,
+  (retryable: boolean) => { title: string; message: string }
+> = {
+  url_blocked: () => ({
+    title: '链接无法导入',
+    message: '该链接不在允许导入的范围内。请更换受支持的链接，或改用文本、文件导入。',
+  }),
+  material_fetch_failed: (retryable) =>
+    retryable
+      ? {
+          title: '链接内容提取失败',
+          message: '提取链接内容时遇到暂时性问题。请稍后重试；若多次失败，请改用文本或文件导入。',
+        }
+      : {
+          title: '无法访问链接内容',
+          message: 'Claude 无法获取该链接的内容。请确认链接可公开访问，或改用文本、文件导入。',
+        },
+  material_empty_content: () => ({
+    title: '未提取到有效内容',
+    message: '该链接没有可提取的正文内容。请把需要的内容复制为文本导入，或改用文件上传。',
+  }),
+  material_too_large: () => ({
+    title: '链接内容超出大小限制',
+    message: '提取的内容超出可处理的长度。请截取需要的部分，改用文本或文件分批导入。',
+  }),
+  claude_timeout: () => ({
+    title: 'Claude 响应超时',
+    message: '等待 Claude 响应超时。任务和你的输入已保留，请稍后重试。',
+  }),
+  claude_invalid_request: () => ({
+    title: 'Claude 请求被拒绝',
+    message: '导入链接需要部署的网关支持 Claude Web Fetch。请检查部署配置后重试。',
+  }),
+  claude_invalid_json: () => ({
+    title: 'Claude 返回结果无法解析',
+    message: 'Claude 返回了格式异常的结果。请重试；若持续出现，请改用文本或文件导入。',
+  }),
+  claude_schema_invalid: () => ({
+    title: 'Claude 返回结果不完整',
+    message: 'Claude 返回的结果缺少必需内容。请重试；若持续出现，请改用文本或文件导入。',
+  }),
+  bilibili_cookie_not_configured: () => ({
+    title: '尚未保存 B 站 Cookie',
+    message: '请先在设置中保存 B 站 Cookie，然后重新检测。',
+  }),
+  bilibili_cookie_expired: () => ({
+    title: 'B 站 Cookie 已过期',
+    message: 'SESSDATA 已超过本地有效期。请重新获取并在设置中保存，然后再次检测。',
+  }),
+  bilibili_cookie_invalid: () => ({
+    title: 'B 站 Cookie 已失效',
+    message: 'B 站返回未登录。请重新获取 SESSDATA 并在设置中保存，然后再次检测。',
+  }),
+  bilibili_check_failed: () => ({
+    title: '暂时无法完成检测',
+    message: '无法连接 B 站完成检测。请稍后重试；若多次失败，请检查本机网络。',
+  }),
+}
 
 /**
  * 异步任务失败的 code-first 呈现：Worker-only 码走本地窄映射，

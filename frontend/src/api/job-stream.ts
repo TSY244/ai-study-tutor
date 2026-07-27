@@ -301,8 +301,17 @@ export class JobStreamClient {
         invalidateDocumentsChanged(this.queryClient, lessonId),
       ])
     } else if (job.aggregate_type === 'attempt') {
+      await Promise.all([
+        this.queryClient.invalidateQueries({
+          queryKey: queryKeys.attempt(job.aggregate_id),
+        }),
+        // 课时作答历史按 lessonId 分键，任务事件拿不到 lessonId，
+        // 精准失效整个资源前缀（仅活跃查询重取），让列表徽标/分数翻新。
+        this.queryClient.invalidateQueries({ queryKey: ['lesson-attempts'], refetchType: 'active' }),
+      ])
+    } else if (job.aggregate_type === 'summary_evaluation') {
       await this.queryClient.invalidateQueries({
-        queryKey: queryKeys.attempt(job.aggregate_id),
+        queryKey: queryKeys.summaryEvaluation(job.aggregate_id),
       })
     }
   }

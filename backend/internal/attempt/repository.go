@@ -416,3 +416,47 @@ func (Repository) LatestGradedAttemptID(ctx context.Context, q database.Querier,
 	}
 	return &id, err
 }
+
+// SummaryRow 是作答历史列表行（AttemptSummary DTO 的仓库视图）。
+type SummaryRow struct {
+	ID          uuid.UUID
+	QuizID      uuid.UUID
+	QuizTitle   string
+	Status      string
+	AutoScore   *float64
+	FinalScore  *float64
+	MaxScore    *float64
+	StartedAt   time.Time
+	SubmittedAt *time.Time
+	GradedAt    *time.Time
+}
+
+// ListByLesson 按 started_at DESC, id DESC 游标分页返回课时作答历史
+// （跨该课时全部试卷，含试卷标题）。
+func (Repository) ListByLesson(ctx context.Context, q database.Querier, lessonID uuid.UUID,
+	afterStartedAt *time.Time, afterID *uuid.UUID, limit int) ([]SummaryRow, error) {
+	rows, err := q.Query(ctx, `
+		SELECT a.id, a.quiz_id, z.title, a.status, a.auto_score, a.final_score, a.max_score,
+		       a.started_at, a.submitted_at, a.graded_at
+		FROM attempts a
+		JOIN quizzes z ON z.id = a.quiz_id
+		WHERE z.lesson_id = $1
+		  AND ($2::timestamptz IS NULL OR (a.started_at, a.id) < ($2, $3::uuid))
+		ORDER BY a.started_at DESC, a.id DESC
+		LIMIT $4`, lessonID, afterStartedAt, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SummaryRow{}
+	for rows.Next() {
+		var r SummaryRow
+		if err := rows.Scan(&r.ID, &r.QuizID, &r.QuizTitle, &r.Status,
+			&r.AutoScore, &r.FinalScore, &r.MaxScore,
+			&r.StartedAt, &r.SubmittedAt, &r.GradedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

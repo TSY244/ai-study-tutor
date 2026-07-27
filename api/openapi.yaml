@@ -704,6 +704,28 @@ paths:
                 $ref: '#/components/schemas/QuizList'
         default:
           $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/attempts:
+    get:
+      tags:
+      - Attempts
+      operationId: listLessonAttempts
+      summary: 查询课时作答历史
+      description: 按 started_at 倒序（最新在前）返回该课时全部试卷的作答摘要，游标分页。
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 作答历史列表
+          headers:
+            X-Request-ID: *id001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttemptList'
+        default:
+          $ref: '#/components/responses/Problem'
   /api/v1/quizzes/{quiz_id}:
     get:
       tags:
@@ -2426,6 +2448,64 @@ components:
       - grading
       - graded
       - grading_failed
+    AttemptSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - quiz_id
+      - quiz_title
+      - status
+      - started_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        quiz_id:
+          type: string
+          format: uuid
+        quiz_title:
+          type: string
+        status:
+          $ref: '#/components/schemas/AttemptStatus'
+        auto_score:
+          type:
+          - number
+          - 'null'
+        final_score:
+          type:
+          - number
+          - 'null'
+        max_score:
+          type:
+          - number
+          - 'null'
+        started_at:
+          type: string
+          format: date-time
+        submitted_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        graded_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    AttemptList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttemptSummary'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
     AnswerValue:
       type: object
       additionalProperties: true

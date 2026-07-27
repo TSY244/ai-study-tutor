@@ -87,7 +87,7 @@
 
 ## 已知缺口与残余风险
 
-- 发布 OpenAPI 仍缺少“按课时列出 Attempt 历史”端点；课时作答页只能引导从测验开始新作答。这是后端契约缺口，不由前端伪造接口。
+- ~~发布 OpenAPI 仍缺少“按课时列出 Attempt 历史”端点~~（已补齐：`GET /lessons/{lesson_id}/attempts`（§10.6），课时作答页为真实列表，任务详情含“关联作答”链接）。
 - 本次未持有真实 Claude Key，因此验证了降级启动和 secret 隔离，但没有调用远程 Anthropic API。
 - seed 覆盖合成中文长文；真实用户的极端超长标题、超大错误详情和超大上传仍建议在发布后观察日志与布局指标。
 - `web-design-guidelines` 技能配置的上游规则 URL 当前返回 404；本次以 axe WCAG、eslint-jsx-a11y、Playwright 语义断言和截图巡检替代。

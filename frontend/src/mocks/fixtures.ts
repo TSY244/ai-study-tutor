@@ -108,6 +108,7 @@ export const QUIZ_OBJECTIVE_ID = 'c0000000-0000-4000-8000-000000000002'
 export const ATTEMPT_DEMO_ID = 'd0000000-0000-4000-8000-000000000001'
 export const ATTEMPT_FAILED_ID = 'd0000000-0000-4000-8000-000000000002'
 export const ATTEMPT_FAILED_WITH_JOB_ID = 'd0000000-0000-4000-8000-000000000003'
+export const ATTEMPT_GRADED_ID = 'd0000000-0000-4000-8000-000000000004'
 export const JOB_GRADING_FAILED_ID = 'b0000000-0000-4000-8000-000000000004'
 
 // 题目 ID（契约 format: uuid；weaknesses evidence 同步引用）
@@ -445,6 +446,86 @@ export const demoAttemptFailedWithJob: Attempt = {
   ...demoAttemptFailed,
   id: ATTEMPT_FAILED_WITH_JOB_ID,
   grading_job_id: JOB_GRADING_FAILED_ID,
+}
+
+/**
+ * 已批阅（全客观题同步出分）：作答历史列表与结果页的完成态样例，
+ * 含逐题 QuestionFeedback（正确/漏选/正确）。
+ */
+export const demoAttemptGraded: Attempt = {
+  id: ATTEMPT_GRADED_ID,
+  quiz_id: QUIZ_OBJECTIVE_ID,
+  status: 'graded',
+  version: 4,
+  auto_score: 10,
+  final_score: 10,
+  max_score: 15,
+  grading_job_id: null,
+  grading_error_code: null,
+  grading_error_detail: null,
+  questions: demoObjectiveQuiz.questions,
+  answers: [
+    {
+      question_id: Q_OBJ_1_ID,
+      answer: { value: 'B' },
+      answer_version: 1,
+      awarded_score: 5,
+      is_correct: true,
+      feedback: {
+        question_id: Q_OBJ_1_ID,
+        awarded_score: 5,
+        max_score: 5,
+        is_correct: true,
+        feedback: '回答正确。',
+        correct_understanding: '期望是随机变量所有取值按概率的加权平均。',
+        correct_answer: { value: 'B' },
+        explanation: null,
+        weak_concepts: [],
+      },
+      updated_at: '2026-07-16T11:05:00Z',
+    },
+    {
+      question_id: Q_OBJ_2_ID,
+      answer: { value: ['A'] },
+      answer_version: 1,
+      awarded_score: 0,
+      is_correct: false,
+      feedback: {
+        question_id: Q_OBJ_2_ID,
+        awarded_score: 0,
+        max_score: 5,
+        is_correct: false,
+        feedback: '漏选：泊松分布也是离散型分布。',
+        correct_understanding: '二项分布与泊松分布是离散型；正态分布、均匀分布是连续型。',
+        correct_answer: { value: ['A', 'B'] },
+        explanation: null,
+        weak_concepts: ['distributions'],
+      },
+      updated_at: '2026-07-16T11:06:00Z',
+    },
+    {
+      question_id: Q_OBJ_3_ID,
+      answer: { value: true },
+      answer_version: 1,
+      awarded_score: 5,
+      is_correct: true,
+      feedback: {
+        question_id: Q_OBJ_3_ID,
+        awarded_score: 5,
+        max_score: 5,
+        is_correct: true,
+        feedback: '回答正确。',
+        correct_understanding: '方差是偏差平方的期望，必然非负。',
+        correct_answer: { value: true },
+        explanation: null,
+        weak_concepts: [],
+      },
+      updated_at: '2026-07-16T11:07:00Z',
+    },
+  ],
+  started_at: '2026-07-16T11:02:00Z',
+  submitted_at: '2026-07-16T11:07:30Z',
+  graded_at: '2026-07-16T11:07:31Z',
 }
 
 export const demoProgressByCourse: Record<string, Progress> = {
@@ -990,4 +1071,13 @@ const demoJobEventsByJobId = new Map<string, JobEvent[]>([
 export function demoJobEvents(jobId: string): JobEvent[] {
   const events = demoJobEventsByJobId.get(jobId) ?? []
   return [...events].reverse()
+}
+
+/** 总结评估完成的固定反馈（模拟 Worker 写库；内容对齐「随机变量与分布」课时）。 */
+export const demoSummaryEvaluationFeedback = {
+  coverage_score: 0.75,
+  correct_points: ['正确区分了离散型与连续型随机变量。', '准确写出了期望的线性性质。'],
+  misconceptions: ['把「方差」理解成了数据的平均偏差，实际是绝对偏差的平方期望。'],
+  missing_points: ['没有提到常见分布（二项分布、正态分布）的适用场景。'],
+  suggestions: ['复习方差定义并用一道离散型例题手算验证。', '补充正态分布的标准化步骤。'],
 }

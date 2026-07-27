@@ -24,12 +24,21 @@ import {
 import type {
   AsyncAcceptedResponse,
   Attempt,
+  AttemptList,
   AttemptSubmitAccepted,
   AttemptSubmitCompleted,
   ProblemResponse,
   SavedAnswer
 } from '../../model';
 
+
+export const getListLessonAttemptsResponseMock = (overrideResponse: Partial<Extract<AttemptList, object>> = {}): AttemptList => ({items: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({id: faker.string.uuid(), quiz_id: faker.string.uuid(), quiz_title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.helpers.arrayElement(Object.values(AttemptStatus)), auto_score: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), null]), undefined]), final_score: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), null]), undefined]), max_score: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), null]), undefined]), started_at: faker.date.past().toISOString().slice(0, 19) + 'Z', submitted_at: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), undefined]), graded_at: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), undefined])})), page_info: {next_cursor: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), has_more: faker.datatype.boolean()}, ...overrideResponse})
+
+
+export const getListLessonAttemptsResponseMock200 = (overrideResponse: Partial<Extract<AttemptList, object>> = {}): AttemptList => ({items: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({id: faker.string.uuid(), quiz_id: faker.string.uuid(), quiz_title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.helpers.arrayElement(Object.values(AttemptStatus)), auto_score: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), null]), undefined]), final_score: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), null]), undefined]), max_score: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), null]), undefined]), started_at: faker.date.past().toISOString().slice(0, 19) + 'Z', submitted_at: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), undefined]), graded_at: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), undefined])})), page_info: {next_cursor: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), has_more: faker.datatype.boolean()}, ...overrideResponse})
+
+
+export const getListLessonAttemptsResponseMockDefault = (overrideResponse: Partial<Extract<ProblemResponse, object>> = {}): ProblemResponse => ({type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.number.int({min: 400, max: 599}), detail: faker.string.alpha({length: {min: 10, max: 20}}), instance: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), code: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), errors: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({field: faker.string.alpha({length: {min: 10, max: 20}}), code: faker.string.alpha({length: {min: 10, max: 20}}), message: faker.string.alpha({length: {min: 10, max: 20}})})), undefined]), ...overrideResponse})
 
 export const getCreateAttemptResponseMock = (overrideResponse: Partial<Extract<Attempt, object>> = {}): Attempt => ({id: faker.string.uuid(), quiz_id: faker.string.uuid(), status: faker.helpers.arrayElement(Object.values(AttemptStatus)), version: faker.number.int(), auto_score: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), null]), undefined]), final_score: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), null]), undefined]), max_score: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), null]), undefined]), grading_job_id: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.string.uuid(), null]), undefined]), grading_error_code: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), undefined]), grading_error_detail: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), undefined]), questions: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({id: faker.string.uuid(), type: faker.helpers.arrayElement(Object.values(QuestionType)), stem: faker.string.alpha({length: {min: 10, max: 20}}), options: faker.helpers.arrayElement([faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: faker.string.alpha({length: {min: 10, max: 20}})
@@ -90,6 +99,44 @@ export const getCreateAttemptGradingJobResponseMock202 = (overrideResponse: Part
 
 export const getCreateAttemptGradingJobResponseMockDefault = (overrideResponse: Partial<Extract<ProblemResponse, object>> = {}): ProblemResponse => ({type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.number.int({min: 400, max: 599}), detail: faker.string.alpha({length: {min: 10, max: 20}}), instance: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), code: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), errors: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({field: faker.string.alpha({length: {min: 10, max: 20}}), code: faker.string.alpha({length: {min: 10, max: 20}}), message: faker.string.alpha({length: {min: 10, max: 20}})})), undefined]), ...overrideResponse})
 
+
+export const getListLessonAttemptsMockHandler = (overrideResponse?: AttemptList | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AttemptList> | AttemptList), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/lessons/:lessonId/attempts', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getListLessonAttemptsResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+
+export const getListLessonAttemptsMockHandler200 = (overrideResponse?: AttemptList | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AttemptList> | AttemptList), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/lessons/:lessonId/attempts', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getListLessonAttemptsResponseMock200(),
+      { status: 200
+      })
+  }, options)
+}
+
+
+export const getListLessonAttemptsMockHandlerDefault = (overrideResponse?: ProblemResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<ProblemResponse> | ProblemResponse), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/lessons/:lessonId/attempts', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getListLessonAttemptsResponseMockDefault(),
+      { status: 200
+      })
+  }, options)
+}
 
 export const getCreateAttemptMockHandler = (overrideResponse?: Attempt | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Attempt> | Attempt), options?: RequestHandlerOptions) => {
   return http.post('*/api/v1/quizzes/:quizId/attempts', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
@@ -294,6 +341,7 @@ export const getCreateAttemptGradingJobMockHandlerDefault = (overrideResponse?: 
   }, options)
 }
 export const getAttemptsMock = () => [
+  getListLessonAttemptsMockHandler(),
   getCreateAttemptMockHandler(),
   getGetAttemptMockHandler(),
   getSaveAttemptAnswerMockHandler(),

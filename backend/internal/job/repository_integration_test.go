@@ -64,6 +64,27 @@ func claim(t *testing.T, pool *pgxpool.Pool, workerID string, lease time.Duratio
 	return j
 }
 
+// Create 必须回填服务端时间戳：202 响应的 Job DTO 直接映射内存结构体，
+// 不回填则 created_at/updated_at 输出零值时间（0001-01-01）。
+func TestCreatePopulatesTimestamps(t *testing.T) {
+	pool := databasetest.New(t)
+	repo := &job.Repository{}
+
+	j := createJob(t, pool, newJob(uuid.New()))
+	if j.CreatedAt.IsZero() || j.UpdatedAt.IsZero() {
+		t.Fatalf("Create 未回填时间戳: CreatedAt=%v UpdatedAt=%v", j.CreatedAt, j.UpdatedAt)
+	}
+
+	got, err := repo.GetByID(context.Background(), pool, j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.CreatedAt.Equal(j.CreatedAt) || !got.UpdatedAt.Equal(j.UpdatedAt) {
+		t.Fatalf("回填时间戳与库中不一致: Create(%v, %v) vs GetByID(%v, %v)",
+			j.CreatedAt, j.UpdatedAt, got.CreatedAt, got.UpdatedAt)
+	}
+}
+
 func inTx(t *testing.T, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) {
 	t.Helper()
 	tx, err := pool.Begin(context.Background())

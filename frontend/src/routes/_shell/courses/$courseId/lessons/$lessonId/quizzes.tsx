@@ -26,8 +26,7 @@ const QUIZ_SOURCE_LABEL: Record<QuizList['items'][number]['source'], string> = {
 
 /**
  * 课时测验列表：游标分页；每份测验可直接「开始作答」（创建 Attempt
- * 并跳转专注模式）。历史作答没有列表 API（契约缺口，见 F5 报告），
- * 进行中的作答可通过任务中心/直接链接恢复。
+ * 并跳转专注模式）。历史作答见同课时「作答」页（listLessonAttempts）。
  */
 function LessonQuizzesPage() {
   const { courseId, lessonId } = Route.useParams()

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Job } from '@/api/generated/model'
 import {
+  ATTEMPT_GRADED_ID,
   COURSE_STATS_ID,
   JOB_RUNNING_ID,
   LESSON_BAYES_ID,
@@ -13,6 +14,7 @@ import { server } from '@/mocks/server'
 import { renderWithRouter } from '@/test/utils'
 
 const URL_JOB_ID = 'b0000000-0000-4000-8000-0000000000a1'
+const GRADING_JOB_ID = 'b0000000-0000-4000-8000-0000000000b1'
 const PROCESSING_LESSON_URL = `/courses/${COURSE_STATS_ID}/lessons/${LESSON_BAYES_ID}/notes`
 
 /** 上游 detail 哨兵：链接 + Key + prompt 片段，任何呈现面都不得回显。 */
@@ -109,5 +111,25 @@ describe('URL 导入失败任务呈现', () => {
     expect(row).toHaveTextContent('暂时性问题')
     expect(row.textContent).not.toContain('youtube.com')
     expect(row.textContent).not.toContain('sk-ant')
+  })
+
+  it('批阅任务详情：显示「关联作答」链接，可回作答结果页', async () => {
+    stubJob(
+      failedUrlJob({
+        id: GRADING_JOB_ID,
+        kind: 'attempt_grade',
+        aggregate_type: 'attempt',
+        aggregate_id: ATTEMPT_GRADED_ID,
+        generation_family: null,
+        status: 'succeeded',
+        stage: '完成',
+        progress: 100,
+        error: null,
+      }),
+    )
+    renderWithRouter(`/jobs/${GRADING_JOB_ID}`)
+
+    const link = await screen.findByRole('link', { name: '查看作答结果' })
+    expect(link).toHaveAttribute('href', `/attempts/${ATTEMPT_GRADED_ID}`)
   })
 })

@@ -156,7 +156,7 @@ _shell（路径无关布局，挂 App Shell）
 │           ├── index → notes        重定向
 │           ├── notes | outline      笔记/大纲（F4）
 │           ├── quizzes | attempts   测验/作答（F3/F5）
-│           └── summary              总结（F4/F6）
+│           └── summary              总结（手写总结 + AI 评估反馈）
 ├── jobs/ | jobs/$jobId              任务中心列表（游标分页）/ 详情
 ├── weaknesses                       弱点列表
 ├── progress                         按课程掌握度
@@ -215,7 +215,7 @@ Query Cache 替换为实体标题，零额外请求）；仅一级 crumb 时不�
 
 MSW curated fixtures（`src/mocks/fixtures.ts`）：2 课程、4 课时
 （ready/processing/failed 三态）、3 任务（running/failed/succeeded）、
-1 测验 + 1 进行中作答、空弱点列表、按课程进度。
+2 测验 + 4 作答（进行中、批阅失败 ×2、已批阅）、空弱点列表、按课程进度。
 
 ## 可访问性基础
 

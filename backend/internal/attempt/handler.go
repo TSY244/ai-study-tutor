@@ -30,9 +30,65 @@ func NewHandler(svc *Service, idem *httpx.IdemExecutor) *Handler {
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, jsonLimit gin.HandlerFunc) {
 	rg.POST("/quizzes/:quiz_id/attempts", jsonLimit, h.createAttempt)
 	rg.GET("/attempts/:attempt_id", h.getAttempt)
+	rg.GET("/lessons/:lesson_id/attempts", h.listAttempts)
 	rg.PATCH("/attempts/:attempt_id/answers/:question_id", jsonLimit, h.saveAnswer)
 	rg.POST("/attempts/:attempt_id/submit", jsonLimit, h.submit)
 	rg.POST("/attempts/:attempt_id/grading-jobs", jsonLimit, h.createGradingJob)
+}
+
+// GET /api/v1/lessons/:lesson_id/attempts —— 课时作答历史
+// （游标分页，started_at DESC, id DESC；只读，不要求幂等键）。
+func (h *Handler) listAttempts(c *gin.Context) {
+	lessonID, ok := pathUUID(c, "lesson_id")
+	if !ok {
+		return
+	}
+	limit, ok := httpx.ParseLimit(c)
+	if !ok {
+		badRequest(c, "limit 必须是 1-100 的整数。")
+		return
+	}
+	var afterStartedAt *time.Time
+	var afterID *uuid.UUID
+	if raw := c.Query("cursor"); raw != "" {
+		var cur map[string]any
+		if !httpx.DecodeCursor(raw, &cur) {
+			badRequest(c, "cursor 无法解析。")
+			return
+		}
+		ts, ok1 := cur["started_at"].(string)
+		id, ok2 := cur["id"].(string)
+		t, err1 := time.Parse(time.RFC3339, ts)
+		u, err2 := uuid.Parse(id)
+		if !ok1 || !ok2 || err1 != nil || err2 != nil {
+			badRequest(c, "cursor 无法解析。")
+			return
+		}
+		afterStartedAt = &t
+		afterID = &u
+	}
+	rows, err := h.svc.ListAttempts(c.Request.Context(), lessonID, afterStartedAt, afterID, limit)
+	if err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	items := make([]AttemptSummaryDTO, 0, limit)
+	for _, r := range rows {
+		if len(items) == limit {
+			break
+		}
+		items = append(items, ToAttemptSummaryDTO(r))
+	}
+	page := httpx.PageInfo{HasMore: len(rows) > limit}
+	if page.HasMore && len(items) > 0 {
+		last := rows[len(items)-1]
+		next := httpx.EncodeCursor(map[string]any{
+			"started_at": last.StartedAt.UTC().Format(time.RFC3339Nano),
+			"id":         last.ID.String(),
+		})
+		page.NextCursor = &next
+	}
+	c.JSON(http.StatusOK, httpx.Collection[AttemptSummaryDTO]{Items: items, PageInfo: page})
 }
 
 // POST /api/v1/quizzes/:quiz_id/attempts —— 开始作答（201 + Location）。

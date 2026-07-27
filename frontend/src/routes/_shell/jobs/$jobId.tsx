@@ -132,6 +132,17 @@ function JobDetailPage() {
             <LessonLink lessonId={job.aggregate_id} />
           </DetailRow>
         ) : null}
+        {job.aggregate_type === 'attempt' && job.aggregate_id ? (
+          <DetailRow label="关联作答">
+            <Link
+              to="/attempts/$attemptId"
+              params={{ attemptId: job.aggregate_id }}
+              className="rounded-sm text-accent hover:underline"
+            >
+              查看作答结果
+            </Link>
+          </DetailRow>
+        ) : null}
       </dl>
     </div>
   )

@@ -128,14 +128,17 @@ func (r *Repository) Create(ctx context.Context, q database.Querier, j *Job) err
 	j.Status = StatusQueued
 	j.Stage = StatusQueued
 	j.Progress = 0
-	_, err := q.Exec(ctx, `
+	// RETURNING 回填服务端时间戳：202 响应的 Job DTO 直接来自内存结构体，
+	// 不回填则 created_at/updated_at 是零值时间。
+	err := q.QueryRow(ctx, `
 		INSERT INTO jobs (id, kind, aggregate_type, aggregate_id, generation_family,
 			payload, priority, max_attempts, retry_of_job_id,
 			idempotency_scope, idempotency_key)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		RETURNING created_at, updated_at`,
 		j.ID, j.Kind, j.AggregateType, j.AggregateID, j.GenerationFamily,
 		j.Payload, j.Priority, j.MaxAttempts, j.RetryOfJobID,
-		j.IdempotencyScope, j.IdempotencyKey)
+		j.IdempotencyScope, j.IdempotencyKey).Scan(&j.CreatedAt, &j.UpdatedAt)
 	if err != nil {
 		switch {
 		case isUniqueViolation(err, "uq_jobs_active_lesson_generation_family"):

@@ -26,6 +26,7 @@ import (
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/httpserver"
 	"github.com/TSY244/ai-study-tutor/backend/internal/quiz"
 	"github.com/TSY244/ai-study-tutor/backend/internal/sitecookie"
+	"github.com/TSY244/ai-study-tutor/backend/internal/summary"
 	"github.com/TSY244/ai-study-tutor/backend/internal/system"
 )
 
@@ -92,6 +93,8 @@ func RegisterRoutes(engine *gin.Engine, d Deps) {
 	}).Needed
 	quiz.NewGenerationHandler(genSvc, idem).RegisterRoutes(rg, jsonLimit)
 	quiz.NewQueryHandler(quiz.NewQueryService(d.Pool)).RegisterRoutes(rg)
+
+	summary.NewHandler(summary.NewService(d.Pool), idem).RegisterRoutes(rg, jsonLimit)
 
 	attempt.NewHandler(attempt.NewService(d.Pool), idem).RegisterRoutes(rg, jsonLimit)
 	mastery.NewHandler(

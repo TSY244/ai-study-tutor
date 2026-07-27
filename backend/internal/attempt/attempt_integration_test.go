@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,12 +34,13 @@ import (
 func TestMain(m *testing.M) { databasetest.Main(m) }
 
 const (
-	attemptsPath    = "/api/v1/quizzes/{quiz_id}/attempts"
-	attemptPath     = "/api/v1/attempts/{attempt_id}"
-	savePath        = "/api/v1/attempts/{attempt_id}/answers/{question_id}"
-	submitPath      = "/api/v1/attempts/{attempt_id}/submit"
-	gradingJobsPath = "/api/v1/attempts/{attempt_id}/grading-jobs"
-	retryPath       = "/api/v1/jobs/{job_id}/retry"
+	attemptsPath       = "/api/v1/quizzes/{quiz_id}/attempts"
+	attemptPath        = "/api/v1/attempts/{attempt_id}"
+	lessonAttemptsPath = "/api/v1/lessons/{lesson_id}/attempts"
+	savePath           = "/api/v1/attempts/{attempt_id}/answers/{question_id}"
+	submitPath         = "/api/v1/attempts/{attempt_id}/submit"
+	gradingJobsPath    = "/api/v1/attempts/{attempt_id}/grading-jobs"
+	retryPath          = "/api/v1/jobs/{job_id}/retry"
 )
 
 // newEngine 装配 attempt/quiz/job/mastery 模块（与生产路由同构）。
@@ -604,6 +606,123 @@ func TestGradingFailedRetryAndRebuild(t *testing.T) {
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("in_progress 重建 status = %d", rec.Code)
 	}
+}
+
+// ---- 课时作答历史列表 ----
+
+func TestListLessonAttempts(t *testing.T) {
+	pool := databasetest.New(t)
+	engine := newEngine(t, pool)
+	contract := apitest.Load(t)
+	_, lessonID := seedLesson(t, pool)
+	z := objectiveQuiz(t, pool, lessonID)
+	questions := quizQuestions(t, pool, z.ID)
+	base := "/api/v1/lessons/" + lessonID.String() + "/attempts"
+
+	// 课时下还没有作答：空列表、has_more=false。
+	rec := do(t, engine, http.MethodGet, base, "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("空列表 status = %d, body = %s", rec.Code, rec.Body)
+	}
+	contract.ValidateJSONResponse(t, http.MethodGet, lessonAttemptsPath, http.StatusOK, rec.Body.Bytes())
+	m := jsonBody(t, rec.Body.Bytes())
+	if len(m["items"].([]any)) != 0 {
+		t.Fatalf("无作答应为空列表: %v", m["items"])
+	}
+	if m["page_info"].(map[string]any)["has_more"] != false {
+		t.Fatalf("空列表 has_more 应为 false: %v", m["page_info"])
+	}
+
+	// 三次作答：first/third 保持 in_progress，second 提交后同步 graded。
+	first, _ := createAttempt(t, engine, contract, z.ID)
+	second, _ := createAttempt(t, engine, contract, z.ID)
+	save(t, engine, second, questions[0], 0, "A")
+	save(t, engine, second, questions[1], 0, "A,C")
+	save(t, engine, second, questions[2], 0, "对")
+	version := attemptVersion(t, engine, second)
+	rec = do(t, engine, http.MethodPost, "/api/v1/attempts/"+second+"/submit",
+		uuid.NewString(), `{"version":`+strconv.FormatInt(int64(version), 10)+`}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("提交 status = %d, body = %s", rec.Code, rec.Body)
+	}
+	third, _ := createAttempt(t, engine, contract, z.ID)
+
+	// 固定 started_at 让倒序确定：third 最新、first 最旧。
+	for id, ts := range map[string]string{
+		first:  "2026-07-20T10:00:00Z",
+		second: "2026-07-21T10:00:00Z",
+		third:  "2026-07-22T10:00:00Z",
+	} {
+		if _, err := pool.Exec(context.Background(),
+			`UPDATE attempts SET started_at = $1 WHERE id = $2`, ts, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 另一课时的作答不得混入。
+	_, otherLessonID := seedLesson(t, pool)
+	otherQuiz := objectiveQuiz(t, pool, otherLessonID)
+	createAttempt(t, engine, contract, otherQuiz.ID)
+
+	// 第一页 limit=2：third、second；has_more=true 且 next_cursor 非空。
+	rec = do(t, engine, http.MethodGet, base+"?limit=2", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("第一页 status = %d, body = %s", rec.Code, rec.Body)
+	}
+	contract.ValidateJSONResponse(t, http.MethodGet, lessonAttemptsPath, http.StatusOK, rec.Body.Bytes())
+	m = jsonBody(t, rec.Body.Bytes())
+	items := m["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("第一页条数 = %d，期望 2: %v", len(items), items)
+	}
+	if items[0].(map[string]any)["id"] != third || items[1].(map[string]any)["id"] != second {
+		t.Fatalf("第一页顺序应为 started_at 倒序: %v", items)
+	}
+	pageInfo := m["page_info"].(map[string]any)
+	if pageInfo["has_more"] != true || pageInfo["next_cursor"] == nil {
+		t.Fatalf("第一页分页信息错误: %v", pageInfo)
+	}
+	// 摘要字段：graded 行带分数与试卷标题；不含题目/答案重型字段。
+	graded := items[1].(map[string]any)
+	if graded["status"] != "graded" || graded["quiz_title"] != "极限练习" ||
+		graded["final_score"].(float64) != 6 || graded["max_score"].(float64) != 6 {
+		t.Fatalf("graded 摘要行错误: %v", graded)
+	}
+	if _, heavy := graded["questions"]; heavy {
+		t.Fatalf("摘要不得包含 questions: %v", graded)
+	}
+
+	// 第二页带 cursor：只剩 first；has_more=false；与第一页无重复。
+	rec = do(t, engine, http.MethodGet,
+		base+"?limit=2&cursor="+url.QueryEscape(pageInfo["next_cursor"].(string)), "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("第二页 status = %d, body = %s", rec.Code, rec.Body)
+	}
+	m = jsonBody(t, rec.Body.Bytes())
+	items = m["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["id"] != first {
+		t.Fatalf("第二页应只剩最旧作答: %v", items)
+	}
+	if m["page_info"].(map[string]any)["has_more"] != false {
+		t.Fatalf("第二页 has_more 应为 false: %v", m["page_info"])
+	}
+
+	// 课时不存在 → 404；非法 cursor / limit → 400。
+	rec = do(t, engine, http.MethodGet, "/api/v1/lessons/"+uuid.NewString()+"/attempts", "", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("不存在课时 status = %d, body = %s", rec.Code, rec.Body)
+	}
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusNotFound, "not_found")
+	rec = do(t, engine, http.MethodGet, base+"?cursor=not-a-cursor", "", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("非法 cursor status = %d, body = %s", rec.Code, rec.Body)
+	}
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
+	rec = do(t, engine, http.MethodGet, base+"?limit=abc", "", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("非法 limit status = %d, body = %s", rec.Code, rec.Body)
+	}
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
 }
 
 // ---- 掌握度重复消费 ----

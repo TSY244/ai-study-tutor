@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router'
+import { useEffect } from 'react'
 
 import { getLesson } from '@/api/generated/endpoints/lessons/lessons'
 import { queryKeys } from '@/api/query-client'
 import { Badge } from '@/components/ui/badge'
 import { ErrorState } from '@/components/ui/error-state'
 import { Skeleton } from '@/components/ui/skeleton'
+import { recordRecentLearning } from '@/features/learning/recent-learning'
 import { LessonActions } from '@/features/lessons/lesson-actions'
 import { ImportPanel } from '@/features/materials/import-panel'
 import { cn } from '@/lib/cn'
@@ -36,6 +38,14 @@ function LessonLayout() {
     queryKey: queryKeys.lesson(lessonId),
     queryFn: () => getLesson(lessonId),
   })
+
+  // 打开课时工作区即视为一次学习：写入「继续学习」最近记录
+  const lessonTitle = lessonQuery.isSuccess ? lessonQuery.data.title : null
+  useEffect(() => {
+    if (lessonTitle !== null) {
+      recordRecentLearning({ courseId, lessonId, lessonTitle })
+    }
+  }, [courseId, lessonId, lessonTitle])
 
   return (
     <div className="space-y-4">

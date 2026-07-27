@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { BookOpen, ChevronRight } from 'lucide-react'
+import { useState } from 'react'
 
 import { listCourses } from '@/api/generated/endpoints/courses/courses'
 import { listJobs } from '@/api/generated/endpoints/jobs/jobs'
@@ -12,6 +13,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/error-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton, SkeletonRows } from '@/components/ui/skeleton'
+import { loadRecentLearning } from '@/features/learning/recent-learning'
 import { formatDateTime } from '@/lib/format'
 import { JOB_KIND_LABEL, JOB_STATUS_META, systemStatusMeta } from '@/lib/status'
 
@@ -56,23 +58,53 @@ function SectionCard({
   )
 }
 
-/** 最近访问记录属于客户端状态，F1 尚未接入 Store，先展示空状态。 */
+/** 最近访问记录属于纯客户端状态（localStorage），打开课时工作区时写入。 */
 function ContinueLearningSection() {
+  // 每次导航回本页组件都会重新挂载，挂载时读取即可拿到最新记录
+  const [entries] = useState(() => loadRecentLearning())
+
   return (
     <SectionCard id="continue-learning-heading" title="继续学习">
-      <EmptyState
-        icon={BookOpen}
-        title="还没有学习记录"
-        description="打开一个课时开始学习后，这里会显示你的最近进度。"
-        action={
-          <Link
-            to="/courses"
-            className="rounded-sm text-sm font-medium text-accent hover:underline"
-          >
-            浏览课程
-          </Link>
-        }
-      />
+      {entries.length === 0 ? (
+        <EmptyState
+          icon={BookOpen}
+          title="还没有学习记录"
+          description="打开一个课时开始学习后，这里会显示你的最近进度。"
+          action={
+            <Link
+              to="/courses"
+              className="rounded-sm text-sm font-medium text-accent hover:underline"
+            >
+              浏览课程
+            </Link>
+          }
+        />
+      ) : (
+        <ul className="divide-y divide-border">
+          {entries.map((entry) => (
+            <li key={entry.lessonId}>
+              <Link
+                to="/courses/$courseId/lessons/$lessonId"
+                params={{ courseId: entry.courseId, lessonId: entry.lessonId }}
+                className="group flex items-center justify-between gap-3 py-2"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium text-text group-hover:text-accent">
+                    {entry.lessonTitle}
+                  </span>
+                  <span className="text-xs text-text-subtle">
+                    上次学习 {formatDateTime(entry.visitedAt)}
+                  </span>
+                </span>
+                <ChevronRight
+                  aria-hidden="true"
+                  className="h-4 w-4 shrink-0 text-text-subtle group-hover:text-accent"
+                />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
     </SectionCard>
   )
 }

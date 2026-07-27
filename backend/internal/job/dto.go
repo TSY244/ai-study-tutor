@@ -189,6 +189,10 @@ func statusForEvent(eventType, stage string) string {
 	}
 }
 
+// ClassifyRetryable 导出错误码的重试分类，供其他模块的错误 DTO 映射
+// （如 summary 评估）复用同一分类表。
+func ClassifyRetryable(code string) bool { return classifyRetryable(code) }
+
 // classifyRetryable 是错误码的重试分类（03 §7.3；B5/B6 补充素材/Claude 码）。
 func classifyRetryable(code string) bool {
 	switch code {

@@ -21,12 +21,14 @@ import type {
   AttemptAnswer,
   AttemptSubmitAccepted,
   AttemptSubmitCompleted,
+  AttemptSummary,
   ClaudeKey,
   ClaudeKeyCreate,
   ClaudeKeyUpdate,
   Course,
   CourseCreate,
   CourseUpdate,
+  CreateSummaryEvaluationBody,
   Document,
   DocumentSummary,
   FieldError,
@@ -43,6 +45,8 @@ import type {
   QuizSummary,
   SavedAnswer,
   SubmitAttemptBody,
+  SummaryEvaluation,
+  SummaryEvaluationAccepted,
   TextMaterialCreate,
   UrlMaterialCreate,
 } from '@/api/generated/model'
@@ -50,6 +54,7 @@ import {
   demoAttempt,
   demoAttemptFailed,
   demoAttemptFailedWithJob,
+  demoAttemptGraded,
   demoClaudeKeys,
   demoCourses,
   demoDocuments,
@@ -60,6 +65,7 @@ import {
   demoProgressByCourse,
   demoProgressByLesson,
   demoQuiz,
+  demoSummaryEvaluationFeedback,
   demoWeaknesses,
   QUIZ_ANSWER_KEYS,
   systemStatusOk,
@@ -164,10 +170,17 @@ const attemptsStore = new Map<string, Attempt>()
 /** grading 状态的 GET 计数：模拟 Worker 在后台完成批阅（第 2 次查询起返回 graded）。 */
 const attemptGetCounts = new Map<string, number>()
 
+// 总结评估运行时状态：评估会被 Worker 推进改变，存可变副本。
+const summaryEvaluationsStore = new Map<string, SummaryEvaluation>()
+/** 评估 id → 评估任务 id（推进时联动完成任务）。 */
+const summaryEvaluationJobs = new Map<string, string>()
+/** evaluating 状态的 GET 计数：模拟 Worker 在后台完成评估（第 2 次查询起返回 succeeded）。 */
+const summaryEvaluationGetCounts = new Map<string, number>()
+
 function seedAttempts(): void {
   attemptsStore.clear()
   attemptGetCounts.clear()
-  for (const attempt of [demoAttempt, demoAttemptFailed, demoAttemptFailedWithJob]) {
+  for (const attempt of [demoAttempt, demoAttemptFailed, demoAttemptFailedWithJob, demoAttemptGraded]) {
     attemptsStore.set(attempt.id, structuredClone(attempt))
   }
 }
@@ -191,6 +204,9 @@ export function resetMockState(): void {
   deletedCourseIds.clear()
   deletedLessonIds.clear()
   idempotencyLog.clear()
+  summaryEvaluationsStore.clear()
+  summaryEvaluationJobs.clear()
+  summaryEvaluationGetCounts.clear()
   seedAttempts()
   seedClaudeKeys()
 }
@@ -465,6 +481,22 @@ function findAttempt(id: string): Attempt | undefined {
   return attemptsStore.get(id)
 }
 
+/** 作答 → 历史列表摘要（契约 AttemptSummary；不含题目/答案重型字段）。 */
+function toAttemptSummary(attempt: Attempt): AttemptSummary {
+  return {
+    id: attempt.id,
+    quiz_id: attempt.quiz_id,
+    quiz_title: findQuiz(attempt.quiz_id)?.title ?? '测验',
+    status: attempt.status,
+    auto_score: attempt.auto_score ?? null,
+    final_score: attempt.final_score ?? null,
+    max_score: attempt.max_score ?? null,
+    started_at: attempt.started_at,
+    submitted_at: attempt.submitted_at ?? null,
+    graded_at: attempt.graded_at ?? null,
+  }
+}
+
 function newGradingJob(attempt: Attempt): Job {
   const now = nowIso()
   return {
@@ -556,6 +588,53 @@ function advanceGrading(attempt: Attempt): void {
       stage: '完成',
       progress: 100,
       message: '批阅完成',
+      completed_at: nowIso(),
+    })
+  }
+}
+
+/** 总结评估任务：kind summary_evaluate，聚合到评估本身（SSE 终态对账按此失效评估查询）。 */
+function newSummaryEvaluationJob(evaluationId: string): Job {
+  const now = nowIso()
+  return {
+    id: globalThis.crypto.randomUUID(),
+    kind: 'summary_evaluate',
+    aggregate_type: 'summary_evaluation',
+    aggregate_id: evaluationId,
+    generation_family: null,
+    retry_of_job_id: null,
+    status: 'queued',
+    stage: '排队中',
+    progress: 0,
+    message: null,
+    attempt_count: 1,
+    max_attempts: 3,
+    retryable: false,
+    cancel_requested: false,
+    error: null,
+    created_at: now,
+    started_at: null,
+    completed_at: null,
+    updated_at: now,
+  }
+}
+
+/** 评估推进：evaluating 的评估第 2 次被查询时写入固定反馈（模拟 Worker）。 */
+function advanceSummaryEvaluation(evaluation: SummaryEvaluation): void {
+  evaluation.status = 'succeeded'
+  evaluation.coverage_score = demoSummaryEvaluationFeedback.coverage_score
+  evaluation.correct_points = [...demoSummaryEvaluationFeedback.correct_points]
+  evaluation.misconceptions = [...demoSummaryEvaluationFeedback.misconceptions]
+  evaluation.missing_points = [...demoSummaryEvaluationFeedback.missing_points]
+  evaluation.suggestions = [...demoSummaryEvaluationFeedback.suggestions]
+  evaluation.completed_at = nowIso()
+  const jobId = summaryEvaluationJobs.get(evaluation.id)
+  if (jobId) {
+    patchJob(jobId, {
+      status: 'succeeded',
+      stage: '完成',
+      progress: 100,
+      message: '评估完成',
       completed_at: nowIso(),
     })
   }
@@ -1091,6 +1170,59 @@ const curatedHandlers = [
     return json(request, accepted, { status: 202 })
   }),
 
+  // 总结评估：创建 summary_evaluate 后台任务；评估结果由 Worker 完成后写回。
+  http.post('*/api/v1/lessons/:lessonId/summary-evaluations', async ({ request, params }) => {
+    const lesson = findLesson(params.lessonId as string)
+    if (!lesson) return notFound(request, '课时不存在或已删除。')
+    const body = (await request
+      .json()
+      .catch(() => null)) as Partial<CreateSummaryEvaluationBody> | null
+    const fieldErrors: FieldError[] = []
+    if (typeof body?.summary !== 'string' || body.summary.trim().length === 0) {
+      fieldErrors.push({ field: 'summary', code: 'required', message: '总结内容为 1–50000 字。' })
+    } else if (body.summary.length > 50_000) {
+      fieldErrors.push({ field: 'summary', code: 'too_long', message: '总结内容为 1–50000 字。' })
+    }
+    if (fieldErrors.length > 0) return validationProblem(request, fieldErrors)
+
+    const fingerprint = `summary-evaluation:${lesson.id}:${JSON.stringify(body ?? {})}`
+    const replay = replayIdempotent<SummaryEvaluationAccepted>(request, fingerprint)
+    if (replay && 'conflict' in replay) return idempotencyConflictProblem(request)
+    if (replay) return json(request, replay.replay, { status: 202 })
+
+    const evaluation: SummaryEvaluation = {
+      id: globalThis.crypto.randomUUID(),
+      lesson_id: lesson.id,
+      status: 'evaluating',
+      coverage_score: null,
+      correct_points: [],
+      misconceptions: [],
+      missing_points: [],
+      suggestions: [],
+      error: null,
+      created_at: nowIso(),
+      completed_at: null,
+    }
+    const job = newSummaryEvaluationJob(evaluation.id)
+    createdJobs.unshift(job)
+    summaryEvaluationsStore.set(evaluation.id, evaluation)
+    summaryEvaluationJobs.set(evaluation.id, job.id)
+    const accepted: SummaryEvaluationAccepted = { evaluation, job }
+    rememberIdempotent(request, fingerprint, accepted)
+    return json(request, accepted, { status: 202 })
+  }),
+  http.get('*/api/v1/summary-evaluations/:evaluationId', ({ request, params }) => {
+    const evaluation = summaryEvaluationsStore.get(params.evaluationId as string)
+    if (!evaluation) return notFound(request, '评估不存在或已删除。')
+    // 模拟 Worker：evaluating 状态第 2 次查询时完成（同 attempt 批阅推进）。
+    if (evaluation.status === 'evaluating') {
+      const count = (summaryEvaluationGetCounts.get(evaluation.id) ?? 0) + 1
+      summaryEvaluationGetCounts.set(evaluation.id, count)
+      if (count >= 2) advanceSummaryEvaluation(evaluation)
+    }
+    return json(request, evaluation)
+  }),
+
   // 任务
   http.get('*/api/v1/jobs', ({ request }) => {
     const url = new URL(request.url)
@@ -1255,6 +1387,20 @@ const curatedHandlers = [
     const items = baseQuizzes()
       .filter((quiz) => quiz.lesson_id === params.lessonId)
       .map(toQuizSummary)
+    return json(request, paginate(items, url))
+  }),
+  // 课时作答历史（started_at 倒序；无作答时为空列表，同 quizzes mock 语义）
+  http.get('*/api/v1/lessons/:lessonId/attempts', ({ request, params }) => {
+    const url = new URL(request.url)
+    const lessonQuizIds = new Set(
+      baseQuizzes()
+        .filter((quiz) => quiz.lesson_id === params.lessonId)
+        .map((quiz) => quiz.id),
+    )
+    const items = [...attemptsStore.values()]
+      .filter((attempt) => lessonQuizIds.has(attempt.quiz_id))
+      .sort((a, b) => b.started_at.localeCompare(a.started_at))
+      .map(toAttemptSummary)
     return json(request, paginate(items, url))
   }),
   http.get('*/api/v1/quizzes/:quizId', ({ request, params }) => {

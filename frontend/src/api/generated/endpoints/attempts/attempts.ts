@@ -7,13 +7,48 @@ import type {
   AnswerSave,
   AsyncAcceptedResponse,
   Attempt,
+  AttemptList,
   AttemptSubmitAccepted,
   AttemptSubmitCompleted,
+  ListLessonAttemptsParams,
   SavedAnswer,
   SubmitAttemptBody
 } from '../../model';
 
 import { apiFetch } from '../../../http';
+
+export const getListLessonAttemptsUrl = (lessonId: string,
+    params?: ListLessonAttemptsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/lessons/${lessonId}/attempts?${stringifiedParams}` : `/api/v1/lessons/${lessonId}/attempts`
+}
+
+/**
+ * 按 started_at 倒序（最新在前）返回该课时全部试卷的作答摘要，游标分页。
+ * @summary 查询课时作答历史
+ */
+export const listLessonAttempts = async (lessonId: string,
+    params?: ListLessonAttemptsParams, options?: RequestInit): Promise<AttemptList> => {
+
+  return apiFetch<AttemptList>(getListLessonAttemptsUrl(lessonId,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
 
 export const getCreateAttemptUrl = (quizId: string,) => {
 
