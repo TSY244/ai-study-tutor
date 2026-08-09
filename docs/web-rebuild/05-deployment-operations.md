@@ -17,6 +17,7 @@
 建议：
 
 - Docker Desktop 近期稳定版，或 Linux Docker Engine + Compose plugin。
+- Python 3.11+ 只用于源码仓库的 Compose 边界单元测试与验证脚本（纯标准库）；生产应用与容器运行时不依赖宿主机 Python。
 - 至少 4 核 CPU、8GB 可分配内存。
 - 至少 20GB 可用磁盘；视频素材用户应准备更多空间。
 - 可访问 Anthropic API 的网络。
@@ -47,6 +48,8 @@ deploy/
     ├── init.sh
     ├── release-smoke.sh
     ├── verify-secrets.sh
+    ├── verify_compose_boundary.py
+    ├── test_verify_compose_boundary.py
     └── drill.sh
 
 backups/                       # 备份包

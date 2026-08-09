@@ -1,6 +1,6 @@
 # Docker 部署指南
 
-本文档是 AI Study Tutor 的完整部署手册。**整个系统全部以 Docker 容器运行**，宿主机只需要 Docker，无需安装 Go、Node.js、Python 或 PostgreSQL。
+本文档是 AI Study Tutor 的完整部署手册。**生产应用全部以 Docker 容器运行**，宿主机无需安装 Go、Node.js、Python 或 PostgreSQL。只有从源码仓库运行 Compose 边界验证命令时，宿主机额外需要 Python 3.11+；检查器只使用标准库，不是应用运行时依赖。
 
 适用场景：单用户、本机（或内网单机）部署。所有命令在仓库根目录执行。
 
@@ -54,6 +54,7 @@
 ## 2. 前置要求
 
 - Docker Desktop 4.x（macOS/Windows）或 Docker Engine 24+ 与 Compose v2 插件（Linux）。
+- Python 3.11+ 仅用于仓库中的 `make test-deploy-boundaries` 和 `make docker-verify-secrets`；不需要第三方 Python 包，正常构建、启动和运行应用不依赖宿主机 Python。
 - 可用磁盘 ≥ 10 GB（镜像 + 数据卷），内存建议 ≥ 8 GB（Worker 限制 2 CPU / 4 GB）。
 - 首次构建需要外网拉取基础镜像与依赖；之后可离线重建。
 
@@ -62,6 +63,8 @@
 ```bash
 docker version
 docker compose version
+# 仅运行仓库部署边界验证时需要：
+python3 --version
 ```
 
 ## 3. 首次部署
@@ -117,6 +120,7 @@ make docker-up
 ```bash
 make docker-smoke     # REST、SSE、SPA 回退、静态资源缓存冒烟检查
 make docker-seed      # 可选：写入演示课程数据（幂等，可重复执行）
+make docker-verify-secrets # 可选：运行单元测试并校验渲染后的 Compose 边界（需 Python 3.11+）
 ```
 
 然后浏览器访问 `http://127.0.0.1:8080`。

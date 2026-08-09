@@ -11,6 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python for standard-library verification
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
@@ -19,6 +24,9 @@ jobs:
 
       - name: verify-openapi
         run: make verify-openapi
+
+      - name: test-deploy-boundaries
+        run: make test-deploy-boundaries
 
       - name: test-legacy
         run: make test-legacy

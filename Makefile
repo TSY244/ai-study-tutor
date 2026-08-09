@@ -5,6 +5,7 @@
 #   make verify-openapi    校验发布契约（X-Request-ID 逐响应、引用、operationId、无漂移）
 #   make check-openapi-breaking  对比基线，阻止操作/请求/响应/Schema 破坏性变更
 #   make verify-docs       校验 web-rebuild 文档集与设计源声明完整
+#   make test-deploy-boundaries  用 Python 标准库测试渲染后 Compose 的部署边界
 #   make seed            写入前端联调演示数据（幂等）
 # 旧系统基线：
 #   make test-legacy       运行 legacy/python 全部测试（含 golden fixture 用例）
@@ -15,7 +16,7 @@
 
 GO_PKGS := ./cmd/... ./internal/...
 
-.PHONY: generate-openapi verify-openapi check-openapi-breaking verify-docs test-legacy \
+.PHONY: generate-openapi verify-openapi check-openapi-breaking verify-docs test-deploy-boundaries test-legacy \
 	go-build go-fmt go-vet go-test verify seed docker-init docker-config \
 	docker-build docker-up docker-seed docker-doctor docker-backup docker-restore \
 	docker-maintenance-repair docker-legacy-scan docker-verify-secrets docker-smoke \
@@ -33,6 +34,9 @@ check-openapi-breaking:
 
 verify-docs:
 	uv run --script tools/docs/verify_docs.py
+
+test-deploy-boundaries:
+	python3 -m unittest discover -s deploy/scripts -p 'test_verify_compose_boundary.py'
 
 # TUTOR_CONFIG 指向已提交的示例配置，避免依赖被 gitignore 的本地 config.json
 test-legacy:
@@ -92,7 +96,7 @@ docker-legacy-import:
 	@test -n "$(LEGACY_IMPORT_ARGS)" || { echo "需要 LEGACY_IMPORT_ARGS='import --source /legacy --report /reports/import.json --resolution /reports/resolution.json'"; exit 2; }
 	docker compose --env-file deploy/.env -f deploy/compose.yaml --profile manual run --rm legacy-import $(LEGACY_IMPORT_ARGS)
 
-docker-verify-secrets:
+docker-verify-secrets: test-deploy-boundaries
 	./deploy/scripts/verify-secrets.sh
 
 docker-smoke:

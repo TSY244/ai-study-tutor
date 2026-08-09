@@ -137,6 +137,69 @@ class ComposeBoundaryTest(unittest.TestCase):
 
         self.assert_violation(config, "web.runtime_mount")
 
+    def test_rejects_host_claude_directory_overlay_in_api(self) -> None:
+        config = base_compose_config()
+        config["services"]["api"]["volumes"].append(
+            {
+                "type": "bind",
+                "source": "/safe/host-home/.claude",
+                "target": f"{RUNTIME_HOME}/.claude",
+            }
+        )
+
+        self.assert_violation(config, "api.runtime_settings_mount")
+
+    def test_rejects_read_only_settings_file_overlay_in_worker(self) -> None:
+        config = base_compose_config()
+        config["services"]["worker"]["volumes"].append(
+            {
+                "type": "bind",
+                "source": "/safe/host-home/settings.json",
+                "target": SETTINGS_FILE,
+                "read_only": True,
+            }
+        )
+
+        self.assert_violation(config, "worker.runtime_settings_mount")
+
+    def test_rejects_ancestor_mount_that_shadows_runtime_settings(self) -> None:
+        config = base_compose_config()
+        config["services"]["api"]["volumes"].append(
+            {"type": "bind", "source": "/safe/var-lib", "target": "/var/lib"}
+        )
+
+        self.assert_violation(config, "api.runtime_settings_mount")
+
+    def test_rejects_web_mount_of_gateway_source_at_unrelated_target(self) -> None:
+        config = base_compose_config()
+        gateway_source = config["services"]["api"]["volumes"][1]["source"]
+        config["services"]["web"]["volumes"].append(
+            {"type": "bind", "source": gateway_source, "target": "/unrelated-gateway-copy"}
+        )
+
+        self.assert_violation(config, "gateway.source_boundary")
+
+    def test_rejects_different_gateway_sources_for_api_and_worker(self) -> None:
+        config = base_compose_config()
+        config["services"]["worker"]["volumes"][1]["source"] = "/safe/other-gateway"
+
+        self.assert_violation(config, "gateway.mount_identity")
+
+    def test_rejects_different_app_data_sources_for_api_and_worker(self) -> None:
+        config = base_compose_config()
+        config["services"]["worker"]["volumes"][0]["source"] = "other_app_data"
+
+        self.assert_violation(config, "app_data.mount_identity")
+
+    def test_rejects_app_data_source_from_other_unauthorized_service(self) -> None:
+        config = base_compose_config()
+        app_data_source = config["services"]["api"]["volumes"][0]["source"]
+        config["services"]["db"]["volumes"].append(
+            {"type": "volume", "source": app_data_source, "target": "/unrelated-app-data"}
+        )
+
+        self.assert_violation(config, "app_data.service_boundary")
+
     def test_rejects_other_boundary_regressions_without_echoing_values(self) -> None:
         cases = {
             "runtime HOME": (
