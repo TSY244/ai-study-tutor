@@ -155,6 +155,42 @@ func TestBuildClaudeProvidersWiresRuntimeSettingsAndHome(t *testing.T) {
 		}
 	})
 
+	t.Run("relative HOME is canonical and keeps explicit settings", func(t *testing.T) {
+		t.Setenv("HOME", filepath.Join("relative", "runtime-home"))
+		wantHome, err := filepath.Abs(filepath.Join("relative", "runtime-home"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		providers := buildClaudeProviders(cfg, "", false, nil)
+		urlExtractor := providers.URLExtractor.(*lessonimport.ClaudeURLCLIExtractor)
+		quizGenerator := providers.QuizCLI.(*aihandlers.ClaudeQuizCLIGenerator)
+		if urlExtractor.Home != wantHome || quizGenerator.Home != wantHome {
+			t.Fatalf("相对 HOME 应规范为绝对路径: URL=%q Quiz=%q want=%q", urlExtractor.Home, quizGenerator.Home, wantHome)
+		}
+		if urlExtractor.SettingsFile != settingsFile || quizGenerator.SettingsFile != settingsFile {
+			t.Fatalf("显式 settings 路径应保持不变: URL=%q Quiz=%q want=%q", urlExtractor.SettingsFile, quizGenerator.SettingsFile, settingsFile)
+		}
+	})
+
+	t.Run("non-empty HOME derives blank settings", func(t *testing.T) {
+		runtimeHome := filepath.Join(t.TempDir(), "runtime-home")
+		t.Setenv("HOME", runtimeHome)
+		derivedCfg := cfg
+		derivedCfg.Claude.ClaudeCodeSettingsFile = ""
+		wantSettings := filepath.Join(runtimeHome, ".claude", "settings.json")
+
+		providers := buildClaudeProviders(derivedCfg, "", false, nil)
+		urlExtractor := providers.URLExtractor.(*lessonimport.ClaudeURLCLIExtractor)
+		quizGenerator := providers.QuizCLI.(*aihandlers.ClaudeQuizCLIGenerator)
+		if urlExtractor.Home != runtimeHome || quizGenerator.Home != runtimeHome {
+			t.Fatalf("非空 HOME 应保持规范绝对路径: URL=%q Quiz=%q want=%q", urlExtractor.Home, quizGenerator.Home, runtimeHome)
+		}
+		if urlExtractor.SettingsFile != wantSettings || quizGenerator.SettingsFile != wantSettings {
+			t.Fatalf("空 settings 应从 HOME 派生: URL=%q Quiz=%q want=%q", urlExtractor.SettingsFile, quizGenerator.SettingsFile, wantSettings)
+		}
+	})
+
 	t.Run("blank HOME falls back to data dir", func(t *testing.T) {
 		t.Setenv("HOME", " \t ")
 		fallbackCfg := cfg

@@ -174,8 +174,8 @@ type claudeProviders struct {
 	// fake/非 Anthropic Provider 永不是 URL 导入替代品（字段保持 nil）。
 	URLImportAI        aipkg.Provider
 	URLImportAvailable func() bool
-	// URLExtractor 是 URL 素材的 Claude Code CLI 提取器（与 URLImportAI
-	// 同条件装配；运行时选择从 settings.json/网关 keys.json 解析）。
+	// URLExtractor 是 URL 素材的 Claude Code CLI 提取器；除网关配置外还
+	// 要求有效的运行时 HOME/settings 路径对。
 	URLExtractor lessonimport.URLExtractor
 	// QuizCLI 是测验生成的 Claude Code CLI 生成器（与 URLExtractor 同条件
 	// 装配；运行时选择同样从 settings.json/网关 keys.json 解析）。
@@ -263,21 +263,20 @@ func buildClaudeProviders(cfg config.Config, anthropicKey string, claudeOK bool,
 func claudeCLIRuntimePaths(cfg config.Config) (home, settingsFile string, ok bool) {
 	home = strings.TrimSpace(os.Getenv("HOME"))
 	settingsFile = strings.TrimSpace(cfg.Claude.ClaudeCodeSettingsFile)
-	if home != "" {
-		return home, settingsFile, true
+	if home == "" {
+		home = strings.TrimSpace(cfg.DataDir)
 	}
-	dataDir := strings.TrimSpace(cfg.DataDir)
-	if dataDir == "" {
+	if home == "" {
 		return "", "", false
 	}
-	absoluteDataDir, err := filepath.Abs(dataDir)
-	if err != nil || strings.TrimSpace(absoluteDataDir) == "" {
+	absoluteHome, err := filepath.Abs(home)
+	if err != nil || strings.TrimSpace(absoluteHome) == "" {
 		return "", "", false
 	}
 	if settingsFile == "" {
-		settingsFile = filepath.Join(absoluteDataDir, ".claude", "settings.json")
+		settingsFile = filepath.Join(absoluteHome, ".claude", "settings.json")
 	}
-	return absoluteDataDir, settingsFile, true
+	return absoluteHome, settingsFile, true
 }
 
 // recoveryInterval 是周期 Recovery 的间隔（短于默认 60s Job 租约，
