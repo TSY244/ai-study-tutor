@@ -108,6 +108,13 @@ The settings document contains the selected Key's Base URL, token, and model:
 The writer keeps the existing atomic replacement and `0600` mode. It creates
 `~/.claude` with mode `0700` when necessary.
 
+The effective Base URL is calculated once using `Key.base_url > configured
+ANTHROPIC_BASE_URL > https://api.anthropic.com`. API receives the same
+deployment default as Worker. The writer and Worker resolver use this shared
+calculation, so applying a Key with an empty per-Key Base URL cannot immediately
+produce a settings mismatch or select a different gateway. No provider URL is
+hardcoded in the settings writer.
+
 The file becomes authoritative for choosing the Key used by Worker Claude Code
 tasks. `AI_STUDY_TUTOR_CLAUDE_KEY_ID` is a non-secret application selector;
 Claude Code simply ignores it as an unrelated environment value. A shared
