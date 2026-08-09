@@ -105,8 +105,8 @@ type ClaudeConfig struct {
 	// GatewayWriteEnabled 仅 api 使用：开启 /system/claude-keys 写端点；
 	// 默认关闭（只读）。
 	GatewayWriteEnabled bool
-	// ClaudeCodeSettingsFile 仅 api 使用：显式配置优先，否则解析为运行时
-	// HOME 下的 .claude/settings.json。它不包含密钥。
+	// ClaudeCodeSettingsFile 供 api 与 worker 共用：显式配置优先，否则解析
+	// 为运行时 HOME 下的 .claude/settings.json。它不包含密钥。
 	ClaudeCodeSettingsFile string
 }
 
