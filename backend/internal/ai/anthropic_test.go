@@ -75,6 +75,59 @@ func TestAnthropicProviderExtractsStructuredToolUseAndUsage(t *testing.T) {
 	}
 }
 
+func TestAnthropicProviderDeepSeekStructuredRequestThinking(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		wantThinking bool
+	}{
+		{name: "DeepSeek model", model: "deepseek-v4-flash", wantThinking: true},
+		{name: "normalized DeepSeek model", model: " \tDEEPSEEK-V4-Flash \n", wantThinking: true},
+		{name: "Claude model", model: "claude-sonnet-4-5", wantThinking: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured map[string]any
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+					t.Fatal(err)
+				}
+				return jsonResponse(http.StatusOK, `{
+					"id":"msg_structured","model":"response-model","stop_reason":"tool_use",
+					"content":[{"type":"tool_use","id":"toolu_1","name":"structured_result","input":{"ok":true}}]
+				}`), nil
+			})}
+			provider := NewAnthropicProvider(AnthropicConfig{
+				APIKey: "sk-ant-unit", Model: tc.model,
+				Endpoint: "https://anthropic.test/v1/messages", HTTPClient: client,
+			})
+
+			if _, err := provider.Generate(context.Background(), BuildConnectivityRequest()); err != nil {
+				t.Fatal(err)
+			}
+			if captured["model"] != tc.model {
+				t.Fatalf("model = %q, want selected model preserved as %q", captured["model"], tc.model)
+			}
+			toolChoice, ok := captured["tool_choice"].(map[string]any)
+			if !ok || toolChoice["type"] != "tool" || toolChoice["name"] != "structured_result" {
+				t.Fatalf("tool_choice = %#v, want forced structured_result", captured["tool_choice"])
+			}
+			thinking, hasThinking := captured["thinking"]
+			if !tc.wantThinking {
+				if hasThinking {
+					t.Fatalf("Claude request unexpectedly contains thinking: %#v", thinking)
+				}
+				return
+			}
+			thinkingObject, ok := thinking.(map[string]any)
+			if !hasThinking || !ok || thinkingObject["type"] != "disabled" {
+				t.Fatalf("thinking = %#v, want {type:disabled}", thinking)
+			}
+		})
+	}
+}
+
 func TestAnthropicProviderMapsHTTPAndModelFailures(t *testing.T) {
 	cases := []struct {
 		name       string

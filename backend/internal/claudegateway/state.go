@@ -363,6 +363,26 @@ func (t *StateTracker) markNonFailoverFailure(k Key, code string, latency time.D
 	})
 }
 
+// MarkTestFailureForKey records a targeted test's non-failover failure. The
+// test result returns the key from testing to unknown without treating an
+// invalid request or model-output failure as a transient key failure.
+func (t *StateTracker) MarkTestFailureForKey(k Key, code string, latency time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.now().UTC()
+	latencyMs := latency.Milliseconds()
+	t.persistMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
+		st = stateForKey(st, k)
+		st.Status = StatusUnknown
+		st.ConsecutiveFailures = 0
+		st.CooldownUntil = nil
+		st.LastFailureAt = &now
+		st.LastErrorCode = &code
+		st.LastLatencyMs = &latencyMs
+		return st, true
+	})
+}
+
 // MarkTesting 标记手动测试进行中。
 func (t *StateTracker) MarkTesting(id string) {
 	t.markTesting(Key{ID: id})

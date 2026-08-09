@@ -395,6 +395,41 @@ func TestRouterGenerateForKeyCancellationDoesNotPoisonKeyState(t *testing.T) {
 	}
 }
 
+func TestRouterGenerateForKeyInvalidRequestReturnsUnknownWithDiagnostics(t *testing.T) {
+	key := routerTestKey("target-invalid-request", 10, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(5 * time.Millisecond)
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"bad request"}}`)
+	}))
+	defer server.Close()
+	router, state := newTestRouter(t, []Key{key}, server)
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	state.now = func() time.Time { return now }
+
+	resp, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest())
+	if got := aipkg.AsProviderError(err).Code; got != aipkg.ErrInvalidRequest {
+		t.Fatalf("GenerateForKey error code = %q, want %q", got, aipkg.ErrInvalidRequest)
+	}
+	st := state.Snapshot(key)
+	if st.Status != StatusUnknown {
+		t.Fatalf("targeted invalid request state = %q, want unknown", st.Status)
+	}
+	if st.LastErrorCode == nil || *st.LastErrorCode != aipkg.ErrInvalidRequest {
+		t.Fatalf("last error code = %v, want %q", st.LastErrorCode, aipkg.ErrInvalidRequest)
+	}
+	if st.LastFailureAt == nil || !st.LastFailureAt.Equal(now) {
+		t.Fatalf("last failure at = %v, want %v", st.LastFailureAt, now)
+	}
+	if st.LastLatencyMs == nil || *st.LastLatencyMs != resp.Latency.Milliseconds() || *st.LastLatencyMs <= 0 {
+		t.Fatalf("last latency = %v, response latency = %v", st.LastLatencyMs, resp.Latency)
+	}
+	if st.ConsecutiveFailures != 0 || st.CooldownUntil != nil {
+		t.Fatalf("targeted invalid request introduced transient failure state: %+v", st)
+	}
+}
+
 func TestRouterDoesNotFailOverModelOutputFailures(t *testing.T) {
 	tests := []struct {
 		name     string

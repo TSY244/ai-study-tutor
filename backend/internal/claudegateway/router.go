@@ -163,7 +163,7 @@ func (r *Router) GenerateForKey(ctx context.Context, keyID string, req aipkg.Req
 	if ctx.Err() != nil {
 		return resp, callErr
 	}
-	r.recordOutcome(key, resp, callErr)
+	r.recordTestOutcome(key, resp, callErr)
 	return resp, callErr
 }
 
@@ -245,6 +245,20 @@ func (r *Router) recordOutcome(key Key, resp aipkg.Response, callErr error) {
 	default:
 		r.State.MarkNonFailoverFailureForKey(key, perr.Code, resp.Latency)
 	}
+}
+
+// recordTestOutcome records a targeted connectivity-test result. Unlike an
+// ordinary routed call, a non-failover error must leave the key eligible after
+// MarkTesting while retaining diagnostics for the operator.
+func (r *Router) recordTestOutcome(key Key, resp aipkg.Response, callErr error) {
+	if callErr != nil {
+		perr := aipkg.AsProviderError(callErr)
+		if !failoverEligible(perr.Code) {
+			r.State.MarkTestFailureForKey(key, perr.Code, resp.Latency)
+			return
+		}
+	}
+	r.recordOutcome(key, resp, callErr)
 }
 
 // failoverEligible 报告错误码是否允许故障转移到下一个 Key。

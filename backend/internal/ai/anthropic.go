@@ -65,7 +65,7 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req Request) (Response
 	if req.WebFetch != nil {
 		return p.generateWebFetch(ctx, req, model, maxTokens)
 	}
-	body, err := json.Marshal(anthropicRequest{
+	payload := anthropicRequest{
 		Model:     model,
 		MaxTokens: maxTokens,
 		System:    req.System,
@@ -79,7 +79,11 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req Request) (Response
 			InputSchema: req.Schema,
 		}},
 		ToolChoice: anthropicToolChoice{Type: "tool", Name: "structured_result"},
-	})
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "deepseek-") {
+		payload.Thinking = &anthropicThinking{Type: "disabled"}
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return Response{}, WrapError(ErrInvalidRequest, "Claude 请求构造失败。", err)
 	}
@@ -164,6 +168,11 @@ type anthropicRequest struct {
 	Messages   []anthropicMessage  `json:"messages"`
 	Tools      []anthropicTool     `json:"tools"`
 	ToolChoice anthropicToolChoice `json:"tool_choice"`
+	Thinking   *anthropicThinking  `json:"thinking,omitempty"`
+}
+
+type anthropicThinking struct {
+	Type string `json:"type"`
 }
 
 type anthropicMessage struct {
