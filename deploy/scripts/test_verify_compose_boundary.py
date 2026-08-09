@@ -92,6 +92,17 @@ class ComposeBoundaryTest(unittest.TestCase):
     def test_accepts_expected_runtime_boundary(self) -> None:
         validate_compose_boundary(base_compose_config())
 
+    def test_accepts_unrelated_mounts_with_similar_path_prefixes(self) -> None:
+        config = base_compose_config()
+        config["services"]["api"]["volumes"].append(
+            {"type": "bind", "source": "/safe/config", "target": "/config/cookies"}
+        )
+        config["services"]["web"]["volumes"].append(
+            {"type": "bind", "source": "/safe/runtime-other", "target": "/web-runtime"}
+        )
+
+        validate_compose_boundary(config)
+
     def test_rejects_read_only_api_app_data_mount(self) -> None:
         config = base_compose_config()
         config["services"]["api"]["volumes"][0]["read_only"] = True
@@ -178,6 +189,47 @@ class ComposeBoundaryTest(unittest.TestCase):
         )
 
         self.assert_violation(config, "gateway.source_boundary")
+
+    def test_rejects_web_mount_of_gateway_source_parent(self) -> None:
+        config = base_compose_config()
+        config["services"]["web"]["volumes"].append(
+            {"type": "bind", "source": "/safe/runtime", "target": "/unrelated-runtime"}
+        )
+
+        self.assert_violation(config, "gateway.source_boundary")
+
+    def test_rejects_web_mount_of_gateway_source_descendant(self) -> None:
+        config = base_compose_config()
+        config["services"]["web"]["volumes"].append(
+            {
+                "type": "bind",
+                "source": "/safe/runtime/claude-gateway/keys.json",
+                "target": "/unrelated-gateway-key",
+            }
+        )
+
+        self.assert_violation(config, "gateway.source_boundary")
+
+    def test_rejects_worker_gateway_file_overlay(self) -> None:
+        config = base_compose_config()
+        config["services"]["worker"]["volumes"].append(
+            {
+                "type": "bind",
+                "source": "/safe/other-keys.json",
+                "target": GATEWAY_FILE,
+                "read_only": True,
+            }
+        )
+
+        self.assert_violation(config, "worker.gateway_target_overlay")
+
+    def test_rejects_api_gateway_ancestor_overlay(self) -> None:
+        config = base_compose_config()
+        config["services"]["api"]["volumes"].append(
+            {"type": "bind", "source": "/safe/config", "target": "/config"}
+        )
+
+        self.assert_violation(config, "api.gateway_target_overlay")
 
     def test_rejects_different_gateway_sources_for_api_and_worker(self) -> None:
         config = base_compose_config()

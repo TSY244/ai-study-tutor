@@ -1,6 +1,6 @@
 # Docker 部署指南
 
-本文档是 AI Study Tutor 的完整部署手册。**生产应用全部以 Docker 容器运行**，宿主机无需安装 Go、Node.js、Python 或 PostgreSQL。只有从源码仓库运行 Compose 边界验证命令时，宿主机额外需要 Python 3.11+；检查器只使用标准库，不是应用运行时依赖。
+本文档是 AI Study Tutor 的完整部署手册。**生产应用全部以 Docker 容器运行**，宿主机无需安装 Go、Node.js、Python 或 PostgreSQL。只有从源码仓库运行 Compose 边界验证或部署演练时，宿主机额外需要 Python 3.11+；检查器只使用标准库，不是应用运行时依赖。
 
 适用场景：单用户、本机（或内网单机）部署。所有命令在仓库根目录执行。
 
@@ -54,7 +54,7 @@
 ## 2. 前置要求
 
 - Docker Desktop 4.x（macOS/Windows）或 Docker Engine 24+ 与 Compose v2 插件（Linux）。
-- Python 3.11+ 仅用于仓库中的 `make test-deploy-boundaries` 和 `make docker-verify-secrets`；不需要第三方 Python 包，正常构建、启动和运行应用不依赖宿主机 Python。
+- Python 3.11+ 仅用于仓库中的 `make test-deploy-boundaries`、`make docker-verify-secrets` 和 `make docker-drill`；演练会调用 Compose 边界检查器。不需要第三方 Python 包，正常构建、启动和运行应用不依赖宿主机 Python。
 - 可用磁盘 ≥ 10 GB（镜像 + 数据卷），内存建议 ≥ 8 GB（Worker 限制 2 CPU / 4 GB）。
 - 首次构建需要外网拉取基础镜像与依赖；之后可离线重建。
 
@@ -244,7 +244,7 @@ make docker-drill                  # 完整部署演练：备份/恢复/导入�
 make docker-maintenance-repair     # Worker 在维护期间被强杀后，清理卡死的维护锁
 ```
 
-`docker-drill` 需要设置 `RUN_DEPLOYMENT_DRILLS=1` 才会真正执行（Makefile 已带），适合大版本升级前验证运维手册仍然有效。
+`docker-drill` 需要设置 `RUN_DEPLOYMENT_DRILLS=1` 才会真正执行（Makefile 已带），适合大版本升级前验证运维手册仍然有效。演练末尾会调用 Compose 边界检查器，因此宿主机必须安装 Python 3.11+；脚本会在启动或删除任何容器前检查该前置条件。
 
 ## 9. 故障排查
 

@@ -6,6 +6,12 @@ if [ "${RUN_DEPLOYMENT_DRILLS:-}" != "1" ]; then
   exit 2
 fi
 
+if ! command -v python3 >/dev/null 2>&1 || \
+  ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+  echo "deployment drill requires Python 3.11+ for Compose boundary verification" >&2
+  exit 2
+fi
+
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 deploy_dir="$repo_root/deploy"
 project=${COMPOSE_PROJECT_NAME:-ai-study-tutor-drill}

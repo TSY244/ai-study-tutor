@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import posixpath
 import sys
 from collections.abc import Mapping
 from pathlib import PurePosixPath
@@ -89,16 +90,51 @@ def _is_writable_app_data_mount(volume: Mapping[str, Any] | None) -> bool:
     )
 
 
-def _mount_target_shadows_settings(target: Any) -> bool:
-    if not isinstance(target, str) or not target.startswith("/"):
+def _absolute_path(value: Any) -> PurePosixPath | None:
+    if not isinstance(value, str) or not value.startswith("/"):
+        return None
+    return PurePosixPath(posixpath.normpath(value))
+
+
+def _paths_overlap(left: Any, right: Any) -> bool:
+    left_path = _absolute_path(left)
+    right_path = _absolute_path(right)
+    if left_path is None or right_path is None:
         return False
-    target_path = PurePosixPath(target)
-    claude_dir = PurePosixPath(RUNTIME_HOME, ".claude")
-    settings_path = PurePosixPath(SETTINGS_FILE)
     return (
-        target_path == settings_path
-        or target_path in settings_path.parents
-        or claude_dir in target_path.parents
+        left_path == right_path
+        or left_path in right_path.parents
+        or right_path in left_path.parents
+    )
+
+
+def _mount_source_exposes(
+    volume: Mapping[str, Any], protected_identity: tuple[str, str] | None
+) -> bool:
+    identity = _mount_identity(volume)
+    if identity is None or protected_identity is None:
+        return False
+    source, mount_type = identity
+    protected_source, protected_type = protected_identity
+    if source == protected_source:
+        return True
+    return (
+        mount_type == "bind"
+        and protected_type == "bind"
+        and _paths_overlap(source, protected_source)
+    )
+
+
+def _mount_target_overlays(target: Any, protected_root: str, protected_file: str) -> bool:
+    target_path = _absolute_path(target)
+    root_path = _absolute_path(protected_root)
+    file_path = _absolute_path(protected_file)
+    if target_path is None or root_path is None or file_path is None:
+        return False
+    return (
+        target_path == file_path
+        or target_path in file_path.parents
+        or root_path in target_path.parents
     )
 
 
@@ -107,7 +143,19 @@ def _has_runtime_settings_overlay(
 ) -> bool:
     return any(
         volume is not expected_app_data_mount
-        and _mount_target_shadows_settings(volume.get("target"))
+        and _mount_target_overlays(
+            volume.get("target"), f"{RUNTIME_HOME}/.claude", SETTINGS_FILE
+        )
+        for volume in _volumes(service)
+    )
+
+
+def _has_gateway_target_overlay(
+    service: Mapping[str, Any], expected_gateway_mount: Mapping[str, Any] | None
+) -> bool:
+    return any(
+        volume is not expected_gateway_mount
+        and _mount_target_overlays(volume.get("target"), GATEWAY_DIR, GATEWAY_FILE)
         for volume in _volumes(service)
     )
 
@@ -184,12 +232,18 @@ def validate_compose_boundary(config: dict) -> None:
     worker_gateway_identity = _mount_identity(worker_gateway_mount)
     if api_gateway_identity is None or api_gateway_identity != worker_gateway_identity:
         issues.add("gateway.mount_identity")
-    gateway_source = api_gateway_identity[0] if api_gateway_identity is not None else None
-    if gateway_source is not None:
+    if _has_gateway_target_overlay(api, api_gateway_mount):
+        issues.add("api.gateway_target_overlay")
+    if _has_gateway_target_overlay(worker, worker_gateway_mount):
+        issues.add("worker.gateway_target_overlay")
+    if api_gateway_identity is not None:
         for name, service in services.items():
             if name in runtime_services:
                 continue
-            if any(volume.get("source") == gateway_source for volume in _volumes(_mapping(service))):
+            if any(
+                _mount_source_exposes(volume, api_gateway_identity)
+                for volume in _volumes(_mapping(service))
+            ):
                 issues.add("gateway.source_boundary")
 
     api_base_url = api_environment.get("ANTHROPIC_BASE_URL")
