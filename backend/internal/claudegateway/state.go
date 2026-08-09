@@ -351,6 +351,12 @@ func (t *StateTracker) markNonFailoverFailure(k Key, code string, latency time.D
 	latencyMs := latency.Milliseconds()
 	t.persistMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
 		st = stateForKey(st, k)
+		if st.TestingAttemptID != "" {
+			st.TestingAttemptID = ""
+			if st.Status == StatusTesting {
+				st.Status = StatusUnknown
+			}
+		}
 		if st.Status == "" {
 			st.Status = StatusUnknown
 		}

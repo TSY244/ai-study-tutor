@@ -607,6 +607,7 @@ func TestRouterGenerateForKeyInvalidDoesNotOverwriteConcurrentNormalOutcome(t *t
 	tests := []struct {
 		name         string
 		normalStatus int
+		normalBody   string
 		wantCode     string
 		wantState    string
 		wantFailures int
@@ -617,6 +618,13 @@ func TestRouterGenerateForKeyInvalidDoesNotOverwriteConcurrentNormalOutcome(t *t
 			name:         "success",
 			normalStatus: http.StatusOK,
 			wantState:    StatusHealthy,
+		},
+		{
+			name:         "nonfailover refusal",
+			normalStatus: http.StatusOK,
+			normalBody:   `{"model":"claude-test","stop_reason":"refusal","content":[]}`,
+			wantCode:     aipkg.ErrRefused,
+			wantState:    StatusUnknown,
 		},
 		{
 			name:         "authentication",
@@ -660,6 +668,10 @@ func TestRouterGenerateForKeyInvalidDoesNotOverwriteConcurrentNormalOutcome(t *t
 					<-releaseTarget
 					w.WriteHeader(http.StatusBadRequest)
 					_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error"}}`)
+					return
+				}
+				if tc.normalBody != "" {
+					_, _ = io.WriteString(w, tc.normalBody)
 					return
 				}
 				if tc.normalStatus == http.StatusOK {
