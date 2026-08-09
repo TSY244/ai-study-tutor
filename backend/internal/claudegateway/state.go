@@ -1,12 +1,15 @@
 package claudegateway
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,7 +28,8 @@ const (
 )
 
 // KeyState 是单个 Key 的非敏感运行态（持久化在 state.json）。
-// 绝不包含密钥材料。
+// Fingerprint 是内部配置代际指纹，与保持 token-only 的
+// SafeKey.Fingerprint 不同；该结构绝不包含密钥材料。
 type KeyState struct {
 	Status              string     `json:"status"`
 	Fingerprint         string     `json:"fingerprint,omitempty"`
@@ -226,7 +230,7 @@ func (t *StateTracker) effectiveLocked(k Key, now time.Time) KeyState {
 	if !ok {
 		st = KeyState{Status: StatusUnknown}
 	}
-	if st.Fingerprint != "" && st.Fingerprint != Fingerprint(k.APIKey) {
+	if fingerprint := keyStateFingerprint(k); fingerprint != "" && st.Fingerprint != fingerprint {
 		st = KeyState{Status: StatusUnknown}
 	}
 	if st.Status == "" {
@@ -253,10 +257,10 @@ func (t *StateTracker) Snapshot(k Key) KeyState {
 	defer t.mu.Unlock()
 	t.reloadLocked()
 	now := t.now()
-	if st, ok := t.states[k.ID]; ok && st.Fingerprint != "" && st.Fingerprint != Fingerprint(k.APIKey) {
-		fingerprint := Fingerprint(k.APIKey)
+	fingerprint := keyStateFingerprint(k)
+	if st, ok := t.states[k.ID]; ok && fingerprint != "" && st.Fingerprint != fingerprint {
 		t.persistMutationLocked(k.ID, func(current KeyState, exists bool) (KeyState, bool) {
-			if exists && current.Fingerprint != "" && current.Fingerprint != fingerprint {
+			if exists && current.Fingerprint != fingerprint {
 				return KeyState{}, false
 			}
 			return current, exists
@@ -431,7 +435,7 @@ func (t *StateTracker) finishTestForKey(
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
-	fingerprint := keyFingerprint(k)
+	fingerprint := keyStateFingerprint(k)
 	return t.persistRequiredMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
 		if !exists || attemptID == "" || st.Fingerprint != fingerprint || st.TestingAttemptID != attemptID {
 			return st, exists
@@ -464,7 +468,7 @@ func (t *StateTracker) finishTestForKey(
 func successState(k Key, now time.Time, latencyMs int64) KeyState {
 	return KeyState{
 		Status:        StatusHealthy,
-		Fingerprint:   keyFingerprint(k),
+		Fingerprint:   keyStateFingerprint(k),
 		LastSuccessAt: &now,
 		LastLatencyMs: &latencyMs,
 	}
@@ -515,21 +519,39 @@ func (t *StateTracker) Reset(id string) {
 	})
 }
 
-func keyFingerprint(k Key) string {
-	if k.APIKey == "" {
+func keyStateFingerprint(k Key) string {
+	apiKey := strings.TrimSpace(k.APIKey)
+	if apiKey == "" {
 		return ""
 	}
-	return Fingerprint(k.APIKey)
+	baseURL := strings.TrimSpace(k.BaseURL)
+	if baseURL != "" {
+		// Hash the same complete Messages endpoint representation used by
+		// Router.attempt, so harmless trailing slash or base-vs-endpoint
+		// spelling changes do not create a new state generation.
+		baseURL = messagesEndpoint(baseURL)
+	}
+	material, _ := json.Marshal(struct {
+		APIKey  string `json:"api_key"`
+		Model   string `json:"model"`
+		BaseURL string `json:"base_url"`
+	}{
+		APIKey:  apiKey,
+		Model:   strings.TrimSpace(k.Model),
+		BaseURL: baseURL,
+	})
+	sum := sha256.Sum256(material)
+	return "config-sha256:" + hex.EncodeToString(sum[:])
 }
 
 func hasDifferentFingerprint(st KeyState, exists bool, k Key) bool {
-	fingerprint := keyFingerprint(k)
-	return exists && fingerprint != "" && st.Fingerprint != "" && st.Fingerprint != fingerprint
+	fingerprint := keyStateFingerprint(k)
+	return exists && fingerprint != "" && st.Fingerprint != fingerprint
 }
 
 func stateForKey(st KeyState, k Key) KeyState {
-	fingerprint := keyFingerprint(k)
-	if fingerprint != "" && st.Fingerprint != "" && st.Fingerprint != fingerprint {
+	fingerprint := keyStateFingerprint(k)
+	if fingerprint != "" && st.Fingerprint != fingerprint {
 		st = KeyState{}
 	}
 	if fingerprint != "" {

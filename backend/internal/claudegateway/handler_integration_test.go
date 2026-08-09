@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,6 +28,7 @@ type gatewayHandlerEnv struct {
 	pool   *pgxpool.Pool
 	engine http.Handler
 	store  *Store
+	state  *StateTracker
 }
 
 func newGatewayHandlerEnv(t *testing.T, writeEnabled bool) gatewayHandlerEnv {
@@ -48,15 +50,16 @@ func newGatewayHandlerEnvWithClaudeCodeSettingsAndDefaultBaseURL(
 	engine := apitest.NewEngine(t)
 	path := filepath.Join(t.TempDir(), "keys.json")
 	store := NewStore(path)
+	state := NewStateTracker(StatePathFor(path), nil)
 	h := &Handler{
-		Pool: pool, Store: store, State: NewStateTracker(StatePathFor(path), nil),
+		Pool: pool, Store: store, State: state,
 		Jobs: job.NewService(pool), WriteEnabled: writeEnabled, ClaudeCodeSettingsFile: settingsFile,
 		DefaultBaseURL: defaultBaseURL,
 	}
 	h.RegisterRoutes(engine.Group("/api/v1"),
 		httpserver.BodyLimit(1<<20, http.StatusBadRequest, "bad_request"),
 		&httpx.IdemExecutor{Svc: idempotency.NewService(pool)})
-	return gatewayHandlerEnv{pool: pool, engine: engine, store: store}
+	return gatewayHandlerEnv{pool: pool, engine: engine, store: store, state: state}
 }
 
 func TestClaudeCodeSettingsRouteOverwritesSelectedKeyWithoutResponseSecret(t *testing.T) {
@@ -439,6 +442,55 @@ func TestClaudeKeyBaseURLCreateUpdateAndList(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("列表响应缺少刚创建的 Key")
+	}
+}
+
+func TestClaudeKeyRuntimeConfigPatchExplicitlyResetsState(t *testing.T) {
+	env := newGatewayHandlerEnv(t, true)
+	secret := strings.Join([]string{"runtime", "reset", uuid.NewString()}, "-")
+	key, err := env.store.Create(Key{
+		Name:    "Runtime reset",
+		APIKey:  secret,
+		Model:   "deepseek-chat",
+		BaseURL: "https://gateway.example/anthropic",
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	patches := []struct {
+		name string
+		body string
+	}{
+		{name: "model", body: `{"model":"deepseek-chat"}`},
+		{name: "base URL", body: `{"base_url":"https://gateway.example/anthropic"}`},
+	}
+	for _, tc := range patches {
+		t.Run(tc.name, func(t *testing.T) {
+			current, err := env.store.Get(key.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			env.state.MarkAuthFailedForKey(current, "claude_auth_failed", 2*time.Millisecond)
+			if got := env.state.Snapshot(current).Status; got != StatusAuthFailed {
+				t.Fatalf("precondition status=%q want %q", got, StatusAuthFailed)
+			}
+
+			rec := apitest.Do(t, env.engine, http.MethodPatch,
+				"/api/v1/system/claude-keys/"+key.ID, nil, tc.body)
+			assertSafeGatewayResponse(t, rec.Body.Bytes(), secret)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("patch status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var updated SafeKey
+			if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+				t.Fatal(err)
+			}
+			if updated.Status != StatusUnknown || updated.LastErrorCode != nil || updated.LastFailureAt != nil {
+				t.Fatalf("runtime config patch retained stale state: %+v", updated)
+			}
+		})
 	}
 }
 

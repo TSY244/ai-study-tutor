@@ -263,9 +263,9 @@ func (h *Handler) updateKey(c *gin.Context) {
 		h.writeStoreError(c, err)
 		return
 	}
-	// 换 Key 或改 enabled 时复位运行态：旧的 auth_failed/cooling_down
+	// 换 Key 或改运行端点、模型、enabled 时复位运行态：旧的 auth_failed/cooling_down
 	// 不再适用于新配置（unknown/disabled 由配置侧推导）。
-	if patch.APIKey != nil || patch.Enabled != nil {
+	if patch.APIKey != nil || patch.Model != nil || patch.BaseURL != nil || patch.Enabled != nil {
 		h.State.Reset(updated.ID)
 	}
 	c.JSON(http.StatusOK, safeView(updated, h.State.Snapshot(updated)))

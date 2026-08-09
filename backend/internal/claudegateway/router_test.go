@@ -952,7 +952,7 @@ func TestStateResetAfterSecretReplacementClearsFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := NewStateTracker(StatePathFor(path), nil)
-	state.MarkAuthFailed(created.ID, aipkg.ErrAuthFailed, time.Millisecond)
+	state.MarkAuthFailedForKey(created, aipkg.ErrAuthFailed, time.Millisecond)
 	if state.Eligible(created, state.Now()) {
 		t.Fatal("auth-failed key remained eligible before replacement")
 	}
@@ -1079,7 +1079,7 @@ func TestStateOrdinaryOutcomesDoNotReplaceNewTargetedAttemptAfterKeyReplacement(
 			fresh.reloadLocked()
 			mid := fresh.states[newKey.ID]
 			fresh.mu.Unlock()
-			if mid.Status != StatusTesting || mid.Fingerprint != Fingerprint(newKey.APIKey) ||
+			if mid.Status != StatusTesting || mid.Fingerprint != keyStateFingerprint(newKey) ||
 				mid.TestingAttemptID != attemptID {
 				t.Fatalf("old %s outcome replaced new targeted attempt: %+v", tc.name, mid)
 			}
@@ -1088,7 +1088,7 @@ func TestStateOrdinaryOutcomesDoNotReplaceNewTargetedAttemptAfterKeyReplacement(
 				t.Fatal(err)
 			}
 			final := NewStateTracker(path, nil).Snapshot(newKey)
-			if final.Status != StatusHealthy || final.Fingerprint != Fingerprint(newKey.APIKey) ||
+			if final.Status != StatusHealthy || final.Fingerprint != keyStateFingerprint(newKey) ||
 				final.TestingAttemptID != "" {
 				t.Fatalf("new targeted attempt did not finish healthy: %+v", final)
 			}
@@ -1161,7 +1161,7 @@ func TestRouterGenerateForKeySuccessRecoversAuthFailedState(t *testing.T) {
 	}))
 	defer server.Close()
 	router, state := newTestRouter(t, []Key{key}, server)
-	state.MarkAuthFailed(key.ID, aipkg.ErrAuthFailed, time.Millisecond)
+	state.MarkAuthFailedForKey(key, aipkg.ErrAuthFailed, time.Millisecond)
 
 	if _, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest()); err != nil {
 		t.Fatal(err)
@@ -1244,6 +1244,256 @@ func TestRouterGenerateForKeyDiscardsOutcomeFromSecretReplacedWhileInFlight(t *t
 	}
 }
 
+func TestKeyStateFingerprintTracksNormalizedRuntimeConfiguration(t *testing.T) {
+	key := routerTestKey("state-generation", 10, 1)
+	key.APIKey = "  " + key.APIKey + "  "
+	key.Model = "  deepseek-chat  "
+	key.BaseURL = "  https://gateway.example/anthropic/  "
+	baseline := keyStateFingerprint(key)
+
+	equivalent := key
+	equivalent.APIKey = strings.TrimSpace(key.APIKey)
+	equivalent.Model = strings.TrimSpace(key.Model)
+	equivalent.BaseURL = "https://gateway.example/anthropic/v1/messages"
+	if got := keyStateFingerprint(equivalent); got != baseline {
+		t.Fatalf("equivalent normalized runtime config fingerprint=%q want %q", got, baseline)
+	}
+	if got := Fingerprint(equivalent.APIKey); got == "" || got != Fingerprint(key.APIKey) {
+		t.Fatalf("public token fingerprint changed across whitespace normalization: %q", got)
+	}
+
+	changedModel := equivalent
+	changedModel.Model = "deepseek-reasoner"
+	if got := keyStateFingerprint(changedModel); got == baseline {
+		t.Fatal("model change did not advance internal state generation")
+	}
+	changedBaseURL := equivalent
+	changedBaseURL.BaseURL = "https://other-gateway.example/anthropic"
+	if got := keyStateFingerprint(changedBaseURL); got == baseline {
+		t.Fatal("base URL change did not advance internal state generation")
+	}
+	changedSecret := equivalent
+	changedSecret.APIKey = syntheticSecret("state-generation-replacement")
+	if got := keyStateFingerprint(changedSecret); got == baseline {
+		t.Fatal("secret change did not advance internal state generation")
+	}
+}
+
+func TestStateSnapshotRejectsLegacyTokenOnlyFingerprint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	state := NewStateTracker(path, nil)
+	key := routerTestKey("legacy-token-fingerprint", 10, 1)
+	state.mu.Lock()
+	state.persistMutationLocked(key.ID, func(KeyState, bool) (KeyState, bool) {
+		return KeyState{
+			Status:      StatusHealthy,
+			Fingerprint: Fingerprint(key.APIKey),
+		}, true
+	})
+	state.mu.Unlock()
+
+	got := state.Snapshot(key)
+	if got.Status != StatusUnknown || got.LastSuccessAt != nil || got.Fingerprint != "" {
+		t.Fatalf("legacy token-only state was not safely reset: %+v", got)
+	}
+}
+
+func TestRouterDiscardsOrdinaryOutcomeAfterSameSecretRuntimeConfigChange(t *testing.T) {
+	configChanges := []struct {
+		name  string
+		patch func(Key) KeyPatch
+	}{
+		{
+			name: "model",
+			patch: func(key Key) KeyPatch {
+				model := key.Model + "-replacement"
+				return KeyPatch{Model: &model}
+			},
+		},
+		{
+			name: "base URL",
+			patch: func(Key) KeyPatch {
+				baseURL := "https://new-gateway.example/anthropic"
+				return KeyPatch{BaseURL: &baseURL}
+			},
+		},
+	}
+	outcomes := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantCode   string
+	}{
+		{
+			name:       "success",
+			statusCode: http.StatusOK,
+			body:       `{"model":"claude-test","stop_reason":"tool_use","content":[{"type":"tool_use","name":"structured_result","input":{"ok":true}}]}`,
+		},
+		{
+			name:       "authentication failure",
+			statusCode: http.StatusUnauthorized,
+			body:       `{"error":{"type":"authentication_error","message":"bad key"}}`,
+			wantCode:   aipkg.ErrAuthFailed,
+		},
+		{
+			name:       "transient failure",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"error":{"type":"overloaded_error","message":"busy"}}`,
+			wantCode:   aipkg.ErrOverloaded,
+		},
+	}
+
+	for _, change := range configChanges {
+		for _, outcome := range outcomes {
+			t.Run(change.name+"/"+outcome.name, func(t *testing.T) {
+				key := routerTestKey("ordinary-config-generation", 10, 1)
+				key.BaseURL = "https://old-gateway.example/anthropic"
+				router, state := newTestRouter(t, []Key{key}, nil)
+				started := make(chan struct{})
+				release := make(chan struct{})
+				router.HTTPClient = &http.Client{Transport: gatewayRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+					close(started)
+					<-release
+					return &http.Response{
+						StatusCode: outcome.statusCode,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(strings.NewReader(outcome.body)),
+						Request:    request,
+					}, nil
+				})}
+
+				done := make(chan error, 1)
+				go func() {
+					_, err := router.Generate(context.Background(), routerTestRequest())
+					done <- err
+				}()
+				<-started
+				updated, err := router.Store.Update(key.ID, change.patch(key))
+				if err != nil {
+					t.Fatal(err)
+				}
+				attemptID, err := state.beginTestForKey(updated)
+				if err != nil {
+					t.Fatal(err)
+				}
+				close(release)
+				callErr := <-done
+				if outcome.wantCode == "" {
+					if callErr != nil {
+						t.Fatalf("ordinary request returned unexpected error: %v", callErr)
+					}
+				} else if got := aipkg.AsProviderError(callErr).Code; got != outcome.wantCode {
+					t.Fatalf("ordinary request code=%q want %q (err=%v)", got, outcome.wantCode, callErr)
+				}
+
+				fresh := NewStateTracker(state.path, nil)
+				fresh.mu.Lock()
+				fresh.reloadLocked()
+				got := fresh.states[updated.ID]
+				fresh.mu.Unlock()
+				if got.Status != StatusTesting || got.TestingAttemptID != attemptID ||
+					got.Fingerprint != keyStateFingerprint(updated) {
+					t.Fatalf("old ordinary %s outcome overwrote new %s config state: %+v", outcome.name, change.name, got)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterDiscardsTargetedOutcomeAfterSameSecretRuntimeConfigChange(t *testing.T) {
+	configChanges := []struct {
+		name  string
+		patch func(Key) KeyPatch
+	}{
+		{
+			name: "model",
+			patch: func(key Key) KeyPatch {
+				model := key.Model + "-replacement"
+				return KeyPatch{Model: &model}
+			},
+		},
+		{
+			name: "base URL",
+			patch: func(Key) KeyPatch {
+				baseURL := "https://new-target-gateway.example/anthropic"
+				return KeyPatch{BaseURL: &baseURL}
+			},
+		},
+	}
+	outcomes := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantCode   string
+	}{
+		{
+			name:       "success",
+			statusCode: http.StatusOK,
+			body:       `{"model":"claude-test","stop_reason":"tool_use","content":[{"type":"tool_use","name":"structured_result","input":{"ok":true}}]}`,
+		},
+		{
+			name:       "authentication failure",
+			statusCode: http.StatusUnauthorized,
+			body:       `{"error":{"type":"authentication_error","message":"bad key"}}`,
+			wantCode:   aipkg.ErrAuthFailed,
+		},
+		{
+			name:       "transient failure",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"error":{"type":"overloaded_error","message":"busy"}}`,
+			wantCode:   aipkg.ErrOverloaded,
+		},
+	}
+
+	for _, change := range configChanges {
+		for _, outcome := range outcomes {
+			t.Run(change.name+"/"+outcome.name, func(t *testing.T) {
+				key := routerTestKey("target-config-generation", 10, 1)
+				key.BaseURL = "https://old-target-gateway.example/anthropic"
+				router, state := newTestRouter(t, []Key{key}, nil)
+				started := make(chan struct{})
+				release := make(chan struct{})
+				router.HTTPClient = &http.Client{Transport: gatewayRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+					close(started)
+					<-release
+					return &http.Response{
+						StatusCode: outcome.statusCode,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(strings.NewReader(outcome.body)),
+						Request:    request,
+					}, nil
+				})}
+
+				done := make(chan error, 1)
+				go func() {
+					_, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest())
+					done <- err
+				}()
+				<-started
+				updated, err := router.Store.Update(key.ID, change.patch(key))
+				if err != nil {
+					t.Fatal(err)
+				}
+				close(release)
+				callErr := <-done
+				if outcome.wantCode == "" {
+					if callErr != nil {
+						t.Fatalf("targeted request returned unexpected error: %v", callErr)
+					}
+				} else if got := aipkg.AsProviderError(callErr).Code; got != outcome.wantCode {
+					t.Fatalf("targeted request code=%q want %q (err=%v)", got, outcome.wantCode, callErr)
+				}
+
+				got := state.Snapshot(updated)
+				if got.Status != StatusUnknown || got.LastSuccessAt != nil || got.LastFailureAt != nil ||
+					got.LastErrorCode != nil || got.CooldownUntil != nil || got.TestingAttemptID != "" {
+					t.Fatalf("old targeted %s outcome became new %s config state: %+v", outcome.name, change.name, got)
+				}
+			})
+		}
+	}
+}
+
 func TestRouterUsesLegacyOnlyWithoutEnabledConfiguredKeys(t *testing.T) {
 	t.Run("missing config", func(t *testing.T) {
 		legacy := &legacySpy{}
@@ -1282,7 +1532,7 @@ func TestRouterUsesLegacyOnlyWithoutEnabledConfiguredKeys(t *testing.T) {
 		{
 			name: "all auth failed",
 			block: func(state *StateTracker, key Key) {
-				state.MarkAuthFailed(key.ID, aipkg.ErrAuthFailed, time.Millisecond)
+				state.MarkAuthFailedForKey(key, aipkg.ErrAuthFailed, time.Millisecond)
 			},
 		},
 		{
