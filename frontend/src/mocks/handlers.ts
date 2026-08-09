@@ -180,7 +180,12 @@ const summaryEvaluationGetCounts = new Map<string, number>()
 function seedAttempts(): void {
   attemptsStore.clear()
   attemptGetCounts.clear()
-  for (const attempt of [demoAttempt, demoAttemptFailed, demoAttemptFailedWithJob, demoAttemptGraded]) {
+  for (const attempt of [
+    demoAttempt,
+    demoAttemptFailed,
+    demoAttemptFailedWithJob,
+    demoAttemptGraded,
+  ]) {
     attemptsStore.set(attempt.id, structuredClone(attempt))
   }
 }
