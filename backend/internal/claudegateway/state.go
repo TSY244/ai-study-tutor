@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
 )
 
@@ -33,6 +34,7 @@ type KeyState struct {
 	LastErrorCode       *string    `json:"last_error_code,omitempty"`
 	CooldownUntil       *time.Time `json:"cooldown_until,omitempty"`
 	LastLatencyMs       *int64     `json:"last_latency_ms,omitempty"`
+	TestingAttemptID    string     `json:"testing_attempt_id,omitempty"`
 }
 
 // stateFile 是 state.json 的磁盘形状。
@@ -114,13 +116,28 @@ func (t *StateTracker) reloadLocked() {
 // persistMutationLocked 跨进程序列化一次单 Key 状态变更：持有文件锁后
 // 强制重载最新 state.json，合并本次变更，再原子写回。
 func (t *StateTracker) persistMutationLocked(id string, mutate func(KeyState, bool) (KeyState, bool)) {
+	_ = t.persistMutation(id, mutate, false)
+}
+
+// persistRequiredMutationLocked is the fail-closed variant used for targeted
+// test ownership. A failed write rolls back the in-memory mutation so disk
+// remains the single authority for attempt matching across processes.
+func (t *StateTracker) persistRequiredMutationLocked(id string, mutate func(KeyState, bool) (KeyState, bool)) error {
+	return t.persistMutation(id, mutate, true)
+}
+
+func (t *StateTracker) persistMutation(
+	id string,
+	mutate func(KeyState, bool) (KeyState, bool),
+	rollbackOnFailure bool,
+) error {
 	if t.beforePersist != nil {
 		t.beforePersist()
 	}
 	unlock, err := t.lockFile()
 	if err != nil {
 		t.warn("claude_gateway_state_lock_failed", err)
-		return
+		return err
 	}
 	defer unlock()
 
@@ -137,25 +154,36 @@ func (t *StateTracker) persistMutationLocked(id string, mutate func(KeyState, bo
 	} else {
 		t.states[id] = next
 	}
-	t.persistLocked()
+	if err := t.persistLocked(); err != nil {
+		if rollbackOnFailure {
+			if exists {
+				t.states[id] = current
+			} else {
+				delete(t.states, id)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 // persistLocked 原子写入当前 state.json（调用方已持有进程间文件锁）。
-func (t *StateTracker) persistLocked() {
+func (t *StateTracker) persistLocked() error {
 	raw, err := json.MarshalIndent(stateFile{Keys: t.states}, "", "  ")
 	if err != nil {
 		t.warn("claude_gateway_state_marshal_failed", err)
-		return
+		return err
 	}
 	if err := writeFileAtomic(t.path, raw); err != nil {
 		t.warn("claude_gateway_state_persist_failed", err)
-		return
+		return err
 	}
 	if info, err := os.Stat(t.path); err == nil {
 		t.modTime = info.ModTime()
 		t.size = info.Size()
 		t.fileInfo = info
 	}
+	return nil
 }
 
 func (t *StateTracker) lockFile() (func(), error) {
@@ -269,12 +297,7 @@ func (t *StateTracker) markSuccess(k Key, latency time.Duration) {
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
 	t.persistMutationLocked(k.ID, func(KeyState, bool) (KeyState, bool) {
-		return KeyState{
-			Status:        StatusHealthy,
-			Fingerprint:   keyFingerprint(k),
-			LastSuccessAt: &now,
-			LastLatencyMs: &latencyMs,
-		}, true
+		return successState(k, now, latencyMs), true
 	})
 }
 
@@ -294,12 +317,7 @@ func (t *StateTracker) markAuthFailed(k Key, code string, latency time.Duration)
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
 	t.persistMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
-		st = stateForKey(st, k)
-		st.Status = StatusAuthFailed
-		st.LastFailureAt = &now
-		st.LastErrorCode = &code
-		st.LastLatencyMs = &latencyMs
-		return st, true
+		return authFailedState(st, k, code, now, latencyMs), true
 	})
 }
 
@@ -311,28 +329,8 @@ func (t *StateTracker) MarkTransientFailure(k Key, code string, latency time.Dur
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
-	threshold := k.MaxConsecutiveFailures
-	if threshold <= 0 {
-		threshold = DefaultMaxConsecutiveFailures
-	}
 	t.persistMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
-		st = stateForKey(st, k)
-		st.ConsecutiveFailures++
-		st.LastFailureAt = &now
-		st.LastErrorCode = &code
-		st.LastLatencyMs = &latencyMs
-		if st.ConsecutiveFailures >= threshold {
-			cooldown := k.CooldownSeconds
-			if cooldown <= 0 {
-				cooldown = DefaultCooldownSeconds
-			}
-			until := now.Add(time.Duration(cooldown) * time.Second)
-			st.Status = StatusCoolingDown
-			st.CooldownUntil = &until
-		} else if st.Status == "" || st.Status == StatusHealthy {
-			st.Status = StatusUnknown
-		}
-		return st, true
+		return transientFailureState(st, k, code, now, latencyMs), true
 	})
 }
 
@@ -363,44 +361,121 @@ func (t *StateTracker) markNonFailoverFailure(k Key, code string, latency time.D
 	})
 }
 
-// MarkTestFailureForKey records a targeted test's non-failover failure. The
-// test result returns the key from testing to unknown without treating an
-// invalid request or model-output failure as a transient key failure.
-func (t *StateTracker) MarkTestFailureForKey(k Key, code string, latency time.Duration) {
+type testOutcome int
+
+const (
+	testSucceeded testOutcome = iota
+	testAuthFailed
+	testTransientFailure
+	testNonFailoverFailure
+	testCancelled
+)
+
+// beginTestForKey persists a unique attempt token so only this targeted test's
+// terminal result may replace its testing state.
+func (t *StateTracker) beginTestForKey(k Key) (string, error) {
+	attemptID := uuid.NewString()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	err := t.persistRequiredMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
+		st = stateForKey(st, k)
+		st.Status = StatusTesting
+		st.ConsecutiveFailures = 0
+		st.TestingAttemptID = attemptID
+		return st, true
+	})
+	if err != nil {
+		return "", err
+	}
+	return attemptID, nil
+}
+
+// finishTestForKey atomically applies a targeted terminal outcome only while
+// both the key fingerprint and persisted attempt token still match. A normal
+// route outcome or newer targeted test makes an older completion a no-op.
+func (t *StateTracker) finishTestForKey(
+	k Key,
+	attemptID string,
+	outcome testOutcome,
+	code string,
+	latency time.Duration,
+) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
-	t.persistMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
-		st = stateForKey(st, k)
+	fingerprint := keyFingerprint(k)
+	return t.persistRequiredMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
+		if !exists || attemptID == "" || st.Fingerprint != fingerprint || st.TestingAttemptID != attemptID {
+			return st, exists
+		}
+		switch outcome {
+		case testSucceeded:
+			st = successState(k, now, latencyMs)
+		case testAuthFailed:
+			st = authFailedState(st, k, code, now, latencyMs)
+		case testTransientFailure:
+			st = transientFailureState(st, k, code, now, latencyMs)
+		case testNonFailoverFailure:
+			st.Status = StatusUnknown
+			st.ConsecutiveFailures = 0
+			st.CooldownUntil = nil
+			st.LastFailureAt = &now
+			st.LastErrorCode = &code
+			st.LastLatencyMs = &latencyMs
+			st.TestingAttemptID = ""
+		case testCancelled:
+			st.Status = StatusUnknown
+			st.ConsecutiveFailures = 0
+			st.CooldownUntil = nil
+			st.TestingAttemptID = ""
+		}
+		return st, true
+	})
+}
+
+func successState(k Key, now time.Time, latencyMs int64) KeyState {
+	return KeyState{
+		Status:        StatusHealthy,
+		Fingerprint:   keyFingerprint(k),
+		LastSuccessAt: &now,
+		LastLatencyMs: &latencyMs,
+	}
+}
+
+func authFailedState(st KeyState, k Key, code string, now time.Time, latencyMs int64) KeyState {
+	st = stateForKey(st, k)
+	st.Status = StatusAuthFailed
+	st.LastFailureAt = &now
+	st.LastErrorCode = &code
+	st.LastLatencyMs = &latencyMs
+	st.TestingAttemptID = ""
+	return st
+}
+
+func transientFailureState(st KeyState, k Key, code string, now time.Time, latencyMs int64) KeyState {
+	st = stateForKey(st, k)
+	st.ConsecutiveFailures++
+	st.LastFailureAt = &now
+	st.LastErrorCode = &code
+	st.LastLatencyMs = &latencyMs
+	st.TestingAttemptID = ""
+	threshold := k.MaxConsecutiveFailures
+	if threshold <= 0 {
+		threshold = DefaultMaxConsecutiveFailures
+	}
+	if st.ConsecutiveFailures >= threshold {
+		cooldown := k.CooldownSeconds
+		if cooldown <= 0 {
+			cooldown = DefaultCooldownSeconds
+		}
+		until := now.Add(time.Duration(cooldown) * time.Second)
+		st.Status = StatusCoolingDown
+		st.CooldownUntil = &until
+	} else if st.Status == "" || st.Status == StatusHealthy || st.Status == StatusTesting {
 		st.Status = StatusUnknown
-		st.ConsecutiveFailures = 0
-		st.CooldownUntil = nil
-		st.LastFailureAt = &now
-		st.LastErrorCode = &code
-		st.LastLatencyMs = &latencyMs
-		return st, true
-	})
-}
-
-// MarkTesting 标记手动测试进行中。
-func (t *StateTracker) MarkTesting(id string) {
-	t.markTesting(Key{ID: id})
-}
-
-func (t *StateTracker) MarkTestingForKey(k Key) {
-	t.markTesting(k)
-}
-
-func (t *StateTracker) markTesting(k Key) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.persistMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
-		st = stateForKey(st, k)
-		st.Status = StatusTesting
-		st.ConsecutiveFailures = 0
-		return st, true
-	})
+	}
+	return st
 }
 
 // Reset 清除运行态（回到 unknown；禁用展示由配置侧推导）。

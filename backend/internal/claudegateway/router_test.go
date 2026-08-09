@@ -39,6 +39,23 @@ type gatewayRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f gatewayRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+type controlledErrorContext struct {
+	context.Context
+	done <-chan struct{}
+	err  error
+}
+
+func (c controlledErrorContext) Done() <-chan struct{} { return c.done }
+
+func (c controlledErrorContext) Err() error {
+	select {
+	case <-c.done:
+		return c.err
+	default:
+		return nil
+	}
+}
+
 func routerTestKey(id string, priority, weight int) Key {
 	return Key{
 		ID: id, Name: id, APIKey: syntheticSecret(id), Model: "claude-test",
@@ -77,6 +94,22 @@ func newTestRouter(t *testing.T, keys []Key, server *httptest.Server) (*Router, 
 		router.HTTPClient = server.Client()
 	}
 	return router, state
+}
+
+func testingAttemptIDFromDisk(path, keyID string) (string, error) {
+	var persisted struct {
+		Keys map[string]struct {
+			TestingAttemptID string `json:"testing_attempt_id"`
+		} `json:"keys"`
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(raw, &persisted); err != nil {
+		return "", err
+	}
+	return persisted.Keys[keyID].TestingAttemptID, nil
 }
 
 func writeAnthropicSuccess(w http.ResponseWriter) {
@@ -375,23 +408,65 @@ func TestRouterCancellationDoesNotPoisonKeyState(t *testing.T) {
 	}
 }
 
-func TestRouterGenerateForKeyCancellationDoesNotPoisonKeyState(t *testing.T) {
-	key := routerTestKey("target-cancelled", 10, 1)
-	router, state := newTestRouter(t, []Key{key}, nil)
-	router.Endpoint = "https://anthropic.test/v1/messages"
-	router.HTTPClient = &http.Client{Transport: gatewayRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return nil, r.Context().Err()
-	})}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if _, err := router.GenerateForKey(ctx, key.ID, routerTestRequest()); !errors.Is(err, context.Canceled) {
-		t.Fatalf("GenerateForKey error = %v, want context.Canceled", err)
+func TestRouterGenerateForKeyCancellationAndDeadlineFinishPersistedAttempt(t *testing.T) {
+	tests := []struct {
+		name      string
+		newCtx    func() (context.Context, func())
+		wantError error
+	}{
+		{
+			name: "cancellation",
+			newCtx: func() (context.Context, func()) {
+				return context.WithCancel(context.Background())
+			},
+			wantError: context.Canceled,
+		},
+		{
+			name: "deadline",
+			newCtx: func() (context.Context, func()) {
+				done := make(chan struct{})
+				return controlledErrorContext{
+					Context: context.Background(), done: done, err: context.DeadlineExceeded,
+				}, func() { close(done) }
+			},
+			wantError: context.DeadlineExceeded,
+		},
 	}
-	st := state.Snapshot(key)
-	if st.Status == StatusCoolingDown || st.Status == StatusAuthFailed ||
-		st.ConsecutiveFailures != 0 || st.LastFailureAt != nil || st.LastErrorCode != nil {
-		t.Fatalf("cancelled targeted request poisoned key state: %+v", st)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			key := routerTestKey("target-"+tc.name, 10, 1)
+			router, state := newTestRouter(t, []Key{key}, nil)
+			router.Endpoint = "https://anthropic.test/v1/messages"
+			started := make(chan struct{})
+			router.HTTPClient = &http.Client{Transport: gatewayRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				close(started)
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			})}
+			ctx, finishContext := tc.newCtx()
+			done := make(chan error, 1)
+			go func() {
+				_, err := router.GenerateForKey(ctx, key.ID, routerTestRequest())
+				done <- err
+			}()
+			<-started
+			finishContext()
+			if err := <-done; !errors.Is(err, tc.wantError) {
+				t.Fatalf("GenerateForKey error = %v, want %v", err, tc.wantError)
+			}
+
+			fresh := NewStateTracker(state.path, nil)
+			st := fresh.Snapshot(key)
+			if st.Status != StatusUnknown || st.ConsecutiveFailures != 0 ||
+				st.LastFailureAt != nil || st.LastErrorCode != nil ||
+				st.CooldownUntil != nil || st.LastLatencyMs != nil {
+				t.Fatalf("cancelled targeted request persisted state: %+v", st)
+			}
+			if attemptID, err := testingAttemptIDFromDisk(state.path, key.ID); err != nil || attemptID != "" {
+				t.Fatalf("finished cancellation attempt ID = %q, err = %v", attemptID, err)
+			}
+		})
 	}
 }
 
@@ -427,6 +502,338 @@ func TestRouterGenerateForKeyInvalidRequestReturnsUnknownWithDiagnostics(t *test
 	}
 	if st.ConsecutiveFailures != 0 || st.CooldownUntil != nil {
 		t.Fatalf("targeted invalid request introduced transient failure state: %+v", st)
+	}
+}
+
+func TestRouterGenerateForKeyPersistsAttemptIDWithoutExposingIt(t *testing.T) {
+	key := routerTestKey("target-private-attempt", 10, 1)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		writeAnthropicSuccess(w)
+	}))
+	defer server.Close()
+	router, state := newTestRouter(t, []Key{key}, server)
+	done := make(chan error, 1)
+	go func() {
+		_, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest())
+		done <- err
+	}()
+	<-started
+	attemptID, readErr := testingAttemptIDFromDisk(state.path, key.ID)
+	safeJSON, marshalErr := json.Marshal(safeView(key, state.Snapshot(key)))
+	close(release)
+	callErr := <-done
+
+	if callErr != nil {
+		t.Fatal(callErr)
+	}
+	if readErr != nil || attemptID == "" {
+		t.Fatalf("persisted testing attempt ID = %q, err = %v", attemptID, readErr)
+	}
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if strings.Contains(string(safeJSON), "testing_attempt_id") || strings.Contains(string(safeJSON), attemptID) {
+		t.Fatalf("SafeKey exposed private testing attempt ID: %s", safeJSON)
+	}
+}
+
+func TestRouterGenerateForKeyFailsClosedWhenAttemptStateCannotPersist(t *testing.T) {
+	t.Run("begin", func(t *testing.T) {
+		key := routerTestKey("target-begin-persist-failure", 10, 1)
+		router, state := newTestRouter(t, []Key{key}, nil)
+		state.path = t.TempDir()
+		providerCalled := false
+		router.Endpoint = "https://anthropic.test/v1/messages"
+		router.HTTPClient = &http.Client{Transport: gatewayRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			providerCalled = true
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: io.NopCloser(strings.NewReader(`{
+					"model":"claude-test","stop_reason":"tool_use",
+					"content":[{"type":"tool_use","name":"structured_result","input":{"ok":true}}]
+				}`)),
+			}, nil
+		})}
+
+		_, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest())
+		if err == nil {
+			t.Fatal("begin persistence failure returned success")
+		}
+		if got := aipkg.AsProviderError(err).Code; got != aipkg.ErrUnavailable {
+			t.Fatalf("begin persistence error code = %q, want %q", got, aipkg.ErrUnavailable)
+		}
+		if providerCalled {
+			t.Fatal("provider was called without a durably persisted testing attempt")
+		}
+	})
+
+	t.Run("finish", func(t *testing.T) {
+		key := routerTestKey("target-finish-persist-failure", 10, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeAnthropicSuccess(w)
+		}))
+		defer server.Close()
+		router, state := newTestRouter(t, []Key{key}, server)
+		persistedPath := state.path
+		invalidPath := t.TempDir()
+		mutations := 0
+		state.beforePersist = func() {
+			mutations++
+			if mutations == 2 {
+				state.path = invalidPath
+			}
+		}
+
+		_, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest())
+		if err == nil {
+			t.Fatal("finish persistence failure returned success")
+		}
+		if got := aipkg.AsProviderError(err).Code; got != aipkg.ErrUnavailable {
+			t.Fatalf("finish persistence error code = %q, want %q", got, aipkg.ErrUnavailable)
+		}
+		st := NewStateTracker(persistedPath, nil).Snapshot(key)
+		attemptID, readErr := testingAttemptIDFromDisk(persistedPath, key.ID)
+		if readErr != nil || st.Status != StatusTesting || attemptID == "" {
+			t.Fatalf("failed finish did not preserve its unresolved attempt: state=%+v attempt=%q err=%v", st, attemptID, readErr)
+		}
+	})
+}
+
+func TestRouterGenerateForKeyInvalidDoesNotOverwriteConcurrentNormalOutcome(t *testing.T) {
+	tests := []struct {
+		name         string
+		normalStatus int
+		wantCode     string
+		wantState    string
+		wantFailures int
+		wantCooldown bool
+		maxFailures  int
+	}{
+		{
+			name:         "success",
+			normalStatus: http.StatusOK,
+			wantState:    StatusHealthy,
+		},
+		{
+			name:         "authentication",
+			normalStatus: http.StatusUnauthorized,
+			wantCode:     aipkg.ErrAuthFailed, wantState: StatusAuthFailed,
+		},
+		{
+			name:         "transient cooldown",
+			normalStatus: http.StatusServiceUnavailable,
+			wantCode:     aipkg.ErrOverloaded, wantState: StatusCoolingDown,
+			wantFailures: 1, wantCooldown: true,
+		},
+		{
+			name:         "transient below cooldown threshold",
+			normalStatus: http.StatusServiceUnavailable,
+			wantCode:     aipkg.ErrOverloaded,
+			wantState:    StatusUnknown,
+			wantFailures: 1,
+			maxFailures:  2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			key := routerTestKey("target-vs-normal-"+tc.name, 10, 1)
+			if tc.maxFailures > 0 {
+				key.MaxConsecutiveFailures = tc.maxFailures
+			}
+			targetStarted := make(chan struct{})
+			releaseTarget := make(chan struct{})
+			var callsMu sync.Mutex
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				callsMu.Lock()
+				calls++
+				call := calls
+				callsMu.Unlock()
+				w.Header().Set("content-type", "application/json")
+				if call == 1 {
+					close(targetStarted)
+					<-releaseTarget
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error"}}`)
+					return
+				}
+				if tc.normalStatus == http.StatusOK {
+					writeAnthropicSuccess(w)
+					return
+				}
+				w.WriteHeader(tc.normalStatus)
+			}))
+			defer server.Close()
+			router, state := newTestRouter(t, []Key{key}, server)
+
+			targetDone := make(chan error, 1)
+			go func() {
+				_, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest())
+				targetDone <- err
+			}()
+			<-targetStarted
+			_, normalErr := router.Generate(context.Background(), routerTestRequest())
+			close(releaseTarget)
+			targetErr := <-targetDone
+
+			if tc.wantCode == "" {
+				if normalErr != nil {
+					t.Fatalf("normal request error = %v, want success", normalErr)
+				}
+			} else if got := aipkg.AsProviderError(normalErr).Code; got != tc.wantCode {
+				t.Fatalf("normal request error code = %q, want %q", got, tc.wantCode)
+			}
+			if got := aipkg.AsProviderError(targetErr).Code; got != aipkg.ErrInvalidRequest {
+				t.Fatalf("target request error code = %q, want %q", got, aipkg.ErrInvalidRequest)
+			}
+			st := NewStateTracker(state.path, nil).Snapshot(key)
+			if st.Status != tc.wantState || st.ConsecutiveFailures != tc.wantFailures ||
+				(st.CooldownUntil != nil) != tc.wantCooldown {
+				t.Fatalf("target completion overwrote normal failure state: %+v", st)
+			}
+			if tc.wantCode == "" {
+				if st.LastErrorCode != nil || st.LastSuccessAt == nil {
+					t.Fatalf("target completion overwrote normal success diagnostics: %+v", st)
+				}
+			} else if st.LastErrorCode == nil || *st.LastErrorCode != tc.wantCode {
+				t.Fatalf("normal failure diagnostics were not preserved: %+v", st)
+			}
+		})
+	}
+}
+
+func TestRouterGenerateForKeyOlderAttemptCannotOverwriteNewerAttempt(t *testing.T) {
+	key := routerTestKey("overlapping-targets", 10, 1)
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var callsMu sync.Mutex
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callsMu.Lock()
+		calls++
+		call := calls
+		callsMu.Unlock()
+		if call == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error"}}`)
+			return
+		}
+		close(secondStarted)
+		<-releaseSecond
+		writeAnthropicSuccess(w)
+	}))
+	defer server.Close()
+	router, state := newTestRouter(t, []Key{key}, server)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest())
+		firstDone <- err
+	}()
+	<-firstStarted
+	firstAttemptID, firstReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest())
+		secondDone <- err
+	}()
+	<-secondStarted
+	secondAttemptID, secondReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+	close(releaseFirst)
+	firstErr := <-firstDone
+	mid := NewStateTracker(state.path, nil).Snapshot(key)
+	midAttemptID, midReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+	close(releaseSecond)
+	secondErr := <-secondDone
+	final := NewStateTracker(state.path, nil).Snapshot(key)
+	finalAttemptID, finalReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+
+	if firstReadErr != nil || secondReadErr != nil || midReadErr != nil || finalReadErr != nil {
+		t.Fatalf("reading attempt IDs: first=%v second=%v mid=%v final=%v", firstReadErr, secondReadErr, midReadErr, finalReadErr)
+	}
+	if firstAttemptID == "" || secondAttemptID == "" || firstAttemptID == secondAttemptID {
+		t.Fatalf("attempt IDs must be non-empty and unique: first=%q second=%q", firstAttemptID, secondAttemptID)
+	}
+	if got := aipkg.AsProviderError(firstErr).Code; got != aipkg.ErrInvalidRequest {
+		t.Fatalf("older request error code = %q, want %q", got, aipkg.ErrInvalidRequest)
+	}
+	if mid.Status != StatusTesting || midAttemptID != secondAttemptID {
+		t.Fatalf("older completion changed newer attempt: state=%+v attempt=%q want=%q", mid, midAttemptID, secondAttemptID)
+	}
+	if secondErr != nil || final.Status != StatusHealthy || finalAttemptID != "" {
+		t.Fatalf("newer completion state=%+v attempt=%q err=%v", final, finalAttemptID, secondErr)
+	}
+}
+
+func TestRouterGenerateForKeyCancellationCannotClearNewerAttempt(t *testing.T) {
+	key := routerTestKey("cancel-vs-newer-target", 10, 1)
+	router, state := newTestRouter(t, []Key{key}, nil)
+	router.Endpoint = "https://anthropic.test/v1/messages"
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	var callsMu sync.Mutex
+	calls := 0
+	router.HTTPClient = &http.Client{Transport: gatewayRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		callsMu.Lock()
+		calls++
+		call := calls
+		callsMu.Unlock()
+		if call == 1 {
+			close(firstStarted)
+		} else {
+			close(secondStarted)
+		}
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := router.GenerateForKey(firstCtx, key.ID, routerTestRequest())
+		firstDone <- err
+	}()
+	<-firstStarted
+	firstAttemptID, firstReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := router.GenerateForKey(secondCtx, key.ID, routerTestRequest())
+		secondDone <- err
+	}()
+	<-secondStarted
+	secondAttemptID, secondReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+	cancelFirst()
+	firstErr := <-firstDone
+	mid := NewStateTracker(state.path, nil).Snapshot(key)
+	midAttemptID, midReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+	cancelSecond()
+	secondErr := <-secondDone
+	final := NewStateTracker(state.path, nil).Snapshot(key)
+	finalAttemptID, finalReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+
+	if firstReadErr != nil || secondReadErr != nil || midReadErr != nil || finalReadErr != nil {
+		t.Fatalf("reading attempt IDs: first=%v second=%v mid=%v final=%v", firstReadErr, secondReadErr, midReadErr, finalReadErr)
+	}
+	if firstAttemptID == "" || secondAttemptID == "" || firstAttemptID == secondAttemptID {
+		t.Fatalf("attempt IDs must be non-empty and unique: first=%q second=%q", firstAttemptID, secondAttemptID)
+	}
+	if !errors.Is(firstErr, context.Canceled) || mid.Status != StatusTesting || midAttemptID != secondAttemptID {
+		t.Fatalf("older cancellation changed newer attempt: state=%+v attempt=%q err=%v", mid, midAttemptID, firstErr)
+	}
+	if !errors.Is(secondErr, context.Canceled) || final.Status != StatusUnknown || finalAttemptID != "" {
+		t.Fatalf("newer cancellation state=%+v attempt=%q err=%v", final, finalAttemptID, secondErr)
 	}
 }
 

@@ -147,7 +147,8 @@ func (r *Router) noEligibleError(keys []Key) error {
 }
 
 // GenerateForKey 用指定 Key 执行一次调用（Worker 单 Key 连通性测试）。
-// 手动测试是 auth_failed 的复位路径：先标记 testing，再按结果落态。
+// 手动测试是 auth_failed 的复位路径：先持久化带唯一 attempt ID 的
+// testing 状态，再仅在 attempt 仍匹配时按结果落态。
 func (r *Router) GenerateForKey(ctx context.Context, keyID string, req aipkg.Request) (aipkg.Response, error) {
 	key, err := r.Store.Get(keyID)
 	if errors.Is(err, ErrNotFound) {
@@ -158,13 +159,26 @@ func (r *Router) GenerateForKey(ctx context.Context, keyID string, req aipkg.Req
 		return aipkg.Response{}, aipkg.WrapError(aipkg.ErrUnavailable,
 			"读取 Claude 网关配置失败，请稍后重试。", err)
 	}
-	r.State.MarkTestingForKey(key)
+	attemptID, err := r.State.beginTestForKey(key)
+	if err != nil {
+		return aipkg.Response{}, targetedStateError(err)
+	}
 	resp, callErr := r.attempt(ctx, key, req)
 	if ctx.Err() != nil {
+		if err := r.State.finishTestForKey(key, attemptID, testCancelled, "", 0); err != nil {
+			return resp, targetedStateError(errors.Join(callErr, err))
+		}
 		return resp, callErr
 	}
-	r.recordTestOutcome(key, resp, callErr)
+	if err := r.recordTestOutcome(key, attemptID, resp, callErr); err != nil {
+		return resp, targetedStateError(errors.Join(callErr, err))
+	}
 	return resp, callErr
+}
+
+func targetedStateError(cause error) error {
+	return aipkg.WrapError(aipkg.ErrUnavailable,
+		"保存 Claude Key 测试状态失败，请稍后重试。", cause)
 }
 
 // EnabledKeyCount 返回当前启用 Key 数（启动期能力判定与心跳用）。
@@ -249,16 +263,22 @@ func (r *Router) recordOutcome(key Key, resp aipkg.Response, callErr error) {
 
 // recordTestOutcome records a targeted connectivity-test result. Unlike an
 // ordinary routed call, a non-failover error must leave the key eligible after
-// MarkTesting while retaining diagnostics for the operator.
-func (r *Router) recordTestOutcome(key Key, resp aipkg.Response, callErr error) {
+// the persisted testing attempt while retaining diagnostics for the operator.
+func (r *Router) recordTestOutcome(key Key, attemptID string, resp aipkg.Response, callErr error) error {
+	outcome := testSucceeded
+	code := ""
 	if callErr != nil {
-		perr := aipkg.AsProviderError(callErr)
-		if !failoverEligible(perr.Code) {
-			r.State.MarkTestFailureForKey(key, perr.Code, resp.Latency)
-			return
+		code = aipkg.AsProviderError(callErr).Code
+		switch {
+		case code == aipkg.ErrAuthFailed:
+			outcome = testAuthFailed
+		case failoverEligible(code):
+			outcome = testTransientFailure
+		default:
+			outcome = testNonFailoverFailure
 		}
 	}
-	r.recordOutcome(key, resp, callErr)
+	return r.State.finishTestForKey(key, attemptID, outcome, code, resp.Latency)
 }
 
 // failoverEligible 报告错误码是否允许故障转移到下一个 Key。
