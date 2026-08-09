@@ -323,6 +323,10 @@ func (h *Handler) saveClaudeCodeSettings(c *gin.Context) {
 		h.writeStoreError(c, err)
 		return
 	}
+	if !key.Enabled {
+		badRequest(c, "已禁用的 Claude Key 不能写入 Claude Code 设置。")
+		return
+	}
 	if err := writeClaudeCodeSettings(h.ClaudeCodeSettingsFile, key, h.DefaultBaseURL); err != nil {
 		httpserver.AbortWithProblem(c, http.StatusServiceUnavailable, "claude_code_settings_unavailable",
 			"Claude Code 配置不可用", "无法写入运行时 Claude HOME 下的 settings.json；请检查目标目录和文件权限。")
@@ -354,7 +358,7 @@ const defaultClaudeBaseURL = "https://api.anthropic.com"
 func EffectiveBaseURL(perKey, configured string) string {
 	for _, candidate := range []string{perKey, configured} {
 		if normalized := strings.TrimRight(strings.TrimSpace(candidate), "/"); normalized != "" {
-			return normalized
+			return strings.TrimSuffix(normalized, "/v1/messages")
 		}
 	}
 	return defaultClaudeBaseURL

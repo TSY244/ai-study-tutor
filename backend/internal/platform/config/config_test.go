@@ -205,15 +205,32 @@ func TestLoadClaudeCodeSettingsFileWithoutReadingWorkerSecret(t *testing.T) {
 }
 
 func TestLoadClaudeCodeSettingsRuntimeHomeDefault(t *testing.T) {
-	cfg, err := LoadFrom(ServiceAPI, env(
+	for _, service := range []string{ServiceAPI, ServiceWorker} {
+		t.Run(service, func(t *testing.T) {
+			cfg, err := LoadFrom(service, env(
+				"DATABASE_URL", "postgres://u:x@db/t",
+				"HOME", "/runtime/home",
+			))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := cfg.Claude.ClaudeCodeSettingsFile, "/runtime/home/.claude/settings.json"; got != want {
+				t.Fatalf("Claude Code settings path=%q want runtime HOME default %q", got, want)
+			}
+		})
+	}
+}
+
+func TestLoadClaudeCodeSettingsRuntimeHomeDoesNotEnableTools(t *testing.T) {
+	cfg, err := LoadFrom(ServiceBackup, env(
 		"DATABASE_URL", "postgres://u:x@db/t",
-		"HOME", "/runtime/home",
+		"HOME", "/tools/home",
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := cfg.Claude.ClaudeCodeSettingsFile, "/runtime/home/.claude/settings.json"; got != want {
-		t.Fatalf("Claude Code settings path=%q want runtime HOME default %q", got, want)
+	if cfg.Claude.ClaudeCodeSettingsFile != "" {
+		t.Fatalf("tools service must not derive Claude Code settings from HOME: %q", cfg.Claude.ClaudeCodeSettingsFile)
 	}
 }
 

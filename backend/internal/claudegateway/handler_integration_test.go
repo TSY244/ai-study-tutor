@@ -77,10 +77,10 @@ func TestClaudeCodeSettingsRouteOverwritesSelectedKeyWithoutResponseSecret(t *te
 
 	created := apitest.Do(t, env.engine, http.MethodPost,
 		"/api/v1/system/claude-keys/"+key.ID+"/claude-code-settings", nil, "")
+	assertSafeGatewayResponse(t, created.Body.Bytes(), secret)
 	if created.Code != http.StatusOK {
 		t.Fatalf("initial export status=%d body=%s", created.Code, created.Body.String())
 	}
-	assertSafeGatewayResponse(t, created.Body.Bytes(), secret)
 	if info, err := os.Stat(settingsDir); err != nil {
 		t.Fatal(err)
 	} else if got := info.Mode().Perm(); got != 0o700 {
@@ -96,10 +96,10 @@ func TestClaudeCodeSettingsRouteOverwritesSelectedKeyWithoutResponseSecret(t *te
 
 	rec := apitest.Do(t, env.engine, http.MethodPost,
 		"/api/v1/system/claude-keys/"+key.ID+"/claude-code-settings", nil, "")
+	assertSafeGatewayResponse(t, rec.Body.Bytes(), secret)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("export status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	assertSafeGatewayResponse(t, rec.Body.Bytes(), secret)
 	var body struct {
 		Status string `json:"status"`
 		Target string `json:"target"`
@@ -174,10 +174,10 @@ func TestClaudeCodeSettingsRouteRejectsUnavailableTargetAndWriteDisabled(t *test
 	}
 	failed := apitest.Do(t, env.engine, http.MethodPost,
 		"/api/v1/system/claude-keys/"+key.ID+"/claude-code-settings", nil, "")
+	assertSafeGatewayResponse(t, failed.Body.Bytes(), secret)
 	if failed.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unavailable target status=%d body=%s", failed.Code, failed.Body.String())
 	}
-	assertSafeGatewayResponse(t, failed.Body.Bytes(), secret)
 	detail := failed.Body.String()
 	if !strings.Contains(detail, "运行时 Claude HOME") || !strings.Contains(detail, "settings.json") {
 		t.Fatalf("unavailable target detail must describe runtime Claude HOME/settings permissions: %s", detail)
@@ -188,10 +188,10 @@ func TestClaudeCodeSettingsRouteRejectsUnavailableTargetAndWriteDisabled(t *test
 
 	missing := apitest.Do(t, env.engine, http.MethodPost,
 		"/api/v1/system/claude-keys/ck_missing/claude-code-settings", nil, "")
+	assertSafeGatewayResponse(t, missing.Body.Bytes(), secret)
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing key status=%d body=%s", missing.Code, missing.Body.String())
 	}
-	assertSafeGatewayResponse(t, missing.Body.Bytes(), secret)
 
 	readOnly := newGatewayHandlerEnvWithClaudeCodeSettings(t, false, filepath.Join(t.TempDir(), "settings.json"))
 	readOnlyKey, err := readOnly.store.Create(Key{Name: "Read-only", APIKey: secret, Model: "claude-test", Enabled: true})
@@ -200,10 +200,35 @@ func TestClaudeCodeSettingsRouteRejectsUnavailableTargetAndWriteDisabled(t *test
 	}
 	blocked := apitest.Do(t, readOnly.engine, http.MethodPost,
 		"/api/v1/system/claude-keys/"+readOnlyKey.ID+"/claude-code-settings", nil, "")
+	assertSafeGatewayResponse(t, blocked.Body.Bytes(), secret)
 	if blocked.Code != http.StatusForbidden {
 		t.Fatalf("write-disabled status=%d body=%s", blocked.Code, blocked.Body.String())
 	}
-	assertSafeGatewayResponse(t, blocked.Body.Bytes(), secret)
+}
+
+func TestClaudeCodeSettingsRouteRejectsDisabledKeyWithoutResponseSecret(t *testing.T) {
+	settingsFile := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	env := newGatewayHandlerEnvWithClaudeCodeSettings(t, true, settingsFile)
+	secret := strings.Join([]string{"runtime", "disabled", uuid.NewString()}, "-")
+	key, err := env.store.Create(Key{
+		Name: "Disabled", APIKey: secret, Model: "deepseek-chat", Enabled: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := apitest.Do(t, env.engine, http.MethodPost,
+		"/api/v1/system/claude-keys/"+key.ID+"/claude-code-settings", nil, "")
+	assertSafeGatewayResponse(t, rec.Body.Bytes(), secret)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("disabled-key export status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "已禁用") {
+		t.Fatalf("disabled-key response must explain rejection: %s", rec.Body.String())
+	}
+	if _, err := os.Stat(settingsFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("disabled key must not create settings file: %v", err)
+	}
 }
 
 func TestClaudeKeyManagementLifecycleNeverReturnsSecret(t *testing.T) {
@@ -219,10 +244,10 @@ func TestClaudeKeyManagementLifecycleNeverReturnsSecret(t *testing.T) {
 	}
 	create := apitest.Do(t, env.engine, http.MethodPost, "/api/v1/system/claude-keys",
 		map[string]string{"Idempotency-Key": uuid.NewString()}, string(requestBody))
+	assertSafeGatewayResponse(t, create.Body.Bytes(), secret)
 	if create.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
 	}
-	assertSafeGatewayResponse(t, create.Body.Bytes(), secret)
 	apitest.Load(t).ValidateJSONResponse(t, http.MethodPost, "/api/v1/system/claude-keys", http.StatusCreated, create.Body.Bytes())
 	var created SafeKey
 	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
@@ -236,18 +261,18 @@ func TestClaudeKeyManagementLifecycleNeverReturnsSecret(t *testing.T) {
 	}
 
 	list := apitest.Do(t, env.engine, http.MethodGet, "/api/v1/system/claude-keys", nil, "")
+	assertSafeGatewayResponse(t, list.Body.Bytes(), secret)
 	if list.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
 	}
-	assertSafeGatewayResponse(t, list.Body.Bytes(), secret)
 	apitest.Load(t).ValidateJSONResponse(t, http.MethodGet, "/api/v1/system/claude-keys", http.StatusOK, list.Body.Bytes())
 
 	patch := apitest.Do(t, env.engine, http.MethodPatch, "/api/v1/system/claude-keys/"+created.ID,
 		nil, `{"name":"Renamed","weight":40}`)
+	assertSafeGatewayResponse(t, patch.Body.Bytes(), secret)
 	if patch.Code != http.StatusOK {
 		t.Fatalf("patch status=%d body=%s", patch.Code, patch.Body.String())
 	}
-	assertSafeGatewayResponse(t, patch.Body.Bytes(), secret)
 	apitest.Load(t).ValidateJSONResponse(t, http.MethodPatch, "/api/v1/system/claude-keys/{key_id}", http.StatusOK, patch.Body.Bytes())
 	persisted, err := env.store.Get(created.ID)
 	if err != nil {
@@ -259,10 +284,10 @@ func TestClaudeKeyManagementLifecycleNeverReturnsSecret(t *testing.T) {
 
 	testJob := apitest.Do(t, env.engine, http.MethodPost, "/api/v1/system/claude-keys/"+created.ID+"/test",
 		map[string]string{"Idempotency-Key": uuid.NewString()}, "")
+	assertSafeGatewayResponse(t, testJob.Body.Bytes(), secret)
 	if testJob.Code != http.StatusAccepted {
 		t.Fatalf("test status=%d body=%s", testJob.Code, testJob.Body.String())
 	}
-	assertSafeGatewayResponse(t, testJob.Body.Bytes(), secret)
 	apitest.Load(t).ValidateJSONResponse(t, http.MethodPost, "/api/v1/system/claude-keys/{key_id}/test", http.StatusAccepted, testJob.Body.Bytes())
 	var accepted struct {
 		Job struct {
@@ -282,6 +307,7 @@ func TestClaudeKeyManagementLifecycleNeverReturnsSecret(t *testing.T) {
 	}
 
 	deleted := apitest.Do(t, env.engine, http.MethodDelete, "/api/v1/system/claude-keys/"+created.ID, nil, "")
+	assertSafeGatewayResponse(t, deleted.Body.Bytes(), secret)
 	if deleted.Code != http.StatusNoContent {
 		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
 	}
@@ -304,10 +330,10 @@ func TestClaudeKeyBaseURLCreateUpdateAndList(t *testing.T) {
 	}
 	create := apitest.Do(t, env.engine, http.MethodPost, "/api/v1/system/claude-keys",
 		map[string]string{"Idempotency-Key": uuid.NewString()}, string(body))
+	assertSafeGatewayResponse(t, create.Body.Bytes(), secret)
 	if create.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
 	}
-	assertSafeGatewayResponse(t, create.Body.Bytes(), secret)
 	apitest.Load(t).ValidateJSONResponse(t, http.MethodPost, "/api/v1/system/claude-keys", http.StatusCreated, create.Body.Bytes())
 	var created SafeKey
 	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
@@ -327,19 +353,19 @@ func TestClaudeKeyBaseURLCreateUpdateAndList(t *testing.T) {
 		}
 		bad := apitest.Do(t, env.engine, http.MethodPost, "/api/v1/system/claude-keys",
 			map[string]string{"Idempotency-Key": uuid.NewString()}, string(badBody))
+		assertSafeGatewayResponse(t, bad.Body.Bytes(), secret)
 		if bad.Code != http.StatusBadRequest {
 			t.Fatalf("base_url=%q status=%d body=%s", raw, bad.Code, bad.Body.String())
 		}
-		assertSafeGatewayResponse(t, bad.Body.Bytes(), secret)
 	}
 
 	// 更新：非空设置生效；省略保持不变；空串清除。
 	patch := apitest.Do(t, env.engine, http.MethodPatch, "/api/v1/system/claude-keys/"+created.ID,
 		nil, `{"base_url":"https://gw2.example"}`)
+	assertSafeGatewayResponse(t, patch.Body.Bytes(), secret)
 	if patch.Code != http.StatusOK {
 		t.Fatalf("patch set status=%d body=%s", patch.Code, patch.Body.String())
 	}
-	assertSafeGatewayResponse(t, patch.Body.Bytes(), secret)
 	apitest.Load(t).ValidateJSONResponse(t, http.MethodPatch, "/api/v1/system/claude-keys/{key_id}", http.StatusOK, patch.Body.Bytes())
 	var patched SafeKey
 	if err := json.Unmarshal(patch.Body.Bytes(), &patched); err != nil {
@@ -351,6 +377,7 @@ func TestClaudeKeyBaseURLCreateUpdateAndList(t *testing.T) {
 
 	patch = apitest.Do(t, env.engine, http.MethodPatch, "/api/v1/system/claude-keys/"+created.ID,
 		nil, `{"name":"Renamed"}`)
+	assertSafeGatewayResponse(t, patch.Body.Bytes(), secret)
 	if patch.Code != http.StatusOK {
 		t.Fatalf("patch keep status=%d body=%s", patch.Code, patch.Body.String())
 	}
@@ -363,6 +390,7 @@ func TestClaudeKeyBaseURLCreateUpdateAndList(t *testing.T) {
 
 	patch = apitest.Do(t, env.engine, http.MethodPatch, "/api/v1/system/claude-keys/"+created.ID,
 		nil, `{"base_url":""}`)
+	assertSafeGatewayResponse(t, patch.Body.Bytes(), secret)
 	if patch.Code != http.StatusOK {
 		t.Fatalf("patch clear status=%d body=%s", patch.Code, patch.Body.String())
 	}
@@ -382,17 +410,17 @@ func TestClaudeKeyBaseURLCreateUpdateAndList(t *testing.T) {
 
 	badPatch := apitest.Do(t, env.engine, http.MethodPatch, "/api/v1/system/claude-keys/"+created.ID,
 		nil, `{"base_url":"http://insecure.example"}`)
+	assertSafeGatewayResponse(t, badPatch.Body.Bytes(), secret)
 	if badPatch.Code != http.StatusBadRequest {
 		t.Fatalf("非法 base_url 的 PATCH status=%d body=%s", badPatch.Code, badPatch.Body.String())
 	}
-	assertSafeGatewayResponse(t, badPatch.Body.Bytes(), secret)
 
 	// 列表响应同样携带 base_url。
 	list := apitest.Do(t, env.engine, http.MethodGet, "/api/v1/system/claude-keys", nil, "")
+	assertSafeGatewayResponse(t, list.Body.Bytes(), secret)
 	if list.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
 	}
-	assertSafeGatewayResponse(t, list.Body.Bytes(), secret)
 	apitest.Load(t).ValidateJSONResponse(t, http.MethodGet, "/api/v1/system/claude-keys", http.StatusOK, list.Body.Bytes())
 	var listed struct {
 		Items []SafeKey `json:"items"`
@@ -466,9 +494,20 @@ func TestClaudeCodeSettingsEffectiveBaseURLPrecedence(t *testing.T) {
 			want:       "https://per-key.example/anthropic",
 		},
 		{
+			name:       "per-key full messages endpoint",
+			perKey:     " https://api.deepseek.com/anthropic/v1/messages/ ",
+			configured: "https://configured.example/anthropic",
+			want:       "https://api.deepseek.com/anthropic",
+		},
+		{
 			name:       "configured deployment",
 			configured: " https://configured.example/anthropic/ ",
 			want:       "https://configured.example/anthropic",
+		},
+		{
+			name:       "configured full messages endpoint",
+			configured: " https://api.deepseek.com/anthropic/v1/messages/ ",
+			want:       "https://api.deepseek.com/anthropic",
 		},
 		{
 			name: "Anthropic default",
@@ -497,10 +536,10 @@ func TestClaudeCodeSettingsRouteUsesHandlerDefaultBaseURL(t *testing.T) {
 
 	rec := apitest.Do(t, env.engine, http.MethodPost,
 		"/api/v1/system/claude-keys/"+key.ID+"/claude-code-settings", nil, "")
+	assertSafeGatewayResponse(t, rec.Body.Bytes(), secret)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("export status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	assertSafeGatewayResponse(t, rec.Body.Bytes(), secret)
 	raw := mustReadFile(t, settingsFile)
 	if strings.Contains(string(raw), "https://app.haoshuai.cc.cd") {
 		t.Fatal("saved settings must never use the obsolete hardcoded gateway")
@@ -534,10 +573,10 @@ func TestClaudeKeyWritesCanBeDisabledAndErrorsNeverEchoSecret(t *testing.T) {
 	}
 	blocked := apitest.Do(t, env.engine, http.MethodPost, "/api/v1/system/claude-keys",
 		map[string]string{"Idempotency-Key": uuid.NewString()}, string(body))
+	assertSafeGatewayResponse(t, blocked.Body.Bytes(), secret)
 	if blocked.Code != http.StatusForbidden {
 		t.Fatalf("write-disabled status=%d body=%s", blocked.Code, blocked.Body.String())
 	}
-	assertSafeGatewayResponse(t, blocked.Body.Bytes(), secret)
 
 	env = newGatewayHandlerEnv(t, true)
 	invalidBody, err := json.Marshal(map[string]any{
@@ -548,10 +587,10 @@ func TestClaudeKeyWritesCanBeDisabledAndErrorsNeverEchoSecret(t *testing.T) {
 	}
 	invalid := apitest.Do(t, env.engine, http.MethodPost, "/api/v1/system/claude-keys",
 		map[string]string{"Idempotency-Key": uuid.NewString()}, string(invalidBody))
+	assertSafeGatewayResponse(t, invalid.Body.Bytes(), secret)
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status=%d body=%s", invalid.Code, invalid.Body.String())
 	}
-	assertSafeGatewayResponse(t, invalid.Body.Bytes(), secret)
 }
 
 func assertSafeGatewayResponse(t *testing.T, body []byte, secret string) {

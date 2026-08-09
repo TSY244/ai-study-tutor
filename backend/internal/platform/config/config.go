@@ -317,7 +317,7 @@ func (c *Config) loadClaude(getEnv func(string) string, service string) error {
 	}
 	c.Claude.GatewayWriteEnabled = writeEnabled
 	settingsFile := strings.TrimSpace(getEnv("CLAUDE_CODE_SETTINGS_FILE"))
-	if settingsFile == "" && service == ServiceAPI {
+	if settingsFile == "" && (service == ServiceAPI || service == ServiceWorker) {
 		if runtimeHome := strings.TrimSpace(getEnv("HOME")); runtimeHome != "" {
 			settingsFile = filepath.Join(runtimeHome, ".claude", "settings.json")
 		}
