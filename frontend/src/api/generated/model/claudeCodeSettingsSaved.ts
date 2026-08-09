@@ -7,7 +7,7 @@ import type { ClaudeCodeSettingsSavedStatus } from './claudeCodeSettingsSavedSta
 import type { ClaudeCodeSettingsSavedTarget } from './claudeCodeSettingsSavedTarget';
 
 /**
- * Claude Code 设置已从指定已保存 Key 覆盖写入的安全确认。
+ * Claude Code 设置已从指定的已保存 Key 应用到运行环境的安全确认。
  */
 export interface ClaudeCodeSettingsSaved {
   status: ClaudeCodeSettingsSavedStatus;

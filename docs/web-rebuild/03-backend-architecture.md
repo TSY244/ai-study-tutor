@@ -600,8 +600,9 @@ acquiring -> detecting -> extracting -> normalizing -> chunking -> generate -> v
   `--allowedTools "Bash Read Write WebFetch"` 执行：WebFetch 是 CLI
   客户端工具，抓取发生在 Worker 容器（需出网访问白名单站点），不经
   网关 server tool；不再使用 yt-dlp 下载 URL。CLI 凭证取自
-  claudegateway keys.json（最高优先级启用 Key 的 api_key 注入
-  `ANTHROPIC_AUTH_TOKEN`，base_url 取进程级 `ANTHROPIC_BASE_URL`）。
+  claudegateway keys.json：运行时 settings 中已应用的 Key 选择器为
+  权威选择，设置缺失或没有选择器时才回退到优先级/权重规则；解析后的
+  token、Base URL、模型别名、选择器和流量控制项注入子进程 env。
 - 提取后同一会话继续生成教师教纲与学生笔记；raw_text、
   teacher_outline、student_notes 三份文档齐全才在一个事务里
   all-or-nothing 发布。

@@ -45,7 +45,8 @@ const PROBLEM_PRESENTATIONS: Record<KnownProblemCode, ProblemPresentation> = {
   },
   claude_code_settings_unavailable: {
     title: 'Claude Code 设置不可用',
-    message: '无法写入本机 Claude Code 设置。请检查 ~/.claude 目录挂载和权限后重试。',
+    message:
+      '无法写入运行服务的 Claude Code 设置。请检查运行服务 HOME 下 ~/.claude 目录及 settings.json 的权限后重试。',
     retryable: true,
   },
   claude_unavailable: {
@@ -171,7 +172,7 @@ const JOB_ERROR_MESSAGES: Record<
   }),
   claude_invalid_request: () => ({
     title: 'Claude 请求被拒绝',
-    message: '导入链接需要部署的网关支持 Claude Web Fetch。请检查部署配置后重试。',
+    message: '请检查模型名称、Base URL，以及提供方是否兼容 Anthropic API 后重试。',
   }),
   claude_invalid_json: () => ({
     title: 'Claude 返回结果无法解析',

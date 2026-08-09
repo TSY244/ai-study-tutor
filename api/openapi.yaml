@@ -198,10 +198,10 @@ paths:
       tags:
       - System
       operationId: saveClaudeKeyToClaudeCodeSettings
-      summary: 将指定 Claude Key 保存到本机 Claude Code 设置
+      summary: 将指定 Claude Key 应用到运行环境的 Claude Code 设置
       responses:
         '200':
-          description: Claude Code 设置已覆盖保存；响应绝不包含完整 Key
+          description: Claude Code 设置已应用到运行环境；响应绝不包含完整 Key
           headers:
             X-Request-ID: *id001
           content:
@@ -1859,7 +1859,7 @@ components:
           minimum: 1
           maximum: 100
     ClaudeCodeSettingsSaved:
-      description: Claude Code 设置已从指定已保存 Key 覆盖写入的安全确认。
+      description: Claude Code 设置已从指定的已保存 Key 应用到运行环境的安全确认。
       type: object
       additionalProperties: false
       required:

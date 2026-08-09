@@ -89,16 +89,22 @@ fLaC/OggS，audio/video 结合扩展名区分）、合法 UTF-8 文本兜底为
    强制 HTTPS、拒绝 userinfo/端口/非白名单主机，剥离
    utm_*/spm*/trackid/vd_source/share_* 等追踪参数，保留语义参数，
    query 排序重编码，URL 上限 250 字符；违规 → `url_blocked`（终态）；
-2. Worker 容器内执行 Claude Code CLI（npm 全局安装，pin 大版本）
+2. Worker 容器内执行 Claude Code CLI（npm 全局安装，pin 大版本；Docker
+   部署不会调用宿主机 Claude Code）
    `claude --allowedTools "Bash Read Write WebFetch" -p <prompt>
    --output-format json`：WebFetch 是 CLI 客户端工具，抓取发生在
    Worker 容器（需出网访问白名单站点），不经网关 server tool，不再
-   使用 yt-dlp 下载 URL。CLI 凭证取自 claudegateway keys.json（最高
-   优先级启用 Key 的 api_key 注入 `ANTHROPIC_AUTH_TOKEN`；base_url 取
-   进程级 `ANTHROPIC_BASE_URL`，中转网关可用，无需官方 Key）；子进程
-   env 只放行 HOME/PATH/CI/NO_COLOR 与 Anthropic 凭证，单次调用默认
-   超时 10 分钟；api_key 只出现在子进程 env，绝不进入日志、错误
-   detail 或 ai_runs；
+   使用 yt-dlp 下载 URL。URL 提取器与测验生成器共用运行时解析器：
+   已应用的 `~/.claude/settings.json` 中若含
+   `AI_STUDY_TUTOR_CLAUDE_KEY_ID`，该选择器为权威选择，并校验所选 Key
+   的 token、规范化 Base URL 与模型是否仍匹配；设置文件缺失或没有
+   应用选择器时，才回退到 claudegateway keys.json 的优先级/权重规则。
+   显式选择失效时返回脱敏配置错误，不静默切换 Key。子进程 env 只放行
+   `HOME`/`PATH`/`CI`/`NO_COLOR`，并注入解析后的
+   `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_MODEL`、
+   默认模型别名、`CLAUDE_CODE_SUBAGENT_MODEL`、应用选择器及 Claude Code
+   非必要流量控制项；单次调用默认超时 10 分钟。api_key 只出现在设置
+   文件与子进程 env，绝不进入日志、错误 detail 或 ai_runs；
 3. 提取后教师教纲与学生笔记仍经网关 Messages Provider 生成；
    raw_text/teacher_outline/student_notes 三份文档齐全才在一个事务里
    all-or-nothing 发布；

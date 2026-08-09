@@ -235,7 +235,7 @@ export const getSaveClaudeKeyToClaudeCodeSettingsUrl = (keyId: string,) => {
 }
 
 /**
- * @summary 将指定 Claude Key 保存到本机 Claude Code 设置
+ * @summary 将指定 Claude Key 应用到运行环境的 Claude Code 设置
  */
 export const saveClaudeKeyToClaudeCodeSettings = async (keyId: string, options?: RequestInit): Promise<ClaudeCodeSettingsSaved> => {
 

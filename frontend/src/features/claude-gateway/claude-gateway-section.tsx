@@ -214,7 +214,7 @@ export function ClaudeGatewaySection() {
           ) : null}
           {claudeCodeSavedKeyName ? (
             <p role="status" className="mt-3 rounded-md bg-ok-bg px-3 py-2 text-sm text-ok">
-              已将「{claudeCodeSavedKeyName}」保存到 Claude Code。
+              已将「{claudeCodeSavedKeyName}」应用到运行服务的 Claude Code。
             </p>
           ) : null}
           {presentation ? (
@@ -290,9 +290,9 @@ export function ClaudeGatewaySection() {
         onOpenChange={(open) => {
           if (!open) setConfirmAction(null)
         }}
-        title="保存 Claude Code 配置"
-        description={`将用「${confirmAction?.keyRecord.name ?? ''}」覆盖本机 ~/.claude/settings.json。`}
-        confirmLabel="覆盖保存"
+        title="应用到运行服务的 Claude Code"
+        description={`将用「${confirmAction?.keyRecord.name ?? ''}」覆盖运行环境 ~/.claude/settings.json，并影响后续 Worker Claude Code 任务。`}
+        confirmLabel="确认应用"
         busy={busyAction?.startsWith('claude-code-settings:')}
         errorMessage={
           confirmAction?.kind === 'claude-code-settings' ? presentation?.message : undefined
@@ -372,12 +372,12 @@ function KeyCard({
           <Button
             variant="secondary"
             size="sm"
-            aria-label={`保存${keyRecord.name}到 Claude Code`}
+            aria-label={`应用${keyRecord.name}到运行服务的 Claude Code`}
             disabled={!writeEnabled || busy}
             onClick={onSaveToClaudeCode}
           >
             <Save aria-hidden="true" className="h-4 w-4" />
-            保存到 Claude Code
+            应用到运行服务
           </Button>
           <Button
             variant="secondary"

@@ -229,7 +229,7 @@ describe('App Shell', () => {
     stop()
   })
 
-  it('设置：保存指定 Key 到 Claude Code 前要求确认，且浏览器不发送完整 Key', async () => {
+  it('设置：应用指定 Key 到运行服务前要求确认，且浏览器只发送 Key ID', async () => {
     const user = userEvent.setup()
     const saveCapture = captureRequests(
       'POST',
@@ -237,14 +237,25 @@ describe('App Shell', () => {
     )
     renderWithRouter('/settings')
 
-    await user.click(await screen.findByRole('button', { name: '保存主线路到 Claude Code' }))
-    const dialog = screen.getByRole('dialog', { name: '保存 Claude Code 配置' })
-    expect(dialog).toHaveTextContent('~/.claude/settings.json')
+    const keyCard = await screen.findByRole('article', { name: 'Claude Key 主线路' })
+    const applyButton = within(keyCard).getByRole('button', {
+      name: '应用主线路到运行服务的 Claude Code',
+    })
+    expect(applyButton).toHaveTextContent('应用到运行服务')
+
+    await user.click(applyButton)
+    const dialog = screen.getByRole('dialog', { name: '应用到运行服务的 Claude Code' })
+    expect(dialog).toHaveTextContent('运行环境 ~/.claude/settings.json')
+    expect(dialog).toHaveTextContent('Worker Claude Code 任务')
+    expect(dialog).not.toHaveTextContent('本机')
     expect(saveCapture.requests).toHaveLength(0)
 
-    await user.click(within(dialog).getByRole('button', { name: '覆盖保存' }))
+    await user.click(within(dialog).getByRole('button', { name: '确认应用' }))
     await waitFor(() => expect(saveCapture.requests).toHaveLength(1))
     expect(saveCapture.requests[0]?.body).toBeNull()
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      '已将「主线路」应用到运行服务的 Claude Code。',
+    )
     expect(screen.queryByText('sk-ant-demo-primary-DO-NOT-LEAK')).not.toBeInTheDocument()
     saveCapture.stop()
   })

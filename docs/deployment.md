@@ -47,7 +47,7 @@
 | 数据库密码 | `deploy/secrets/postgres_password.txt` | Docker secret，只挂载给需要的容器 |
 | Claude API Key | `deploy/secrets/anthropic_api_key.txt` | Docker secret，**只挂载给 worker** |
 | Claude 网关配置（多 Key） | `./data/claude-gateway/`（宿主机，权限 0700） | 存放 `keys.json`，**只挂载给 api/worker**，web 不可见 |
-| Claude Code 本机设置 | `~/.claude/settings.json`（宿主机） | 仅 API 容器映射 `~/.claude`；从「设置」保存指定 Key 时原子覆盖该文件 |
+| Claude Code 运行时设置 | 命名卷 `app_data` 内的 `/var/lib/ai-study-tutor/.claude/settings.json` | API 原子写入，Worker Claude Code 读取；宿主机 `~/.claude` 不会挂载，web 不可见 |
 
 两个命名卷由 Docker 管理，删除容器不影响数据；`docker compose down -v` 才会删除卷（危险操作，见 §7.3）。
 
@@ -100,7 +100,7 @@ chmod 600 deploy/secrets/anthropic_api_key.txt
 
 部署后也可以在「设置」页直接管理多个 Claude Key：网关按优先级自动故障转移，配置保存在 `data/claude-gateway/keys.json`（只挂载进 `api`/`worker`）；当没有任何启用的 Key 时，上面的旧单 Key secret 文件仍作为回退生效。
 
-每张 Claude Key 卡片还可选择「保存到 Claude Code」。确认后，API 从已保存的 Key 中读取密钥并原子覆盖宿主机的 `~/.claude/settings.json`，浏览器不会接收完整 Key。该目录仅映射给 API 容器，Worker 和 Web 无权访问。
+每张 Claude Key 卡片还可选择「应用到运行服务」。确认后，API 从已保存的 Key 中读取密钥，在共享 `app_data` 卷内原子覆盖运行环境的 `~/.claude/settings.json`；浏览器只提交 Key ID，不会接收或重新发送完整 Key。后续 Worker Claude Code 任务以该文件中的应用选择器为准；文件没有应用选择器时才回退到网关的优先级/权重路由。API 和 Worker 的 `HOME` 都是 `/var/lib/ai-study-tutor`，宿主机的 `~/.claude` 不会挂载进任何容器，Web 也看不到该配置。
 
 如需调整端口、模型、上传大小等，编辑 `deploy/.env`（完整配置项见 §4）。
 
@@ -133,7 +133,7 @@ make docker-seed      # 可选：写入演示课程数据（幂等，可重复�
 | `LOG_LEVEL` | `info` | 日志级别（`debug`/`info`/`warn`/`error`） |
 | `POSTGRES_DB` / `POSTGRES_USER` | `ai_study_tutor` | 数据库名与账号（密码在 secret 文件，不在此） |
 | `AI_PROVIDER` | `anthropic` | AI 提供方；`fake` 仅用于部署演练 |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic 兼容 API 的基础地址；Worker 调用 `<base>/v1/messages`（教纲/笔记等普通 Messages 调用）。URL 导入由 Worker 容器内 Claude Code CLI 的 WebFetch 客户端工具抓取，该值作为 CLI 的 `ANTHROPIC_BASE_URL` 注入（中转网关可用，无需转发 server tools），且必须配置 gateway Key（无 gateway Key 时 URL 导入报 `claude_not_configured`，不回退 legacy 单 Key） |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic 兼容 API 的部署级基础地址，同时提供给 API 和 Worker。单个 Key 未设置 Base URL 时，API 将该值写入运行时 Claude Code 设置，Worker 也以相同值解析并执行；普通 Messages 调用使用 `<base>/v1/messages`。URL 导入由 Worker 容器内 Claude Code CLI 的 WebFetch 客户端工具抓取，且必须配置 gateway Key（无 gateway Key 时 URL 导入报 `claude_not_configured`，不回退 legacy 单 Key） |
 | `CLAUDE_MODEL_DEFAULT` | 空 | 覆盖默认模型，空为用代码内置默认 |
 | `CLAUDE_REQUEST_TIMEOUT` | `300s` | 单次 AI 请求超时 |
 | `CLAUDE_MAX_OUTPUT_TOKENS` | `8192` | AI 输出上限 |
@@ -149,7 +149,6 @@ make docker-seed      # 可选：写入演示课程数据（幂等，可重复�
 | `BACKUP_DIR` / `IMPORT_REPORT_DIR` / `LEGACY_SOURCE_DIR` | `../backups` 等 | 一次性工具容器挂载的宿主机目录，相对 `deploy/` |
 | `CLAUDE_GATEWAY_CONFIG_DIR` | `../data/claude-gateway` | Claude 多 Key 网关配置目录（`keys.json`），只挂载进 `api`/`worker`，init 脚本创建为 0700 |
 | `COOKIES_CONFIG_DIR` | `../data/cookies` | 站点登录 Cookie 目录（`bilibili.txt` 放 B 站 `SESSDATA`，Netscape 格式，0600），`api` 读写挂载、`worker` 只读挂载到 `/config/cookies`；推荐在 Web 设置页「B 站 Cookie」保存/替换/删除并「检测可用性」（Worker 请求 B 站 nav 端点验证登录状态），也可手动放文件；B 站字幕需登录才能获取（含 AI 字幕 ai-zh），无 Cookie 时 bilibili 链接只能提取页面文本 |
-| `CLAUDE_CODE_SETTINGS_DIR` | 当前用户的 `~/.claude` | Claude Code 设置目录，只挂载进 `api`；init 脚本写入绝对路径，保存操作覆盖其中的 `settings.json` |
 | `TOOLS_UID` / `TOOLS_GID` | `10001` | 工具容器运行 UID/GID；Linux 上 init 脚本自动改为当前用户 |
 
 改完 `.env` 后需要 `make docker-up`（配置类变更）或 `docker compose ... up -d --force-recreate` 生效；密钥文件内容变更同样需要重建容器（secret 在容器启动时挂载）。

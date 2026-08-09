@@ -41,28 +41,6 @@ esac
 mkdir -p "$gateway_config_dir"
 chmod 700 "$gateway_config_dir"
 
-# Claude Code 本地配置目录只映射给 API 容器。首次初始化记录调用者的
-# 绝对 ~/.claude 路径；已有目录不改变其权限，避免干扰用户现有配置。
-claude_code_settings_value=$(sed -n 's/^[[:space:]]*CLAUDE_CODE_SETTINGS_DIR[[:space:]]*=[[:space:]]*//p' "$deploy_dir/.env")
-claude_code_settings_value=$(printf '%s' "$claude_code_settings_value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-if [ -z "$claude_code_settings_value" ]; then
-  claude_code_settings_dir="${HOME:?HOME must be set}/.claude"
-  printf '\nCLAUDE_CODE_SETTINGS_DIR=%s\n' "$claude_code_settings_dir" >> "$deploy_dir/.env"
-else
-  claude_code_settings_dir="$claude_code_settings_value"
-fi
-case "$claude_code_settings_dir" in
-  /*) ;;
-  *)
-    echo "CLAUDE_CODE_SETTINGS_DIR 必须是绝对路径" >&2
-    exit 1
-    ;;
-esac
-if [ ! -d "$claude_code_settings_dir" ]; then
-  mkdir -p "$claude_code_settings_dir"
-  chmod 700 "$claude_code_settings_dir"
-fi
-
 # 站点 Cookie 配置目录（B 站 bilibili.txt）：API 读写、Worker 只读；
 # 同样支持 COOKIES_CONFIG_DIR 覆盖。
 cookies_config_value=$(sed -n 's/^[[:space:]]*COOKIES_CONFIG_DIR[[:space:]]*=[[:space:]]*//p' "$deploy_dir/.env")

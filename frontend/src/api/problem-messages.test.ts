@@ -38,6 +38,14 @@ describe('presentProblemCode', () => {
   it('claude_not_configured 文案不要求浏览器保存 Key', () => {
     expect(presentProblemCode('claude_not_configured').message).toContain('部署侧')
   })
+
+  it('claude_code_settings_unavailable 指向运行服务 HOME 与设置权限', () => {
+    const message = presentProblemCode('claude_code_settings_unavailable').message
+    expect(message).toContain('运行服务 HOME')
+    expect(message).toContain('~/.claude')
+    expect(message).toContain('权限')
+    expect(message).not.toMatch(/本机|宿主机|挂载/)
+  })
 })
 
 describe('presentProblem', () => {
@@ -103,8 +111,12 @@ describe('presentJobError', () => {
     expect(presentJobError('material_too_large', false).message).toMatch(/文本|文件/)
   })
 
-  it('claude_invalid_request 说明部署网关需支持 Web Fetch', () => {
-    expect(presentJobError('claude_invalid_request', false).message).toContain('Web Fetch')
+  it('claude_invalid_request 指引检查模型、Base URL 与 Anthropic 兼容性', () => {
+    const message = presentJobError('claude_invalid_request', false).message
+    expect(message).toContain('模型')
+    expect(message).toContain('Base URL')
+    expect(message).toContain('Anthropic')
+    expect(message).not.toContain('Web Fetch')
   })
 
   it('未映射的 Job code 回落到契约呈现（未知码兜底 unknown_error）', () => {
