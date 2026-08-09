@@ -97,6 +97,7 @@ func (x *ClaudeURLCLIExtractor) Extract(ctx context.Context, workDir string, req
 	if err != nil {
 		return aipkg.Response{}, err
 	}
+	response := aipkg.Response{Model: selection.Key.Model}
 
 	timeout := x.Timeout
 	if timeout <= 0 {
@@ -116,59 +117,52 @@ func (x *ClaudeURLCLIExtractor) Extract(ctx context.Context, workDir string, req
 		Dir: workDir,
 		Env: runtime.Env(selection),
 	})
+	envelope, envelopeOK := parseClaudeCLIEnvelope(res)
+	if envelopeOK {
+		response = applyClaudeCLIEnvelopeMetadata(response, envelope)
+	}
 	// Job 取消/总时限优先：原样返回 ctx 错误，由 worker 运行器归类。
 	if ctx.Err() != nil {
-		return aipkg.Response{}, ctx.Err()
+		return response, ctx.Err()
 	}
 	if runErr != nil {
 		// CLI 自身超时（父 ctx 仍存活）→ 可重试提取失败。
 		if errors.Is(runErr, context.DeadlineExceeded) {
-			return aipkg.Response{}, aipkg.MaterialFetchError(true)
+			return response, aipkg.MaterialFetchError(true)
 		}
 		var missing *proc.MissingToolError
 		if errors.As(runErr, &missing) {
-			return aipkg.Response{}, aipkg.ErrorForCode(aipkg.ErrNotConfigured,
+			return response, aipkg.ErrorForCode(aipkg.ErrNotConfigured,
 				"Claude CLI 不可用；请检查 Worker 镜像后重试。")
 		}
 		var exitErr *proc.ExitError
 		if errors.As(runErr, &exitErr) {
 			// 非零退出时 stdout 仍可能携带信封（如 api_error_status）。
-			if env, ok := parseClaudeCLIEnvelope(res); ok {
-				return aipkg.Response{}, claudeCLIStatusError(env.APIErrorStatus)
+			if envelopeOK {
+				return response, claudeCLIStatusError(envelope.APIErrorStatus)
 			}
-			return aipkg.Response{}, aipkg.MaterialFetchError(false)
+			return response, aipkg.MaterialFetchError(false)
 		}
-		return aipkg.Response{}, aipkg.MaterialFetchError(false)
+		return response, aipkg.MaterialFetchError(false)
 	}
 
-	env, ok := parseClaudeCLIEnvelope(res)
-	if !ok {
-		return aipkg.Response{}, aipkg.MaterialFetchError(false)
+	if !envelopeOK {
+		return response, aipkg.MaterialFetchError(false)
 	}
-	if env.APIErrorStatus != 0 {
-		return aipkg.Response{}, claudeCLIStatusError(env.APIErrorStatus)
+	if envelope.APIErrorStatus != 0 {
+		return response, claudeCLIStatusError(envelope.APIErrorStatus)
 	}
-	if env.IsError || env.Type != "result" || env.Subtype != "success" {
-		return aipkg.Response{}, aipkg.MaterialFetchError(false)
+	if envelope.IsError || envelope.Type != "result" || envelope.Subtype != "success" {
+		return response, aipkg.MaterialFetchError(false)
 	}
 	// 首选文件契约（长字幕绕开模型输出 token 上限，实测 ~10k 截断）；
 	// 文件缺失时回退 result 文本解析（分隔标记 / 严格 JSON）。
 	payload := readExtractedFilesJSON(workDir)
 	if payload == nil {
-		payload = normalizeCLIResultJSON(env.Result)
+		payload = normalizeCLIResultJSON(envelope.Result)
 	}
-	return aipkg.Response{
-		JSON:              payload,
-		Model:             selection.Key.Model,
-		ProviderRequestID: env.SessionID,
-		Usage: aipkg.Usage{
-			InputTokens:      env.Usage.InputTokens,
-			OutputTokens:     env.Usage.OutputTokens,
-			CacheReadTokens:  env.Usage.CacheReadInputTokens,
-			CacheWriteTokens: env.Usage.CacheCreationInputTokens,
-		},
-		Latency: time.Duration(env.DurationMs) * time.Millisecond,
-	}, nil
+	response.JSON = payload
+	return response, nil
 }
 
 func (x *ClaudeURLCLIExtractor) proc() proc.Runner {
@@ -200,6 +194,18 @@ func parseClaudeCLIEnvelope(res *proc.Result) (claudeCLIEnvelope, bool) {
 		return env, false
 	}
 	return env, true
+}
+
+func applyClaudeCLIEnvelopeMetadata(response aipkg.Response, env claudeCLIEnvelope) aipkg.Response {
+	response.ProviderRequestID = env.SessionID
+	response.Usage = aipkg.Usage{
+		InputTokens:      env.Usage.InputTokens,
+		OutputTokens:     env.Usage.OutputTokens,
+		CacheReadTokens:  env.Usage.CacheReadInputTokens,
+		CacheWriteTokens: env.Usage.CacheCreationInputTokens,
+	}
+	response.Latency = time.Duration(env.DurationMs) * time.Millisecond
+	return response
 }
 
 // stripCodeFence 容忍模型在严格 JSON 外包裹 ```json 代码围栏。

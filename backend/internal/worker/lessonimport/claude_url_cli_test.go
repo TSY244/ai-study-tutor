@@ -316,7 +316,9 @@ func TestClaudeURLCLIExtractErrorMapping(t *testing.T) {
 		}), nil), aipkg.ErrMaterialFetchFailed, false},
 		{"api 401", proc.Static(cliEnvelopeJSON(t, map[string]any{
 			"type": "result", "subtype": "error", "is_error": true,
-			"api_error_status": 401,
+			"api_error_status": 401, "duration_ms": 2345, "session_id": "sess-url-error",
+			"usage": map[string]any{"input_tokens": 11, "output_tokens": 22,
+				"cache_read_input_tokens": 3, "cache_creation_input_tokens": 4},
 		}), nil), aipkg.ErrAuthFailed, false},
 		{"api 403", proc.Static(cliEnvelopeJSON(t, map[string]any{
 			"type": "result", "subtype": "error", "is_error": true,
@@ -355,9 +357,19 @@ func TestClaudeURLCLIExtractErrorMapping(t *testing.T) {
 			fake := proc.NewFake()
 			fake.Enqueue(tc.respond)
 			x := newCLIExtractor(keysFile, fake)
-			_, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
+			resp, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
 			if err == nil {
 				t.Fatal("应返回错误")
+			}
+			if resp.Model != "claude-cli-test" {
+				t.Fatalf("解析 Key 后的错误响应应保留 model: %+v", resp)
+			}
+			if tc.name == "api 401" {
+				if resp.ProviderRequestID != "sess-url-error" || resp.Latency != 2345*time.Millisecond ||
+					resp.Usage.InputTokens != 11 || resp.Usage.OutputTokens != 22 ||
+					resp.Usage.CacheReadTokens != 3 || resp.Usage.CacheWriteTokens != 4 {
+					t.Fatalf("有效错误信封应保留安全元数据: %+v", resp)
+				}
 			}
 			perr := aipkg.AsProviderError(err)
 			if perr.Code != tc.wantCode || perr.Retryable != tc.retryable {
@@ -380,7 +392,10 @@ func TestClaudeURLCLIExtractTimeout(t *testing.T) {
 	x := newCLIExtractor(keysFile, fake)
 	x.Timeout = 50 * time.Millisecond
 
-	_, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
+	resp, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
+	if resp.Model != "claude-cli-test" {
+		t.Fatalf("解析 Key 后的超时响应应保留 model: %+v", resp)
+	}
 	perr := aipkg.AsProviderError(err)
 	if perr.Code != aipkg.ErrMaterialFetchFailed || !perr.Retryable {
 		t.Fatalf("超时应为可重试 material_fetch_failed: %v", err)
@@ -401,7 +416,10 @@ func TestClaudeURLCLIExtractJobCancel(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	_, err := x.Extract(ctx, t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
+	resp, err := x.Extract(ctx, t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
+	if resp.Model != "claude-cli-test" {
+		t.Fatalf("解析 Key 后的取消响应应保留 model: %+v", resp)
+	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("父 ctx 取消应原样返回: %v", err)
 	}
@@ -572,7 +590,7 @@ func TestClaudeURLCLIEnvBaseURLPrecedence(t *testing.T) {
 		name        string
 		key         map[string]any
 		ctorBaseURL string
-		wantEnv     string // 为空表示 env 不得含 ANTHROPIC_BASE_URL
+		wantEnv     string
 	}{
 		{"key_base_url_wins", keyWithURL, "https://gateway.example", "ANTHROPIC_BASE_URL=https://key-gw.example"},
 		{"constructor_fallback", cliTestKey("k", cliKeySentinel, 1, 100, true), "https://gateway.example", "ANTHROPIC_BASE_URL=https://gateway.example"},

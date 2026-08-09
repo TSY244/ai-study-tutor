@@ -145,6 +145,7 @@ func (g *ClaudeQuizCLIGenerator) Generate(ctx context.Context, workDir string, r
 	if err != nil {
 		return aipkg.Response{}, err
 	}
+	response := aipkg.Response{Model: selection.Key.Model}
 	timeout := g.Timeout
 	if timeout <= 0 {
 		timeout = defaultQuizCLITimeout
@@ -162,58 +163,51 @@ func (g *ClaudeQuizCLIGenerator) Generate(ctx context.Context, workDir string, r
 		Dir:  workDir,
 		Env:  runtime.Env(selection),
 	})
+	envelope, envelopeOK := parseQuizCLIEnvelope(res)
+	if envelopeOK {
+		response = applyQuizCLIEnvelopeMetadata(response, envelope)
+	}
 	// Job 取消/总时限优先：原样返回 ctx 错误，由 worker 运行器归类。
 	if ctx.Err() != nil {
-		return aipkg.Response{}, ctx.Err()
+		return response, ctx.Err()
 	}
 	if runErr != nil {
 		if errors.Is(runErr, context.DeadlineExceeded) {
-			return aipkg.Response{}, aipkg.ErrorForCode(aipkg.ErrTimeout, "Claude 生成题目超时，将自动重试。")
+			return response, aipkg.ErrorForCode(aipkg.ErrTimeout, "Claude 生成题目超时，将自动重试。")
 		}
 		var missing *proc.MissingToolError
 		if errors.As(runErr, &missing) {
-			return aipkg.Response{}, aipkg.ErrorForCode(aipkg.ErrNotConfigured, "Claude CLI 不可用；请检查 Worker 镜像后重试。")
+			return response, aipkg.ErrorForCode(aipkg.ErrNotConfigured, "Claude CLI 不可用；请检查 Worker 镜像后重试。")
 		}
 		var exitErr *proc.ExitError
 		if errors.As(runErr, &exitErr) {
-			if env, ok := parseQuizCLIEnvelope(res); ok && env.APIErrorStatus != 0 {
-				return aipkg.Response{}, quizCLIStatusError(env.APIErrorStatus)
+			if envelopeOK && envelope.APIErrorStatus != 0 {
+				return response, quizCLIStatusError(envelope.APIErrorStatus)
 			}
-			return aipkg.Response{}, aipkg.ErrorForCode(aipkg.ErrUnavailable, "Claude 服务暂时不可用，将自动重试。")
+			return response, aipkg.ErrorForCode(aipkg.ErrUnavailable, "Claude 服务暂时不可用，将自动重试。")
 		}
-		return aipkg.Response{}, aipkg.ErrorForCode(aipkg.ErrUnavailable, "Claude 服务暂时不可用，将自动重试。")
+		return response, aipkg.ErrorForCode(aipkg.ErrUnavailable, "Claude 服务暂时不可用，将自动重试。")
 	}
 
-	env, ok := parseQuizCLIEnvelope(res)
-	if !ok {
-		return aipkg.Response{}, aipkg.ErrorForCode(aipkg.ErrUnavailable, "Claude 服务暂时不可用，将自动重试。")
+	if !envelopeOK {
+		return response, aipkg.ErrorForCode(aipkg.ErrUnavailable, "Claude 服务暂时不可用，将自动重试。")
 	}
-	if env.APIErrorStatus != 0 {
-		return aipkg.Response{}, quizCLIStatusError(env.APIErrorStatus)
+	if envelope.APIErrorStatus != 0 {
+		return response, quizCLIStatusError(envelope.APIErrorStatus)
 	}
-	if env.IsError || env.Type != "result" || env.Subtype != "success" {
-		return aipkg.Response{}, aipkg.ErrorForCode(aipkg.ErrUnavailable, "Claude 服务暂时不可用，将自动重试。")
+	if envelope.IsError || envelope.Type != "result" || envelope.Subtype != "success" {
+		return response, aipkg.ErrorForCode(aipkg.ErrUnavailable, "Claude 服务暂时不可用，将自动重试。")
 	}
 	payload, readErr := os.ReadFile(filepath.Join(workDir, quizCLIOutputFile))
 	if readErr != nil {
-		return aipkg.Response{}, aipkg.WrapError(aipkg.ErrInvalidJSON, "Claude 未写出有效的题目 JSON，将自动重试。", readErr)
+		return response, aipkg.WrapError(aipkg.ErrInvalidJSON, "Claude 未写出有效的题目 JSON，将自动重试。", readErr)
 	}
 	trimmed := bytes.TrimSpace(payload)
 	if len(trimmed) == 0 || !json.Valid(trimmed) {
-		return aipkg.Response{}, aipkg.ErrorForCode(aipkg.ErrInvalidJSON, "Claude 未写出有效的题目 JSON，将自动重试。")
+		return response, aipkg.ErrorForCode(aipkg.ErrInvalidJSON, "Claude 未写出有效的题目 JSON，将自动重试。")
 	}
-	return aipkg.Response{
-		JSON:              json.RawMessage(trimmed),
-		Model:             selection.Key.Model,
-		ProviderRequestID: env.SessionID,
-		Usage: aipkg.Usage{
-			InputTokens:      env.Usage.InputTokens,
-			OutputTokens:     env.Usage.OutputTokens,
-			CacheReadTokens:  env.Usage.CacheReadInputTokens,
-			CacheWriteTokens: env.Usage.CacheCreationInputTokens,
-		},
-		Latency: time.Duration(env.DurationMs) * time.Millisecond,
-	}, nil
+	response.JSON = json.RawMessage(trimmed)
+	return response, nil
 }
 
 func (g *ClaudeQuizCLIGenerator) proc() proc.Runner {
@@ -245,4 +239,16 @@ func parseQuizCLIEnvelope(res *proc.Result) (quizCLIEnvelope, bool) {
 		return env, false
 	}
 	return env, true
+}
+
+func applyQuizCLIEnvelopeMetadata(response aipkg.Response, env quizCLIEnvelope) aipkg.Response {
+	response.ProviderRequestID = env.SessionID
+	response.Usage = aipkg.Usage{
+		InputTokens:      env.Usage.InputTokens,
+		OutputTokens:     env.Usage.OutputTokens,
+		CacheReadTokens:  env.Usage.CacheReadInputTokens,
+		CacheWriteTokens: env.Usage.CacheCreationInputTokens,
+	}
+	response.Latency = time.Duration(env.DurationMs) * time.Millisecond
+	return response
 }

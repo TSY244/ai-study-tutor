@@ -157,11 +157,23 @@ func TestBuildClaudeProvidersWiresRuntimeSettingsAndHome(t *testing.T) {
 
 	t.Run("blank HOME falls back to data dir", func(t *testing.T) {
 		t.Setenv("HOME", " \t ")
-		providers := buildClaudeProviders(cfg, "", false, nil)
+		fallbackCfg := cfg
+		fallbackCfg.DataDir = filepath.Join("relative", "worker-data")
+		fallbackCfg.Claude.ClaudeCodeSettingsFile = ""
+		wantHome, err := filepath.Abs(fallbackCfg.DataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantSettings := filepath.Join(wantHome, ".claude", "settings.json")
+
+		providers := buildClaudeProviders(fallbackCfg, "", false, nil)
 		urlExtractor := providers.URLExtractor.(*lessonimport.ClaudeURLCLIExtractor)
 		quizGenerator := providers.QuizCLI.(*aihandlers.ClaudeQuizCLIGenerator)
-		if urlExtractor.Home != cfg.DataDir || quizGenerator.Home != cfg.DataDir {
-			t.Fatalf("空 HOME 应回退数据目录: URL=%q Quiz=%q", urlExtractor.Home, quizGenerator.Home)
+		if urlExtractor.Home != wantHome || quizGenerator.Home != wantHome {
+			t.Fatalf("空 HOME 应回退绝对数据目录: URL=%q Quiz=%q want=%q", urlExtractor.Home, quizGenerator.Home, wantHome)
+		}
+		if urlExtractor.SettingsFile != wantSettings || quizGenerator.SettingsFile != wantSettings {
+			t.Fatalf("空 HOME/settings 应使用同一运行时路径对: URL=%q Quiz=%q want=%q", urlExtractor.SettingsFile, quizGenerator.SettingsFile, wantSettings)
 		}
 	})
 }

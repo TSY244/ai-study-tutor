@@ -272,7 +272,12 @@ func containsQuizCLIEnv(env []string, want string) bool {
 
 func TestQuizCLIGenerateErrorMapping(t *testing.T) {
 	keysFile := writeQuizCLIGatewayKeys(t, quizCLITestKey("k", quizCLIKeySentinel, 1, 100, true))
-	goodEnv := map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "done"}
+	goodEnv := map[string]any{
+		"type": "result", "subtype": "success", "is_error": false, "result": "done",
+		"duration_ms": 3456, "session_id": "sess-quiz-output-error",
+		"usage": map[string]any{"input_tokens": 31, "output_tokens": 42,
+			"cache_read_input_tokens": 5, "cache_creation_input_tokens": 6},
+	}
 
 	cases := []struct {
 		name          string
@@ -287,7 +292,12 @@ func TestQuizCLIGenerateErrorMapping(t *testing.T) {
 			}
 			return quizCLIEnvelopeJSON(t, goodEnv), nil
 		}, aipkg.ErrInvalidJSON, true},
-		{"auth_401", proc.Static(quizCLIEnvelopeJSON(t, map[string]any{"type": "result", "subtype": "error", "is_error": true, "api_error_status": 401}), nil), aipkg.ErrAuthFailed, false},
+		{"auth_401", proc.Static(quizCLIEnvelopeJSON(t, map[string]any{
+			"type": "result", "subtype": "error", "is_error": true, "api_error_status": 401,
+			"duration_ms": 4567, "session_id": "sess-quiz-api-error",
+			"usage": map[string]any{"input_tokens": 51, "output_tokens": 62,
+				"cache_read_input_tokens": 7, "cache_creation_input_tokens": 8},
+		}), nil), aipkg.ErrAuthFailed, false},
 		{"auth_403", proc.Static(quizCLIEnvelopeJSON(t, map[string]any{"type": "result", "subtype": "error", "is_error": true, "api_error_status": 403}), nil), aipkg.ErrAuthFailed, false},
 		{"rate_429", proc.Static(quizCLIEnvelopeJSON(t, map[string]any{"type": "result", "subtype": "error", "is_error": true, "api_error_status": 429}), nil), aipkg.ErrRateLimited, true},
 		{"server_500", proc.Static(quizCLIEnvelopeJSON(t, map[string]any{"type": "result", "subtype": "error", "is_error": true, "api_error_status": 500}), nil), aipkg.ErrUnavailable, true},
@@ -307,9 +317,26 @@ func TestQuizCLIGenerateErrorMapping(t *testing.T) {
 				g.Timeout = 50 * time.Millisecond
 			}
 			req := buildQuizCLIRequest("/wd", quizCLIPromptInput{LessonTitle: "t", QuestionCount: 1})
-			_, err := g.Generate(context.Background(), t.TempDir(), req)
+			resp, err := g.Generate(context.Background(), t.TempDir(), req)
 			if err == nil {
 				t.Fatal("应返回错误")
+			}
+			if resp.Model != "claude-quiz-cli-test" {
+				t.Fatalf("解析 Key 后的错误响应应保留 model: %+v", resp)
+			}
+			switch tc.name {
+			case "missing_quiz_json", "invalid_quiz_json":
+				if resp.ProviderRequestID != "sess-quiz-output-error" || resp.Latency != 3456*time.Millisecond ||
+					resp.Usage.InputTokens != 31 || resp.Usage.OutputTokens != 42 ||
+					resp.Usage.CacheReadTokens != 5 || resp.Usage.CacheWriteTokens != 6 {
+					t.Fatalf("输出错误应保留信封安全元数据: %+v", resp)
+				}
+			case "auth_401":
+				if resp.ProviderRequestID != "sess-quiz-api-error" || resp.Latency != 4567*time.Millisecond ||
+					resp.Usage.InputTokens != 51 || resp.Usage.OutputTokens != 62 ||
+					resp.Usage.CacheReadTokens != 7 || resp.Usage.CacheWriteTokens != 8 {
+					t.Fatalf("API 错误应保留信封安全元数据: %+v", resp)
+				}
 			}
 			perr := aipkg.AsProviderError(err)
 			if perr.Code != tc.wantCode || perr.Retryable != tc.wantRetryable {
@@ -352,7 +379,10 @@ func TestQuizCLIGenerateJobCancel(t *testing.T) {
 		cancel()
 	}()
 	req := buildQuizCLIRequest("/wd", quizCLIPromptInput{LessonTitle: "t", QuestionCount: 1})
-	_, err := g.Generate(ctx, t.TempDir(), req)
+	resp, err := g.Generate(ctx, t.TempDir(), req)
+	if resp.Model != "claude-quiz-cli-test" {
+		t.Fatalf("解析 Key 后的取消响应应保留 model: %+v", resp)
+	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("父 ctx 取消应原样返回: %v", err)
 	}
@@ -387,7 +417,7 @@ func TestQuizCLIEnvBaseURLPrecedence(t *testing.T) {
 		name        string
 		key         map[string]any
 		ctorBaseURL string
-		wantEnv     string // 为空表示 env 不得含 ANTHROPIC_BASE_URL
+		wantEnv     string
 	}{
 		{"key_base_url_wins", keyWithURL, "https://gateway.example", "ANTHROPIC_BASE_URL=https://key-gw.example"},
 		{"constructor_fallback", quizCLITestKey("k", quizCLIKeySentinel, 1, 100, true), "https://gateway.example", "ANTHROPIC_BASE_URL=https://gateway.example"},
