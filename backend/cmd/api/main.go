@@ -110,7 +110,7 @@ func buildClaudeGatewayHandler(cfg config.Config, pool *pgxpool.Pool, logger *sl
 	return &claudegateway.Handler{
 		Pool:                   pool,
 		Store:                  claudegateway.NewStore(cfg.Claude.GatewayConfigFile),
-		State:                  claudegateway.NewStateTracker(claudegateway.StatePathFor(cfg.Claude.GatewayConfigFile), logger),
+		State:                  claudegateway.NewStateTracker(claudegateway.StatePathFor(cfg.Claude.GatewayConfigFile), logger, cfg.Claude.AnthropicBaseURL),
 		Jobs:                   job.NewService(pool),
 		WriteEnabled:           cfg.Claude.GatewayWriteEnabled,
 		LegacyFallback:         statusSvc.WorkerClaudeConfigured,

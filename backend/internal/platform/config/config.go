@@ -116,6 +116,9 @@ const defaultAnthropicBaseURL = "https://api.anthropic.com"
 // may provide either a base URL or the full /v1/messages endpoint.
 func (c ClaudeConfig) AnthropicMessagesEndpoint() string {
 	base := strings.TrimRight(strings.TrimSpace(c.AnthropicBaseURL), "/")
+	if base == "" {
+		base = defaultAnthropicBaseURL
+	}
 	if strings.HasSuffix(base, "/v1/messages") {
 		return base
 	}

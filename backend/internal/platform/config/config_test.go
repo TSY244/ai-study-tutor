@@ -290,6 +290,13 @@ func TestToolsServiceDoesNotReadAnthropicKeyFile(t *testing.T) {
 	}
 }
 
+func TestAnthropicMessagesEndpointEmptyUsesOfficialDefault(t *testing.T) {
+	var cfg ClaudeConfig
+	if got, want := cfg.AnthropicMessagesEndpoint(), "https://api.anthropic.com/v1/messages"; got != want {
+		t.Fatalf("empty Claude base endpoint=%q want %q", got, want)
+	}
+}
+
 func TestWorkerFakeProviderDoesNotReadAnthropicKeyFile(t *testing.T) {
 	cfg, err := LoadFrom(ServiceWorker, env(
 		"DATABASE_URL", "postgres://u:x@db/t",

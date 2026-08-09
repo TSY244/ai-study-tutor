@@ -26,22 +26,23 @@ const (
 	StatusDisabled    = "disabled"
 	StatusTesting     = "testing"
 
-	keyStateFingerprintPrefix = "config-sha256:"
+	keyStateFingerprintPrefix = "config-sha256:v2:"
 )
 
 // KeyState 是单个 Key 的非敏感运行态（持久化在 state.json）。
 // Fingerprint 是内部配置代际指纹，与保持 token-only 的
 // SafeKey.Fingerprint 不同；该结构绝不包含密钥材料。
 type KeyState struct {
-	Status              string     `json:"status"`
-	Fingerprint         string     `json:"fingerprint,omitempty"`
-	ConsecutiveFailures int        `json:"consecutive_failures"`
-	LastSuccessAt       *time.Time `json:"last_success_at,omitempty"`
-	LastFailureAt       *time.Time `json:"last_failure_at,omitempty"`
-	LastErrorCode       *string    `json:"last_error_code,omitempty"`
-	CooldownUntil       *time.Time `json:"cooldown_until,omitempty"`
-	LastLatencyMs       *int64     `json:"last_latency_ms,omitempty"`
-	TestingAttemptID    string     `json:"testing_attempt_id,omitempty"`
+	Status                string     `json:"status"`
+	Fingerprint           string     `json:"fingerprint,omitempty"`
+	ConfigurationEndpoint string     `json:"configuration_endpoint,omitempty"`
+	ConsecutiveFailures   int        `json:"consecutive_failures"`
+	LastSuccessAt         *time.Time `json:"last_success_at,omitempty"`
+	LastFailureAt         *time.Time `json:"last_failure_at,omitempty"`
+	LastErrorCode         *string    `json:"last_error_code,omitempty"`
+	CooldownUntil         *time.Time `json:"cooldown_until,omitempty"`
+	LastLatencyMs         *int64     `json:"last_latency_ms,omitempty"`
+	TestingAttemptID      string     `json:"testing_attempt_id,omitempty"`
 }
 
 // stateFile 是 state.json 的磁盘形状。
@@ -53,11 +54,12 @@ type stateFile struct {
 // （0600）。读侧在文件 mtime/size 变化时重载，因此 API 与 Worker 两个
 // 进程都能看到对方的最新写入。持久化失败只记日志，不阻断路由。
 type StateTracker struct {
-	path          string
-	now           func() time.Time
-	logger        *slog.Logger
-	beforePersist func()
-	writeFile     func(string, []byte) error
+	path                     string
+	configuredDefaultBaseURL string
+	now                      func() time.Time
+	logger                   *slog.Logger
+	beforePersist            func()
+	writeFile                func(string, []byte) error
 
 	mu       sync.Mutex
 	states   map[string]KeyState
@@ -68,8 +70,15 @@ type StateTracker struct {
 }
 
 // NewStateTracker 创建运行态跟踪器；state.json 缺失/损坏时从空状态开始。
-func NewStateTracker(path string, logger *slog.Logger) *StateTracker {
-	return &StateTracker{path: path, now: time.Now, logger: logger}
+func NewStateTracker(path string, logger *slog.Logger, configuredDefaultBaseURL ...string) *StateTracker {
+	configured := ""
+	if len(configuredDefaultBaseURL) > 0 {
+		configured = configuredDefaultBaseURL[0]
+	}
+	return &StateTracker{
+		path: path, configuredDefaultBaseURL: EffectiveBaseURL("", configured),
+		now: time.Now, logger: logger,
+	}
 }
 
 // Now 返回当前时间（测试可注入）。
@@ -232,7 +241,7 @@ func (t *StateTracker) effectiveLocked(k Key, now time.Time) KeyState {
 	if !ok {
 		st = KeyState{Status: StatusUnknown}
 	}
-	if fingerprint := keyStateFingerprint(k); fingerprint != "" && st.Fingerprint != fingerprint {
+	if generation := t.keyStateGeneration(k); generation.fingerprint != "" && st.Fingerprint != generation.fingerprint {
 		st = KeyState{Status: StatusUnknown}
 	}
 	if st.Status == "" {
@@ -259,15 +268,10 @@ func (t *StateTracker) Snapshot(k Key) KeyState {
 	defer t.mu.Unlock()
 	t.reloadLocked()
 	now := t.now()
-	fingerprint := keyStateFingerprint(k)
-	if st, ok := t.states[k.ID]; ok && fingerprint != "" && st.Fingerprint != fingerprint {
-		t.persistMutationLocked(k.ID, func(current KeyState, exists bool) (KeyState, bool) {
-			if exists && current.Fingerprint != fingerprint {
-				return KeyState{}, false
-			}
-			return current, exists
-		})
-	} else if ok && cooldownExpired(st, now) {
+	t.migrateStateGenerationLocked(k)
+	generation := t.keyStateGeneration(k)
+	st, ok := t.states[k.ID]
+	if ok && st.Fingerprint == generation.fingerprint && cooldownExpired(st, now) {
 		t.persistMutationLocked(k.ID, func(current KeyState, exists bool) (KeyState, bool) {
 			if exists && cooldownExpired(current, now) {
 				current.Status = StatusUnknown
@@ -288,7 +292,7 @@ func (t *StateTracker) Eligible(k Key, now time.Time) bool {
 	if !k.Enabled {
 		return false
 	}
-	t.migrateLegacyStateLocked(k)
+	t.migrateStateGenerationLocked(k)
 	st := t.effectiveLocked(k, now)
 	switch st.Status {
 	case StatusAuthFailed, StatusCoolingDown, StatusDisabled:
@@ -298,23 +302,23 @@ func (t *StateTracker) Eligible(k Key, now time.Time) bool {
 	}
 }
 
-// migrateLegacyStateLocked upgrades pre-configuration-generation state before
-// a Worker call is admitted. A mismatching config-sha256 state is deliberately
-// left untouched: the caller may hold a stale Key, and must not overwrite a
-// newer generation already persisted by the API.
-func (t *StateTracker) migrateLegacyStateLocked(k Key) {
-	fingerprint := keyStateFingerprint(k)
+// migrateStateGenerationLocked upgrades legacy state and fences a deployment
+// default endpoint change before a Worker call is admitted. A mismatching v2
+// generation caused by another Key field is left untouched: the caller may
+// hold a stale Key, and must not overwrite a newer API-persisted generation.
+func (t *StateTracker) migrateStateGenerationLocked(k Key) {
+	generation := t.keyStateGeneration(k)
 	st, exists := t.states[k.ID]
-	if !exists || fingerprint == "" || st.Fingerprint == fingerprint ||
-		strings.HasPrefix(st.Fingerprint, keyStateFingerprintPrefix) {
+	if !exists || generation.fingerprint == "" || st.Fingerprint == generation.fingerprint ||
+		(!isLegacyStateGeneration(st) && !defaultEndpointGenerationChanged(st, k, generation)) {
 		return
 	}
 	t.persistMutationLocked(k.ID, func(current KeyState, currentExists bool) (KeyState, bool) {
-		if !currentExists || current.Fingerprint == fingerprint ||
-			strings.HasPrefix(current.Fingerprint, keyStateFingerprintPrefix) {
+		if !currentExists || current.Fingerprint == generation.fingerprint ||
+			(!isLegacyStateGeneration(current) && !defaultEndpointGenerationChanged(current, k, generation)) {
 			return current, currentExists
 		}
-		return unknownStateForKey(k), true
+		return unknownStateForGeneration(generation), true
 	})
 }
 
@@ -332,11 +336,12 @@ func (t *StateTracker) markSuccess(k Key, latency time.Duration) {
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
+	generation := t.keyStateGeneration(k)
 	t.persistMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
-		if hasDifferentFingerprint(st, exists, k) {
+		if hasDifferentGeneration(st, exists, generation) {
 			return st, true
 		}
-		return successState(k, now, latencyMs), true
+		return successState(generation, now, latencyMs), true
 	})
 }
 
@@ -355,11 +360,12 @@ func (t *StateTracker) markAuthFailed(k Key, code string, latency time.Duration)
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
+	generation := t.keyStateGeneration(k)
 	t.persistMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
-		if hasDifferentFingerprint(st, exists, k) {
+		if hasDifferentGeneration(st, exists, generation) {
 			return st, true
 		}
-		return authFailedState(st, k, code, now, latencyMs), true
+		return authFailedState(st, generation, code, now, latencyMs), true
 	})
 }
 
@@ -371,11 +377,12 @@ func (t *StateTracker) MarkTransientFailure(k Key, code string, latency time.Dur
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
+	generation := t.keyStateGeneration(k)
 	t.persistMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
-		if hasDifferentFingerprint(st, exists, k) {
+		if hasDifferentGeneration(st, exists, generation) {
 			return st, true
 		}
-		return transientFailureState(st, k, code, now, latencyMs), true
+		return transientFailureState(st, k, generation, code, now, latencyMs), true
 	})
 }
 
@@ -394,11 +401,12 @@ func (t *StateTracker) markNonFailoverFailure(k Key, code string, latency time.D
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
+	generation := t.keyStateGeneration(k)
 	t.persistMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
-		if hasDifferentFingerprint(st, exists, k) {
+		if hasDifferentGeneration(st, exists, generation) {
 			return st, true
 		}
-		st = stateForKey(st, k)
+		st = stateForGeneration(st, generation)
 		if st.TestingAttemptID != "" {
 			st.TestingAttemptID = ""
 			if st.Status == StatusTesting {
@@ -431,8 +439,9 @@ func (t *StateTracker) beginTestForKey(k Key) (string, error) {
 	attemptID := uuid.NewString()
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	generation := t.keyStateGeneration(k)
 	err := t.persistRequiredMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
-		st = stateForKey(st, k)
+		st = stateForGeneration(st, generation)
 		st.Status = StatusTesting
 		st.ConsecutiveFailures = 0
 		st.TestingAttemptID = attemptID
@@ -458,18 +467,18 @@ func (t *StateTracker) finishTestForKey(
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
-	fingerprint := keyStateFingerprint(k)
+	generation := t.keyStateGeneration(k)
 	return t.persistRequiredMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
-		if !exists || attemptID == "" || st.Fingerprint != fingerprint || st.TestingAttemptID != attemptID {
+		if !exists || attemptID == "" || st.Fingerprint != generation.fingerprint || st.TestingAttemptID != attemptID {
 			return st, exists
 		}
 		switch outcome {
 		case testSucceeded:
-			st = successState(k, now, latencyMs)
+			st = successState(generation, now, latencyMs)
 		case testAuthFailed:
-			st = authFailedState(st, k, code, now, latencyMs)
+			st = authFailedState(st, generation, code, now, latencyMs)
 		case testTransientFailure:
-			st = transientFailureState(st, k, code, now, latencyMs)
+			st = transientFailureState(st, k, generation, code, now, latencyMs)
 		case testNonFailoverFailure:
 			st.Status = StatusUnknown
 			st.ConsecutiveFailures = 0
@@ -488,17 +497,18 @@ func (t *StateTracker) finishTestForKey(
 	})
 }
 
-func successState(k Key, now time.Time, latencyMs int64) KeyState {
+func successState(generation keyStateGeneration, now time.Time, latencyMs int64) KeyState {
 	return KeyState{
-		Status:        StatusHealthy,
-		Fingerprint:   keyStateFingerprint(k),
-		LastSuccessAt: &now,
-		LastLatencyMs: &latencyMs,
+		Status:                StatusHealthy,
+		Fingerprint:           generation.fingerprint,
+		ConfigurationEndpoint: generation.endpoint,
+		LastSuccessAt:         &now,
+		LastLatencyMs:         &latencyMs,
 	}
 }
 
-func authFailedState(st KeyState, k Key, code string, now time.Time, latencyMs int64) KeyState {
-	st = stateForKey(st, k)
+func authFailedState(st KeyState, generation keyStateGeneration, code string, now time.Time, latencyMs int64) KeyState {
+	st = stateForGeneration(st, generation)
 	st.Status = StatusAuthFailed
 	st.LastFailureAt = &now
 	st.LastErrorCode = &code
@@ -507,8 +517,8 @@ func authFailedState(st KeyState, k Key, code string, now time.Time, latencyMs i
 	return st
 }
 
-func transientFailureState(st KeyState, k Key, code string, now time.Time, latencyMs int64) KeyState {
-	st = stateForKey(st, k)
+func transientFailureState(st KeyState, k Key, generation keyStateGeneration, code string, now time.Time, latencyMs int64) KeyState {
+	st = stateForGeneration(st, generation)
 	st.ConsecutiveFailures++
 	st.LastFailureAt = &now
 	st.LastErrorCode = &code
@@ -547,57 +557,85 @@ func (t *StateTracker) Reset(id string) {
 func (t *StateTracker) ResetForKey(k Key) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	generation := t.keyStateGeneration(k)
 	t.persistMutationLocked(k.ID, func(KeyState, bool) (KeyState, bool) {
-		return unknownStateForKey(k), true
+		return unknownStateForGeneration(generation), true
 	})
 }
 
-func unknownStateForKey(k Key) KeyState {
+func unknownStateForGeneration(generation keyStateGeneration) KeyState {
 	return KeyState{
-		Status:      StatusUnknown,
-		Fingerprint: keyStateFingerprint(k),
+		Status:                StatusUnknown,
+		Fingerprint:           generation.fingerprint,
+		ConfigurationEndpoint: generation.endpoint,
 	}
+}
+
+type keyStateGeneration struct {
+	fingerprint string
+	endpoint    string
+}
+
+func (t *StateTracker) keyStateGeneration(k Key) keyStateGeneration {
+	return keyStateGenerationFor(k, t.configuredDefaultBaseURL)
 }
 
 func keyStateFingerprint(k Key) string {
+	return keyStateGenerationFor(k, "").fingerprint
+}
+
+func keyStateGenerationFor(k Key, configuredDefaultBaseURL string) keyStateGeneration {
+	endpoint := messagesEndpoint(EffectiveBaseURL(k.BaseURL, configuredDefaultBaseURL))
+	return keyStateGenerationForEndpoint(k, endpoint)
+}
+
+func keyStateGenerationForEndpoint(k Key, endpoint string) keyStateGeneration {
 	apiKey := strings.TrimSpace(k.APIKey)
 	if apiKey == "" {
-		return ""
+		return keyStateGeneration{}
 	}
-	baseURL := strings.TrimSpace(k.BaseURL)
-	if baseURL != "" {
-		// Hash the same complete Messages endpoint representation used by
-		// Router.attempt, so harmless trailing slash or base-vs-endpoint
-		// spelling changes do not create a new state generation.
-		baseURL = messagesEndpoint(baseURL)
-	}
+	endpoint = messagesEndpoint(EffectiveBaseURL(endpoint, ""))
 	material, _ := json.Marshal(struct {
-		APIKey  string `json:"api_key"`
-		Model   string `json:"model"`
-		BaseURL string `json:"base_url"`
-		Enabled bool   `json:"enabled"`
+		APIKey   string `json:"api_key"`
+		Model    string `json:"model"`
+		Endpoint string `json:"endpoint"`
+		Enabled  bool   `json:"enabled"`
 	}{
-		APIKey:  apiKey,
-		Model:   strings.TrimSpace(k.Model),
-		BaseURL: baseURL,
-		Enabled: k.Enabled,
+		APIKey:   apiKey,
+		Model:    strings.TrimSpace(k.Model),
+		Endpoint: endpoint,
+		Enabled:  k.Enabled,
 	})
 	sum := sha256.Sum256(material)
-	return keyStateFingerprintPrefix + hex.EncodeToString(sum[:])
+	return keyStateGeneration{
+		fingerprint: keyStateFingerprintPrefix + hex.EncodeToString(sum[:]),
+		endpoint:    endpoint,
+	}
 }
 
-func hasDifferentFingerprint(st KeyState, exists bool, k Key) bool {
-	fingerprint := keyStateFingerprint(k)
-	return exists && fingerprint != "" && st.Fingerprint != fingerprint
+func isLegacyStateGeneration(st KeyState) bool {
+	return !strings.HasPrefix(st.Fingerprint, keyStateFingerprintPrefix)
 }
 
-func stateForKey(st KeyState, k Key) KeyState {
-	fingerprint := keyStateFingerprint(k)
-	if fingerprint != "" && st.Fingerprint != fingerprint {
+func defaultEndpointGenerationChanged(st KeyState, k Key, generation keyStateGeneration) bool {
+	if strings.TrimSpace(k.BaseURL) != "" || st.ConfigurationEndpoint == "" ||
+		st.ConfigurationEndpoint == generation.endpoint {
+		return false
+	}
+	return st.Fingerprint == keyStateGenerationForEndpoint(k, st.ConfigurationEndpoint).fingerprint
+}
+
+func hasDifferentGeneration(st KeyState, exists bool, generation keyStateGeneration) bool {
+	return exists && generation.fingerprint != "" && st.Fingerprint != generation.fingerprint
+}
+
+func stateForGeneration(st KeyState, generation keyStateGeneration) KeyState {
+	if generation.fingerprint != "" && st.Fingerprint != generation.fingerprint {
 		st = KeyState{}
 	}
-	if fingerprint != "" {
-		st.Fingerprint = fingerprint
+	if generation.fingerprint != "" {
+		st.Fingerprint = generation.fingerprint
+		st.ConfigurationEndpoint = generation.endpoint
 	}
 	return st
 }

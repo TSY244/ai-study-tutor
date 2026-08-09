@@ -210,7 +210,7 @@ func buildClaudeProviders(cfg config.Config, anthropicKey string, claudeOK bool,
 		runtimeHome, runtimeSettingsFile, runtimeOK := claudeCLIRuntimePaths(cfg)
 		gateway := &claudegateway.Router{
 			Store:           claudegateway.NewStore(cfg.Claude.GatewayConfigFile),
-			State:           claudegateway.NewStateTracker(claudegateway.StatePathFor(cfg.Claude.GatewayConfigFile), logger),
+			State:           claudegateway.NewStateTracker(claudegateway.StatePathFor(cfg.Claude.GatewayConfigFile), logger, cfg.Claude.AnthropicBaseURL),
 			Legacy:          legacy,
 			Endpoint:        cfg.Claude.AnthropicMessagesEndpoint(),
 			DefaultModel:    cfg.Claude.Model,

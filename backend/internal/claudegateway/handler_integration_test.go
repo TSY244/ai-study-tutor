@@ -52,7 +52,7 @@ func newGatewayHandlerEnvWithClaudeCodeSettingsAndDefaultBaseURL(
 	engine := apitest.NewEngine(t)
 	path := filepath.Join(t.TempDir(), "keys.json")
 	store := NewStore(path)
-	state := NewStateTracker(StatePathFor(path), nil)
+	state := NewStateTracker(StatePathFor(path), nil, defaultBaseURL)
 	h := &Handler{
 		Pool: pool, Store: store, State: state,
 		Jobs: job.NewService(pool), WriteEnabled: writeEnabled, ClaudeCodeSettingsFile: settingsFile,
@@ -615,7 +615,7 @@ func TestClaudeKeyRuntimeConfigPatchBlocksOldOrdinaryOutcomeWithoutSnapshot(t *t
 				t.Fatalf("current request code=%q want %q (err=%v)", got, tc.wantCode, currentErr)
 			}
 
-			fresh := NewStateTracker(env.state.path, nil)
+			fresh := NewStateTracker(env.state.path, nil, env.state.configuredDefaultBaseURL)
 			fresh.mu.Lock()
 			fresh.reloadLocked()
 			got := fresh.states[key.ID]

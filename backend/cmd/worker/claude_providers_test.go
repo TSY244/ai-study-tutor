@@ -111,6 +111,25 @@ func TestBuildClaudeProvidersUsesConfiguredBaseURLForGateway(t *testing.T) {
 	}
 }
 
+func TestBuildClaudeProvidersWiresConfiguredBaseURLIntoGatewayState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.json")
+	cfgA := gatewayTestConfig(path)
+	cfgA.Claude.AnthropicBaseURL = "https://gateway-a.example/anthropic"
+	providersA := buildClaudeProviders(cfgA, "", false, nil)
+	key, err := providersA.Gateway.Store.Create(workerGatewayTestKey("default-generation", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	providersA.Gateway.State.MarkAuthFailedForKey(key, aipkg.ErrAuthFailed, time.Millisecond)
+
+	cfgB := cfgA
+	cfgB.Claude.AnthropicBaseURL = "https://gateway-b.example/anthropic"
+	providersB := buildClaudeProviders(cfgB, "", false, nil)
+	if !providersB.Gateway.State.Eligible(key, providersB.Gateway.State.Now()) {
+		t.Fatal("Worker StateTracker did not receive the replacement deployment BaseURL")
+	}
+}
+
 func gatewayTestConfig(path string) config.Config {
 	return config.Config{Claude: config.ClaudeConfig{
 		Provider:          "anthropic",

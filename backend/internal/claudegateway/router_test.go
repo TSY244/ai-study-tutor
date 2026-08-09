@@ -87,10 +87,16 @@ func newTestRouter(t *testing.T, keys []Key, server *httptest.Server) (*Router, 
 	dir := t.TempDir()
 	store := NewStore(filepath.Join(dir, "keys.json"))
 	writeRouterKeys(t, store, keys)
-	state := NewStateTracker(filepath.Join(dir, "state.json"), nil)
-	router := &Router{Store: store, State: state, DefaultModel: "claude-test", MaxOutputTokens: 64}
+	defaultBaseURL := defaultClaudeBaseURL
 	if server != nil {
-		router.Endpoint = server.URL
+		defaultBaseURL = server.URL
+	}
+	state := NewStateTracker(filepath.Join(dir, "state.json"), nil, defaultBaseURL)
+	router := &Router{
+		Store: store, State: state, Endpoint: messagesEndpoint(defaultBaseURL),
+		DefaultModel: "claude-test", MaxOutputTokens: 64,
+	}
+	if server != nil {
 		router.HTTPClient = server.Client()
 	}
 	return router, state
@@ -456,7 +462,7 @@ func TestRouterGenerateForKeyCancellationAndDeadlineFinishPersistedAttempt(t *te
 				t.Fatalf("GenerateForKey error = %v, want %v", err, tc.wantError)
 			}
 
-			fresh := NewStateTracker(state.path, nil)
+			fresh := NewStateTracker(state.path, nil, state.configuredDefaultBaseURL)
 			st := fresh.Snapshot(key)
 			if st.Status != StatusUnknown || st.ConsecutiveFailures != 0 ||
 				st.LastFailureAt != nil || st.LastErrorCode != nil ||
@@ -596,7 +602,7 @@ func TestRouterGenerateForKeyFailsClosedWhenAttemptStateCannotPersist(t *testing
 		if got := aipkg.AsProviderError(err).Code; got != aipkg.ErrUnavailable {
 			t.Fatalf("finish persistence error code = %q, want %q", got, aipkg.ErrUnavailable)
 		}
-		st := NewStateTracker(persistedPath, nil).Snapshot(key)
+		st := NewStateTracker(persistedPath, nil, state.configuredDefaultBaseURL).Snapshot(key)
 		attemptID, readErr := testingAttemptIDFromDisk(persistedPath, key.ID)
 		if readErr != nil || st.Status != StatusTesting || attemptID == "" {
 			t.Fatalf("failed finish did not preserve its unresolved attempt: state=%+v attempt=%q err=%v", st, attemptID, readErr)
@@ -704,7 +710,7 @@ func TestRouterGenerateForKeyInvalidDoesNotOverwriteConcurrentNormalOutcome(t *t
 			if got := aipkg.AsProviderError(targetErr).Code; got != aipkg.ErrInvalidRequest {
 				t.Fatalf("target request error code = %q, want %q", got, aipkg.ErrInvalidRequest)
 			}
-			st := NewStateTracker(state.path, nil).Snapshot(key)
+			st := NewStateTracker(state.path, nil, state.configuredDefaultBaseURL).Snapshot(key)
 			if st.Status != tc.wantState || st.ConsecutiveFailures != tc.wantFailures ||
 				(st.CooldownUntil != nil) != tc.wantCooldown {
 				t.Fatalf("target completion overwrote normal failure state: %+v", st)
@@ -769,12 +775,12 @@ func TestRouterGenerateForKeyOlderAttemptCannotOverwriteNewerAttempt(t *testing.
 	}
 	close(releaseFirst)
 	firstErr := <-firstDone
-	mid := NewStateTracker(state.path, nil).Snapshot(key)
+	mid := NewStateTracker(state.path, nil, state.configuredDefaultBaseURL).Snapshot(key)
 	midAttemptID, midReadErr := testingAttemptIDFromDisk(state.path, key.ID)
 	state.writeFile = nil
 	close(releaseSecond)
 	secondErr := <-secondDone
-	final := NewStateTracker(state.path, nil).Snapshot(key)
+	final := NewStateTracker(state.path, nil, state.configuredDefaultBaseURL).Snapshot(key)
 	finalAttemptID, finalReadErr := testingAttemptIDFromDisk(state.path, key.ID)
 
 	if firstReadErr != nil || secondReadErr != nil || midReadErr != nil || finalReadErr != nil {
@@ -838,11 +844,11 @@ func TestRouterGenerateForKeyCancellationCannotClearNewerAttempt(t *testing.T) {
 	secondAttemptID, secondReadErr := testingAttemptIDFromDisk(state.path, key.ID)
 	cancelFirst()
 	firstErr := <-firstDone
-	mid := NewStateTracker(state.path, nil).Snapshot(key)
+	mid := NewStateTracker(state.path, nil, state.configuredDefaultBaseURL).Snapshot(key)
 	midAttemptID, midReadErr := testingAttemptIDFromDisk(state.path, key.ID)
 	cancelSecond()
 	secondErr := <-secondDone
-	final := NewStateTracker(state.path, nil).Snapshot(key)
+	final := NewStateTracker(state.path, nil, state.configuredDefaultBaseURL).Snapshot(key)
 	finalAttemptID, finalReadErr := testingAttemptIDFromDisk(state.path, key.ID)
 
 	if firstReadErr != nil || secondReadErr != nil || midReadErr != nil || finalReadErr != nil {
@@ -1293,7 +1299,9 @@ func TestStateSnapshotRejectsLegacyTokenOnlyFingerprint(t *testing.T) {
 	state.mu.Unlock()
 
 	got := state.Snapshot(key)
-	if got.Status != StatusUnknown || got.LastSuccessAt != nil || got.Fingerprint != "" {
+	wantGeneration := state.keyStateGeneration(key)
+	if got.Status != StatusUnknown || got.LastSuccessAt != nil ||
+		got.Fingerprint != wantGeneration.fingerprint || got.ConfigurationEndpoint != wantGeneration.endpoint {
 		t.Fatalf("legacy token-only state was not safely reset: %+v", got)
 	}
 }
@@ -1326,7 +1334,7 @@ func TestRouterEligibleMigratesLegacyStateBeforeRecordingTransientFailures(t *te
 			t.Fatalf("attempt %d error code=%q want %q", attempt+1, got, aipkg.ErrOverloaded)
 		}
 
-		fresh := NewStateTracker(state.path, nil)
+		fresh := NewStateTracker(state.path, nil, state.configuredDefaultBaseURL)
 		fresh.mu.Lock()
 		fresh.reloadLocked()
 		got := fresh.states[key.ID]
@@ -1384,6 +1392,101 @@ func TestStateGenerationMigrationDoesNotCrossRuntimeConfigBoundaries(t *testing.
 			t.Fatalf("stale Eligible replaced newer config generation: %+v", got)
 		}
 	})
+}
+
+func TestStateDefaultBaseURLChangeCreatesCurrentGenerationFence(t *testing.T) {
+	initialStates := []struct {
+		name string
+		mark func(*StateTracker, Key)
+	}{
+		{
+			name: "authentication failure",
+			mark: func(state *StateTracker, key Key) {
+				state.MarkAuthFailedForKey(key, aipkg.ErrAuthFailed, time.Millisecond)
+			},
+		},
+		{
+			name: "cooling down",
+			mark: func(state *StateTracker, key Key) {
+				state.MarkTransientFailure(key, aipkg.ErrOverloaded, time.Millisecond)
+			},
+		},
+	}
+
+	for _, tc := range initialStates {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			key := routerTestKey("deployment-default-restart", 10, 1)
+			key.BaseURL = ""
+			stateA := NewStateTracker(path, nil, "https://gateway-a.example/anthropic")
+			tc.mark(stateA, key)
+			stateA.mu.Lock()
+			stateA.reloadLocked()
+			fingerprintA := stateA.states[key.ID].Fingerprint
+			stateA.mu.Unlock()
+
+			stateB := NewStateTracker(path, nil, "https://gateway-b.example/anthropic/v1/messages")
+			if !stateB.Eligible(key, stateB.Now()) {
+				t.Fatal("state from deployment default A blocked key after restart under default B")
+			}
+			stateB.mu.Lock()
+			stateB.reloadLocked()
+			fenceB := stateB.states[key.ID]
+			stateB.mu.Unlock()
+			if fenceB.Status != StatusUnknown || fenceB.Fingerprint == "" || fenceB.Fingerprint == fingerprintA ||
+				fenceB.LastErrorCode != nil || fenceB.CooldownUntil != nil {
+				t.Fatalf("default B did not establish a clean current-generation fence: %+v", fenceB)
+			}
+
+			stateA.MarkAuthFailedForKey(key, aipkg.ErrAuthFailed, 2*time.Millisecond)
+			stateB.mu.Lock()
+			stateB.reloadLocked()
+			afterStaleA := stateB.states[key.ID]
+			stateB.mu.Unlock()
+			if afterStaleA.Fingerprint != fenceB.Fingerprint || afterStaleA.Status != StatusUnknown ||
+				afterStaleA.LastErrorCode != nil {
+				t.Fatalf("stale default A outcome overwrote default B fence: %+v", afterStaleA)
+			}
+
+			if tc.name == "authentication failure" {
+				stateB.MarkSuccessForKey(key, 3*time.Millisecond)
+			} else {
+				stateB.MarkTransientFailure(key, aipkg.ErrOverloaded, 3*time.Millisecond)
+			}
+			stateB.mu.Lock()
+			stateB.reloadLocked()
+			final := stateB.states[key.ID]
+			stateB.mu.Unlock()
+			if final.Fingerprint != fenceB.Fingerprint {
+				t.Fatalf("default B outcome changed generation: %+v", final)
+			}
+			if tc.name == "authentication failure" {
+				if final.Status != StatusHealthy || final.LastSuccessAt == nil {
+					t.Fatalf("default B success was not recorded: %+v", final)
+				}
+			} else if final.Status != StatusCoolingDown || final.LastErrorCode == nil ||
+				*final.LastErrorCode != aipkg.ErrOverloaded {
+				t.Fatalf("default B transient failure was not recorded: %+v", final)
+			}
+		})
+	}
+}
+
+func TestStatePerKeyBaseURLOverrideIgnoresDeploymentDefaultChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	key := routerTestKey("per-key-default-stability", 10, 1)
+	key.BaseURL = "https://per-key.example/anthropic"
+	stateA := NewStateTracker(path, nil, "https://gateway-a.example")
+	stateA.MarkAuthFailedForKey(key, aipkg.ErrAuthFailed, time.Millisecond)
+
+	stateB := NewStateTracker(path, nil, "https://gateway-b.example")
+	if stateB.Eligible(key, stateB.Now()) {
+		t.Fatal("deployment default change invalidated auth state for a per-key BaseURL override")
+	}
+	got := stateB.Snapshot(key)
+	if got.Status != StatusAuthFailed || got.LastErrorCode == nil || *got.LastErrorCode != aipkg.ErrAuthFailed {
+		t.Fatalf("per-key override state changed across deployment defaults: %+v", got)
+	}
 }
 
 func TestRouterDiscardsOrdinaryOutcomeAfterSameSecretRuntimeConfigChange(t *testing.T) {
@@ -1474,7 +1577,7 @@ func TestRouterDiscardsOrdinaryOutcomeAfterSameSecretRuntimeConfigChange(t *test
 					t.Fatalf("ordinary request code=%q want %q (err=%v)", got, outcome.wantCode, callErr)
 				}
 
-				fresh := NewStateTracker(state.path, nil)
+				fresh := NewStateTracker(state.path, nil, state.configuredDefaultBaseURL)
 				fresh.mu.Lock()
 				fresh.reloadLocked()
 				got := fresh.states[updated.ID]
