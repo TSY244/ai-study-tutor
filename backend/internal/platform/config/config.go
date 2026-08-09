@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -104,8 +105,8 @@ type ClaudeConfig struct {
 	// GatewayWriteEnabled 仅 api 使用：开启 /system/claude-keys 写端点；
 	// 默认关闭（只读）。
 	GatewayWriteEnabled bool
-	// ClaudeCodeSettingsFile 仅 api 使用：映射到宿主机 ~/.claude/settings.json
-	// 的容器内固定文件路径。它不包含密钥。
+	// ClaudeCodeSettingsFile 仅 api 使用：显式配置优先，否则解析为运行时
+	// HOME 下的 .claude/settings.json。它不包含密钥。
 	ClaudeCodeSettingsFile string
 }
 
@@ -315,7 +316,13 @@ func (c *Config) loadClaude(getEnv func(string) string, service string) error {
 		return err
 	}
 	c.Claude.GatewayWriteEnabled = writeEnabled
-	c.Claude.ClaudeCodeSettingsFile = strings.TrimSpace(getEnv("CLAUDE_CODE_SETTINGS_FILE"))
+	settingsFile := strings.TrimSpace(getEnv("CLAUDE_CODE_SETTINGS_FILE"))
+	if settingsFile == "" && service == ServiceAPI {
+		if runtimeHome := strings.TrimSpace(getEnv("HOME")); runtimeHome != "" {
+			settingsFile = filepath.Join(runtimeHome, ".claude", "settings.json")
+		}
+	}
+	c.Claude.ClaudeCodeSettingsFile = settingsFile
 	return nil
 }
 

@@ -34,6 +34,15 @@ func newGatewayHandlerEnv(t *testing.T, writeEnabled bool) gatewayHandlerEnv {
 }
 
 func newGatewayHandlerEnvWithClaudeCodeSettings(t *testing.T, writeEnabled bool, settingsFile string) gatewayHandlerEnv {
+	return newGatewayHandlerEnvWithClaudeCodeSettingsAndDefaultBaseURL(t, writeEnabled, settingsFile, "")
+}
+
+func newGatewayHandlerEnvWithClaudeCodeSettingsAndDefaultBaseURL(
+	t *testing.T,
+	writeEnabled bool,
+	settingsFile string,
+	defaultBaseURL string,
+) gatewayHandlerEnv {
 	t.Helper()
 	pool := databasetest.New(t)
 	engine := apitest.NewEngine(t)
@@ -42,6 +51,7 @@ func newGatewayHandlerEnvWithClaudeCodeSettings(t *testing.T, writeEnabled bool,
 	h := &Handler{
 		Pool: pool, Store: store, State: NewStateTracker(StatePathFor(path), nil),
 		Jobs: job.NewService(pool), WriteEnabled: writeEnabled, ClaudeCodeSettingsFile: settingsFile,
+		DefaultBaseURL: defaultBaseURL,
 	}
 	h.RegisterRoutes(engine.Group("/api/v1"),
 		httpserver.BodyLimit(1<<20, http.StatusBadRequest, "bad_request"),
@@ -50,17 +60,36 @@ func newGatewayHandlerEnvWithClaudeCodeSettings(t *testing.T, writeEnabled bool,
 }
 
 func TestClaudeCodeSettingsRouteOverwritesSelectedKeyWithoutResponseSecret(t *testing.T) {
-	settingsFile := filepath.Join(t.TempDir(), "settings.json")
+	settingsDir := filepath.Join(t.TempDir(), ".claude")
+	settingsFile := filepath.Join(settingsDir, "settings.json")
+	env := newGatewayHandlerEnvWithClaudeCodeSettings(t, true, settingsFile)
+	secret := strings.Join([]string{"runtime", "claude-code", uuid.NewString()}, "-")
+	key, err := env.store.Create(Key{
+		Name:    "DeepSeek runtime",
+		APIKey:  secret,
+		Model:   "deepseek-chat",
+		BaseURL: "https://api.deepseek.com/anthropic",
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created := apitest.Do(t, env.engine, http.MethodPost,
+		"/api/v1/system/claude-keys/"+key.ID+"/claude-code-settings", nil, "")
+	if created.Code != http.StatusOK {
+		t.Fatalf("initial export status=%d body=%s", created.Code, created.Body.String())
+	}
+	assertSafeGatewayResponse(t, created.Body.Bytes(), secret)
+	if info, err := os.Stat(settingsDir); err != nil {
+		t.Fatal(err)
+	} else if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("new .claude directory permissions=%o want 700", got)
+	}
 	if err := os.WriteFile(settingsFile, []byte(`{"previous":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.Stat(settingsFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	env := newGatewayHandlerEnvWithClaudeCodeSettings(t, true, settingsFile)
-	secret := strings.Join([]string{"runtime", "claude-code", uuid.NewString()}, "-")
-	key, err := env.store.Create(Key{Name: "Export me", APIKey: secret, Model: "claude-test", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,12 +136,27 @@ func TestClaudeCodeSettingsRouteOverwritesSelectedKeyWithoutResponseSecret(t *te
 	if err := json.Unmarshal(raw, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.Schema != "https://json.schemastore.org/claude-code-settings.json" ||
-		saved.Env["ANTHROPIC_BASE_URL"] != "https://app.haoshuai.cc.cd" ||
-		saved.Env["ANTHROPIC_AUTH_TOKEN"] != secret ||
-		saved.Env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] != "1" ||
-		saved.Env["CLAUDE_CODE_ATTRIBUTION_HEADER"] != "0" {
-		t.Fatalf("saved Claude Code settings are not the requested document: %+v", saved)
+	if saved.Schema != "https://json.schemastore.org/claude-code-settings.json" {
+		t.Fatalf("unexpected Claude Code settings schema: %q", saved.Schema)
+	}
+	if saved.Env["ANTHROPIC_AUTH_TOKEN"] != secret {
+		t.Fatal("saved Claude Code settings did not contain the selected credential")
+	}
+	wantEnv := map[string]string{
+		"ANTHROPIC_BASE_URL":                       "https://api.deepseek.com/anthropic",
+		"ANTHROPIC_MODEL":                          key.Model,
+		"ANTHROPIC_DEFAULT_OPUS_MODEL":             key.Model,
+		"ANTHROPIC_DEFAULT_SONNET_MODEL":           key.Model,
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":            key.Model,
+		"CLAUDE_CODE_SUBAGENT_MODEL":               key.Model,
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID":             key.ID,
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		"CLAUDE_CODE_ATTRIBUTION_HEADER":           "0",
+	}
+	for name, want := range wantEnv {
+		if got := saved.Env[name]; got != want {
+			t.Fatalf("saved Claude Code settings %s=%q want %q", name, got, want)
+		}
 	}
 }
 
@@ -134,6 +178,13 @@ func TestClaudeCodeSettingsRouteRejectsUnavailableTargetAndWriteDisabled(t *test
 		t.Fatalf("unavailable target status=%d body=%s", failed.Code, failed.Body.String())
 	}
 	assertSafeGatewayResponse(t, failed.Body.Bytes(), secret)
+	detail := failed.Body.String()
+	if !strings.Contains(detail, "运行时 Claude HOME") || !strings.Contains(detail, "settings.json") {
+		t.Fatalf("unavailable target detail must describe runtime Claude HOME/settings permissions: %s", detail)
+	}
+	if strings.Contains(detail, "宿主机") || strings.Contains(detail, "挂载") || strings.Contains(detail, blockedParent) {
+		t.Fatalf("unavailable target detail exposed host-mount information: %s", detail)
+	}
 
 	missing := apitest.Do(t, env.engine, http.MethodPost,
 		"/api/v1/system/claude-keys/ck_missing/claude-code-settings", nil, "")
@@ -381,21 +432,97 @@ func TestWriteClaudeCodeSettingsBaseURLOverride(t *testing.T) {
 
 	// Key 有 base_url 时写入该值。
 	custom := filepath.Join(t.TempDir(), "settings.json")
-	if err := writeClaudeCodeSettings(custom, Key{APIKey: "sk-ant-unit", BaseURL: "https://gw1.example"}); err != nil {
+	if err := writeClaudeCodeSettings(custom, Key{APIKey: "sk-ant-unit", BaseURL: "https://gw1.example"}, "https://configured.example"); err != nil {
 		t.Fatal(err)
 	}
 	if got := readEnv(t, custom)["ANTHROPIC_BASE_URL"]; got != "https://gw1.example" {
 		t.Fatalf("Key 有 base_url 时应覆盖导出: %q", got)
 	}
 
-	// Key 无 base_url 时回退既有硬编码默认值。
+	// Key 无 base_url 时回退部署配置，而不是历史硬编码网关。
 	fallback := filepath.Join(t.TempDir(), "settings.json")
-	if err := writeClaudeCodeSettings(fallback, Key{APIKey: "sk-ant-unit"}); err != nil {
+	if err := writeClaudeCodeSettings(fallback, Key{APIKey: "sk-ant-unit"}, " https://configured.example/ "); err != nil {
 		t.Fatal(err)
 	}
-	if got := readEnv(t, fallback)["ANTHROPIC_BASE_URL"]; got != "https://app.haoshuai.cc.cd" {
-		t.Fatalf("Key 无 base_url 时应保留默认值: %q", got)
+	if got := readEnv(t, fallback)["ANTHROPIC_BASE_URL"]; got != "https://configured.example" {
+		t.Fatalf("Key 无 base_url 时应使用部署默认值: %q", got)
 	}
+	if strings.Contains(string(mustReadFile(t, fallback)), "https://app.haoshuai.cc.cd") {
+		t.Fatal("saved settings must never use the obsolete hardcoded gateway")
+	}
+}
+
+func TestClaudeCodeSettingsEffectiveBaseURLPrecedence(t *testing.T) {
+	tests := []struct {
+		name       string
+		perKey     string
+		configured string
+		want       string
+	}{
+		{
+			name:       "per-key override",
+			perKey:     " https://per-key.example/anthropic/ ",
+			configured: "https://configured.example/anthropic",
+			want:       "https://per-key.example/anthropic",
+		},
+		{
+			name:       "configured deployment",
+			configured: " https://configured.example/anthropic/ ",
+			want:       "https://configured.example/anthropic",
+		},
+		{
+			name: "Anthropic default",
+			want: "https://api.anthropic.com",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EffectiveBaseURL(tt.perKey, tt.configured); got != tt.want {
+				t.Fatalf("EffectiveBaseURL(%q, %q)=%q want %q", tt.perKey, tt.configured, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeCodeSettingsRouteUsesHandlerDefaultBaseURL(t *testing.T) {
+	settingsFile := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	env := newGatewayHandlerEnvWithClaudeCodeSettingsAndDefaultBaseURL(
+		t, true, settingsFile, " https://configured.deepseek.example/anthropic/ ",
+	)
+	secret := strings.Join([]string{"runtime", "configured-default", uuid.NewString()}, "-")
+	key, err := env.store.Create(Key{Name: "Configured default", APIKey: secret, Model: "deepseek-chat", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := apitest.Do(t, env.engine, http.MethodPost,
+		"/api/v1/system/claude-keys/"+key.ID+"/claude-code-settings", nil, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertSafeGatewayResponse(t, rec.Body.Bytes(), secret)
+	raw := mustReadFile(t, settingsFile)
+	if strings.Contains(string(raw), "https://app.haoshuai.cc.cd") {
+		t.Fatal("saved settings must never use the obsolete hardcoded gateway")
+	}
+	var saved struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := saved.Env["ANTHROPIC_BASE_URL"], "https://configured.deepseek.example/anthropic"; got != want {
+		t.Fatalf("ANTHROPIC_BASE_URL=%q want configured handler default %q", got, want)
+	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func TestClaudeKeyWritesCanBeDisabledAndErrorsNeverEchoSecret(t *testing.T) {

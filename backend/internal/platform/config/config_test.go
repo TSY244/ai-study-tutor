@@ -204,6 +204,46 @@ func TestLoadClaudeCodeSettingsFileWithoutReadingWorkerSecret(t *testing.T) {
 	}
 }
 
+func TestLoadClaudeCodeSettingsRuntimeHomeDefault(t *testing.T) {
+	cfg, err := LoadFrom(ServiceAPI, env(
+		"DATABASE_URL", "postgres://u:x@db/t",
+		"HOME", "/runtime/home",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.Claude.ClaudeCodeSettingsFile, "/runtime/home/.claude/settings.json"; got != want {
+		t.Fatalf("Claude Code settings path=%q want runtime HOME default %q", got, want)
+	}
+}
+
+func TestLoadClaudeCodeSettingsExplicitFileOverridesRuntimeHome(t *testing.T) {
+	cfg, err := LoadFrom(ServiceAPI, env(
+		"DATABASE_URL", "postgres://u:x@db/t",
+		"HOME", "/runtime/home",
+		"CLAUDE_CODE_SETTINGS_FILE", "/explicit/claude/settings.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.Claude.ClaudeCodeSettingsFile, "/explicit/claude/settings.json"; got != want {
+		t.Fatalf("Claude Code settings path=%q want explicit override %q", got, want)
+	}
+}
+
+func TestLoadClaudeCodeSettingsMissingRuntimeHomeIsUnavailable(t *testing.T) {
+	cfg, err := LoadFrom(ServiceAPI, env("DATABASE_URL", "postgres://u:x@db/t"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Claude.ClaudeCodeSettingsFile != "" {
+		t.Fatalf("Claude Code settings capability must be unavailable without HOME: %q", cfg.Claude.ClaudeCodeSettingsFile)
+	}
+	if cfg.SafeSummary()["claude_code_settings_configured"] != false {
+		t.Fatalf("SafeSummary must report unavailable Claude Code settings: %v", cfg.SafeSummary())
+	}
+}
+
 func TestLoadClaudeBaseURLBuildsMessagesEndpoint(t *testing.T) {
 	cfg, err := LoadFrom(ServiceWorker, env(
 		"DATABASE_URL", "postgres://u:x@db/t",

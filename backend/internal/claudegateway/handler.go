@@ -34,9 +34,13 @@ type Handler struct {
 	// nil 时按 false 处理。
 	LegacyFallback func(ctx context.Context) bool
 
-	// ClaudeCodeSettingsFile 是 API 容器内映射到宿主机
-	// ~/.claude/settings.json 的唯一允许写入目标。为空时导出端点安全失败。
+	// ClaudeCodeSettingsFile 是 Claude 运行时 HOME 下 settings.json 的写入
+	// 目标。为空时导出端点安全失败。
 	ClaudeCodeSettingsFile string
+
+	// DefaultBaseURL 是部署配置的 ANTHROPIC_BASE_URL；仅当所选 Key 未配置
+	// base_url 时用于生成 Claude Code settings.json。
+	DefaultBaseURL string
 
 	idem *httpx.IdemExecutor
 }
@@ -308,7 +312,7 @@ type claudeCodeSettingsResponse struct {
 
 const claudeCodeSettingsTarget = "~/.claude/settings.json"
 
-// saveClaudeCodeSettings 将指定已保存 Key 写入宿主机 Claude Code 设置。
+// saveClaudeCodeSettings 将指定已保存 Key 写入运行时 Claude Code 设置。
 // 浏览器仅发送 Key ID；完整 Key 始终留在 API 进程和目标文件中。
 func (h *Handler) saveClaudeCodeSettings(c *gin.Context) {
 	if !h.requireWrite(c) {
@@ -319,9 +323,9 @@ func (h *Handler) saveClaudeCodeSettings(c *gin.Context) {
 		h.writeStoreError(c, err)
 		return
 	}
-	if err := writeClaudeCodeSettings(h.ClaudeCodeSettingsFile, key); err != nil {
+	if err := writeClaudeCodeSettings(h.ClaudeCodeSettingsFile, key, h.DefaultBaseURL); err != nil {
 		httpserver.AbortWithProblem(c, http.StatusServiceUnavailable, "claude_code_settings_unavailable",
-			"Claude Code 配置不可用", "无法写入 Claude Code 设置；请检查本机 ~/.claude 目录挂载和权限。")
+			"Claude Code 配置不可用", "无法写入运行时 Claude HOME 下的 settings.json；请检查目标目录和文件权限。")
 		return
 	}
 	c.JSON(http.StatusOK, claudeCodeSettingsResponse{Status: "saved", Target: claudeCodeSettingsTarget})
@@ -330,26 +334,47 @@ func (h *Handler) saveClaudeCodeSettings(c *gin.Context) {
 type claudeCodeSettingsDocument struct {
 	Schema string `json:"$schema"`
 	Env    struct {
-		AnthropicBaseURL           string `json:"ANTHROPIC_BASE_URL"`
-		AnthropicAuthToken         string `json:"ANTHROPIC_AUTH_TOKEN"`
-		DisableNonessentialTraffic string `json:"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"`
-		AttributionHeader          string `json:"CLAUDE_CODE_ATTRIBUTION_HEADER"`
+		AnthropicBaseURL            string `json:"ANTHROPIC_BASE_URL"`
+		AnthropicAuthToken          string `json:"ANTHROPIC_AUTH_TOKEN"`
+		AnthropicModel              string `json:"ANTHROPIC_MODEL"`
+		AnthropicDefaultOpusModel   string `json:"ANTHROPIC_DEFAULT_OPUS_MODEL"`
+		AnthropicDefaultSonnetModel string `json:"ANTHROPIC_DEFAULT_SONNET_MODEL"`
+		AnthropicDefaultHaikuModel  string `json:"ANTHROPIC_DEFAULT_HAIKU_MODEL"`
+		ClaudeCodeSubagentModel     string `json:"CLAUDE_CODE_SUBAGENT_MODEL"`
+		ClaudeKeyID                 string `json:"AI_STUDY_TUTOR_CLAUDE_KEY_ID"`
+		DisableNonessentialTraffic  string `json:"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"`
+		AttributionHeader           string `json:"CLAUDE_CODE_ATTRIBUTION_HEADER"`
 	} `json:"env"`
 }
 
+const defaultClaudeBaseURL = "https://api.anthropic.com"
+
+// EffectiveBaseURL returns the normalized URL used by runtime Claude settings:
+// a per-Key override wins over the configured deployment URL, then Anthropic.
+func EffectiveBaseURL(perKey, configured string) string {
+	for _, candidate := range []string{perKey, configured} {
+		if normalized := strings.TrimRight(strings.TrimSpace(candidate), "/"); normalized != "" {
+			return normalized
+		}
+	}
+	return defaultClaudeBaseURL
+}
+
 // writeClaudeCodeSettings 原子覆盖指定文件。调用方不得返回该错误原文，
-// 因为它可能包含宿主机路径；完整 Key 只会被序列化到预期目标文件。
-func writeClaudeCodeSettings(path string, key Key) error {
+// 因为它可能包含运行时路径；完整 Key 只会被序列化到预期目标文件。
+func writeClaudeCodeSettings(path string, key Key, configuredBaseURL string) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("Claude Code settings file is not configured")
 	}
 	doc := claudeCodeSettingsDocument{Schema: "https://json.schemastore.org/claude-code-settings.json"}
-	baseURL := strings.TrimRight(strings.TrimSpace(key.BaseURL), "/") // 纯空白视为未设置（Store.Load 不归一化）；去尾 / 与其他消费方一致
-	if baseURL == "" {
-		baseURL = "https://app.haoshuai.cc.cd" // 既有默认，未设置 base_url 的 Key 行为不变
-	}
-	doc.Env.AnthropicBaseURL = baseURL
+	doc.Env.AnthropicBaseURL = EffectiveBaseURL(key.BaseURL, configuredBaseURL)
 	doc.Env.AnthropicAuthToken = key.APIKey
+	doc.Env.AnthropicModel = key.Model
+	doc.Env.AnthropicDefaultOpusModel = key.Model
+	doc.Env.AnthropicDefaultSonnetModel = key.Model
+	doc.Env.AnthropicDefaultHaikuModel = key.Model
+	doc.Env.ClaudeCodeSubagentModel = key.Model
+	doc.Env.ClaudeKeyID = key.ID
 	doc.Env.DisableNonessentialTraffic = "1"
 	doc.Env.AttributionHeader = "0"
 	raw, err := json.MarshalIndent(doc, "", "  ")

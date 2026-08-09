@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/TSY244/ai-study-tutor/backend/internal/api"
 	"github.com/TSY244/ai-study-tutor/backend/internal/claudegateway"
 	"github.com/TSY244/ai-study-tutor/backend/internal/filestore"
@@ -67,19 +69,7 @@ func main() {
 
 	// Claude 多 Key 网关：仅在配置 CLAUDE_GATEWAY_CONFIG_FILE 时注册管理端点。
 	// API 进程看不到 Anthropic secret；legacy_fallback 由 Worker 心跳推导。
-	var claudeGateway *claudegateway.Handler
-	if cfg.Claude.GatewayConfigFile != "" {
-		statusSvc := system.NewStatusService(pool, cfg.DataDir, cfg.Version)
-		claudeGateway = &claudegateway.Handler{
-			Pool:                   pool,
-			Store:                  claudegateway.NewStore(cfg.Claude.GatewayConfigFile),
-			State:                  claudegateway.NewStateTracker(claudegateway.StatePathFor(cfg.Claude.GatewayConfigFile), logger),
-			Jobs:                   job.NewService(pool),
-			WriteEnabled:           cfg.Claude.GatewayWriteEnabled,
-			LegacyFallback:         statusSvc.WorkerClaudeConfigured,
-			ClaudeCodeSettingsFile: cfg.Claude.ClaudeCodeSettingsFile,
-		}
-	}
+	claudeGateway := buildClaudeGatewayHandler(cfg, pool, logger)
 
 	// B 站 Cookie 管理：仅在配置 SITE_COOKIES_FILE 时注册管理端点。
 	// API 写共享挂载的 Cookie 文件；可用性检测由 Worker 任务执行（API 无 egress）。
@@ -109,6 +99,23 @@ func main() {
 	if err := server.Run(ctx, cfg.HTTP.Addr); err != nil {
 		logger.Error("http_server_failed", slog.String("error_code", "server_error"))
 		os.Exit(1)
+	}
+}
+
+func buildClaudeGatewayHandler(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) *claudegateway.Handler {
+	if cfg.Claude.GatewayConfigFile == "" {
+		return nil
+	}
+	statusSvc := system.NewStatusService(pool, cfg.DataDir, cfg.Version)
+	return &claudegateway.Handler{
+		Pool:                   pool,
+		Store:                  claudegateway.NewStore(cfg.Claude.GatewayConfigFile),
+		State:                  claudegateway.NewStateTracker(claudegateway.StatePathFor(cfg.Claude.GatewayConfigFile), logger),
+		Jobs:                   job.NewService(pool),
+		WriteEnabled:           cfg.Claude.GatewayWriteEnabled,
+		LegacyFallback:         statusSvc.WorkerClaudeConfigured,
+		ClaudeCodeSettingsFile: cfg.Claude.ClaudeCodeSettingsFile,
+		DefaultBaseURL:         cfg.Claude.AnthropicBaseURL,
 	}
 }
 
