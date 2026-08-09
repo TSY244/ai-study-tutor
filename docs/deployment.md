@@ -196,7 +196,8 @@ make docker-backup
 ```
 
 - 备份前自动进入维护模式（用户写操作暂停，Worker 任务安全停顿），完成后自动退出维护模式；
-- 产物为 `backups/backup-<时间戳>/`，包含数据库 dump + `app_data` 文件打包；
+- 产物为 `backups/backup-<时间戳>/`，包含数据库 dump 与 `app_data/objects` 对象文件归档，不会打包整个 `app_data` 卷；
+- 运行时 `~/.claude/settings.json`、Claude 网关配置以及 Docker secret 不在备份中；恢复后需要由操作员重新配置并在设置页再次应用一个 Key；
 - 建议升级、回滚、大批量导入前都执行一次。
 
 ### 6.2 恢复
@@ -205,7 +206,7 @@ make docker-backup
 make docker-restore RESTORE_BACKUP=backup-20260725-120000
 ```
 
-恢复是破坏性操作（覆盖现有数据），命令内置 `RESTORE_CONFIRM=RESTORE` 二次确认。恢复完成后 `make docker-up` 重启服务。
+恢复是破坏性操作（覆盖现有数据库与对象文件），命令内置 `RESTORE_CONFIRM=RESTORE` 二次确认。恢复不会还原运行时 Claude Code 设置、`data/claude-gateway/keys.json` 或 `deploy/secrets/`；完成后运行 `make docker-up` 重启服务，再重新配置并应用 Claude Key。
 
 ### 6.3 彻底重置（危险）
 
