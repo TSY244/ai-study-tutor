@@ -377,7 +377,7 @@ function KeyCard({
             onClick={onSaveToClaudeCode}
           >
             <Save aria-hidden="true" className="h-4 w-4" />
-            应用到运行服务
+            应用到运行服务的 Claude Code
           </Button>
           <Button
             variant="secondary"

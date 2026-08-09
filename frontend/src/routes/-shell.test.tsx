@@ -241,7 +241,7 @@ describe('App Shell', () => {
     const applyButton = within(keyCard).getByRole('button', {
       name: '应用主线路到运行服务的 Claude Code',
     })
-    expect(applyButton).toHaveTextContent('应用到运行服务')
+    expect(applyButton).toHaveTextContent('应用到运行服务的 Claude Code')
 
     await user.click(applyButton)
     const dialog = screen.getByRole('dialog', { name: '应用到运行服务的 Claude Code' })

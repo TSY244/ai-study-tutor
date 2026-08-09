@@ -100,7 +100,7 @@ fLaC/OggS，audio/video 结合扩展名区分）、合法 UTF-8 文本兜底为
    的 token、规范化 Base URL 与模型是否仍匹配；设置文件缺失或没有
    应用选择器时，才回退到 claudegateway keys.json 的优先级/权重规则。
    显式选择失效时返回脱敏配置错误，不静默切换 Key。子进程 env 只放行
-   `HOME`/`PATH`/`CI`/`NO_COLOR`，并注入解析后的
+   `HOME`/`PATH`/`SHELL=/bin/bash`/`CI`/`NO_COLOR`，并注入解析后的
    `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_MODEL`、
    默认模型别名、`CLAUDE_CODE_SUBAGENT_MODEL`、应用选择器及 Claude Code
    非必要流量控制项；单次调用默认超时 10 分钟。api_key 只出现在设置
