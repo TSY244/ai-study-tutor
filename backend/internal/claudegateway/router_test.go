@@ -579,18 +579,19 @@ func TestRouterGenerateForKeyFailsClosedWhenAttemptStateCannotPersist(t *testing
 		defer server.Close()
 		router, state := newTestRouter(t, []Key{key}, server)
 		persistedPath := state.path
-		invalidPath := t.TempDir()
 		mutations := 0
 		state.beforePersist = func() {
 			mutations++
 			if mutations == 2 {
-				state.path = invalidPath
+				state.writeFile = func(string, []byte) error {
+					return errors.New("synthetic terminal persistence failure")
+				}
 			}
 		}
 
 		_, err := router.GenerateForKey(context.Background(), key.ID, routerTestRequest())
 		if err == nil {
-			t.Fatal("finish persistence failure returned success")
+			t.Fatalf("finish persistence failure returned success after %d mutations", mutations)
 		}
 		if got := aipkg.AsProviderError(err).Code; got != aipkg.ErrUnavailable {
 			t.Fatalf("finish persistence error code = %q, want %q", got, aipkg.ErrUnavailable)
@@ -761,10 +762,16 @@ func TestRouterGenerateForKeyOlderAttemptCannotOverwriteNewerAttempt(t *testing.
 	}()
 	<-secondStarted
 	secondAttemptID, secondReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+	writeCalls := 0
+	state.writeFile = func(string, []byte) error {
+		writeCalls++
+		return errors.New("stale completion must not write")
+	}
 	close(releaseFirst)
 	firstErr := <-firstDone
 	mid := NewStateTracker(state.path, nil).Snapshot(key)
 	midAttemptID, midReadErr := testingAttemptIDFromDisk(state.path, key.ID)
+	state.writeFile = nil
 	close(releaseSecond)
 	secondErr := <-secondDone
 	final := NewStateTracker(state.path, nil).Snapshot(key)
@@ -778,6 +785,9 @@ func TestRouterGenerateForKeyOlderAttemptCannotOverwriteNewerAttempt(t *testing.
 	}
 	if got := aipkg.AsProviderError(firstErr).Code; got != aipkg.ErrInvalidRequest {
 		t.Fatalf("older request error code = %q, want %q", got, aipkg.ErrInvalidRequest)
+	}
+	if writeCalls != 0 {
+		t.Fatalf("stale targeted completion writes = %d, want 0", writeCalls)
 	}
 	if mid.Status != StatusTesting || midAttemptID != secondAttemptID {
 		t.Fatalf("older completion changed newer attempt: state=%+v attempt=%q want=%q", mid, midAttemptID, secondAttemptID)
@@ -1016,6 +1026,132 @@ func TestStateTrackersSerializeSameKeyFailureMutation(t *testing.T) {
 	if state.ConsecutiveFailures != 2 || state.Status != StatusCoolingDown {
 		t.Fatalf("same-key concurrent failures = %+v, want count=2 cooling_down", state)
 	}
+}
+
+func TestStateOrdinaryOutcomesDoNotReplaceNewTargetedAttemptAfterKeyReplacement(t *testing.T) {
+	outcomes := []struct {
+		name  string
+		apply func(*StateTracker, Key)
+	}{
+		{
+			name: "success",
+			apply: func(state *StateTracker, key Key) {
+				state.MarkSuccessForKey(key, time.Millisecond)
+			},
+		},
+		{
+			name: "authentication",
+			apply: func(state *StateTracker, key Key) {
+				state.MarkAuthFailedForKey(key, aipkg.ErrAuthFailed, time.Millisecond)
+			},
+		},
+		{
+			name: "transient",
+			apply: func(state *StateTracker, key Key) {
+				state.MarkTransientFailure(key, aipkg.ErrOverloaded, time.Millisecond)
+			},
+		},
+		{
+			name: "nonfailover",
+			apply: func(state *StateTracker, key Key) {
+				state.MarkNonFailoverFailureForKey(key, aipkg.ErrRefused, time.Millisecond)
+			},
+		},
+	}
+
+	for _, tc := range outcomes {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			state := NewStateTracker(path, nil)
+			oldKey := routerTestKey("replaced-during-ordinary-"+tc.name, 10, 1)
+			state.MarkSuccessForKey(oldKey, time.Millisecond)
+			state.Reset(oldKey.ID)
+			newKey := oldKey
+			newKey.APIKey = syntheticSecret("replacement-" + tc.name)
+			attemptID, err := state.beginTestForKey(newKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tc.apply(state, oldKey)
+			fresh := NewStateTracker(path, nil)
+			fresh.mu.Lock()
+			fresh.reloadLocked()
+			mid := fresh.states[newKey.ID]
+			fresh.mu.Unlock()
+			if mid.Status != StatusTesting || mid.Fingerprint != Fingerprint(newKey.APIKey) ||
+				mid.TestingAttemptID != attemptID {
+				t.Fatalf("old %s outcome replaced new targeted attempt: %+v", tc.name, mid)
+			}
+
+			if err := state.finishTestForKey(newKey, attemptID, testSucceeded, "", 2*time.Millisecond); err != nil {
+				t.Fatal(err)
+			}
+			final := NewStateTracker(path, nil).Snapshot(newKey)
+			if final.Status != StatusHealthy || final.Fingerprint != Fingerprint(newKey.APIKey) ||
+				final.TestingAttemptID != "" {
+				t.Fatalf("new targeted attempt did not finish healthy: %+v", final)
+			}
+		})
+	}
+}
+
+func TestStateSemanticNoOpsSkipPersistence(t *testing.T) {
+	t.Run("best effort fingerprint rejection", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.json")
+		state := NewStateTracker(path, nil)
+		oldKey := routerTestKey("best-effort-noop", 10, 1)
+		newKey := oldKey
+		newKey.APIKey = syntheticSecret("best-effort-noop-replacement")
+		attemptID, err := state.beginTestForKey(newKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeCalls := 0
+		state.writeFile = func(string, []byte) error {
+			writeCalls++
+			return errors.New("semantic no-op must not write")
+		}
+
+		state.MarkSuccessForKey(oldKey, time.Millisecond)
+		if writeCalls != 0 {
+			t.Fatalf("best-effort semantic no-op writes = %d, want 0", writeCalls)
+		}
+		persisted := NewStateTracker(path, nil).Snapshot(newKey)
+		if persisted.Status != StatusTesting || persisted.TestingAttemptID != attemptID {
+			t.Fatalf("best-effort semantic no-op changed active attempt: %+v", persisted)
+		}
+	})
+
+	t.Run("required stale attempt", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.json")
+		state := NewStateTracker(path, nil)
+		key := routerTestKey("required-noop", 10, 1)
+		oldAttemptID, err := state.beginTestForKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		newAttemptID, err := state.beginTestForKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeCalls := 0
+		state.writeFile = func(string, []byte) error {
+			writeCalls++
+			return errors.New("semantic no-op must not write")
+		}
+
+		if err := state.finishTestForKey(key, oldAttemptID, testSucceeded, "", time.Millisecond); err != nil {
+			t.Fatalf("stale targeted completion returned persistence error: %v", err)
+		}
+		if writeCalls != 0 {
+			t.Fatalf("required semantic no-op writes = %d, want 0", writeCalls)
+		}
+		persisted := NewStateTracker(path, nil).Snapshot(key)
+		if persisted.Status != StatusTesting || persisted.TestingAttemptID != newAttemptID {
+			t.Fatalf("required semantic no-op changed newer attempt: %+v", persisted)
+		}
+	})
 }
 
 func TestRouterGenerateForKeySuccessRecoversAuthFailedState(t *testing.T) {

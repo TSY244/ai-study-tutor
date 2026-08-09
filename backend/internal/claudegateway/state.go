@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
@@ -50,6 +51,7 @@ type StateTracker struct {
 	now           func() time.Time
 	logger        *slog.Logger
 	beforePersist func()
+	writeFile     func(string, []byte) error
 
 	mu       sync.Mutex
 	states   map[string]KeyState
@@ -149,6 +151,9 @@ func (t *StateTracker) persistMutation(
 	t.reloadLocked()
 	current, exists := t.states[id]
 	next, keep := mutate(current, exists)
+	if exists == keep && (!exists || reflect.DeepEqual(current, next)) {
+		return nil
+	}
 	if !keep {
 		delete(t.states, id)
 	} else {
@@ -174,7 +179,11 @@ func (t *StateTracker) persistLocked() error {
 		t.warn("claude_gateway_state_marshal_failed", err)
 		return err
 	}
-	if err := writeFileAtomic(t.path, raw); err != nil {
+	writeFile := writeFileAtomic
+	if t.writeFile != nil {
+		writeFile = t.writeFile
+	}
+	if err := writeFile(t.path, raw); err != nil {
 		t.warn("claude_gateway_state_persist_failed", err)
 		return err
 	}
@@ -296,7 +305,10 @@ func (t *StateTracker) markSuccess(k Key, latency time.Duration) {
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
-	t.persistMutationLocked(k.ID, func(KeyState, bool) (KeyState, bool) {
+	t.persistMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
+		if hasDifferentFingerprint(st, exists, k) {
+			return st, true
+		}
 		return successState(k, now, latencyMs), true
 	})
 }
@@ -316,7 +328,10 @@ func (t *StateTracker) markAuthFailed(k Key, code string, latency time.Duration)
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
-	t.persistMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
+	t.persistMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
+		if hasDifferentFingerprint(st, exists, k) {
+			return st, true
+		}
 		return authFailedState(st, k, code, now, latencyMs), true
 	})
 }
@@ -329,7 +344,10 @@ func (t *StateTracker) MarkTransientFailure(k Key, code string, latency time.Dur
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
-	t.persistMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
+	t.persistMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
+		if hasDifferentFingerprint(st, exists, k) {
+			return st, true
+		}
 		return transientFailureState(st, k, code, now, latencyMs), true
 	})
 }
@@ -349,7 +367,10 @@ func (t *StateTracker) markNonFailoverFailure(k Key, code string, latency time.D
 	defer t.mu.Unlock()
 	now := t.now().UTC()
 	latencyMs := latency.Milliseconds()
-	t.persistMutationLocked(k.ID, func(st KeyState, _ bool) (KeyState, bool) {
+	t.persistMutationLocked(k.ID, func(st KeyState, exists bool) (KeyState, bool) {
+		if hasDifferentFingerprint(st, exists, k) {
+			return st, true
+		}
 		st = stateForKey(st, k)
 		if st.TestingAttemptID != "" {
 			st.TestingAttemptID = ""
@@ -499,6 +520,11 @@ func keyFingerprint(k Key) string {
 		return ""
 	}
 	return Fingerprint(k.APIKey)
+}
+
+func hasDifferentFingerprint(st KeyState, exists bool, k Key) bool {
+	fingerprint := keyFingerprint(k)
+	return exists && fingerprint != "" && st.Fingerprint != "" && st.Fingerprint != fingerprint
 }
 
 func stateForKey(st KeyState, k Key) KeyState {
