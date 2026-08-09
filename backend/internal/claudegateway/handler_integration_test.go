@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	aipkg "github.com/TSY244/ai-study-tutor/backend/internal/ai"
 	"github.com/TSY244/ai-study-tutor/backend/internal/apitest"
 	"github.com/TSY244/ai-study-tutor/backend/internal/httpx"
 	"github.com/TSY244/ai-study-tutor/backend/internal/idempotency"
@@ -489,6 +491,144 @@ func TestClaudeKeyRuntimeConfigPatchExplicitlyResetsState(t *testing.T) {
 			}
 			if updated.Status != StatusUnknown || updated.LastErrorCode != nil || updated.LastFailureAt != nil {
 				t.Fatalf("runtime config patch retained stale state: %+v", updated)
+			}
+		})
+	}
+}
+
+func TestClaudeKeyRuntimeConfigPatchBlocksOldOrdinaryOutcomeWithoutSnapshot(t *testing.T) {
+	outcomes := []struct {
+		name       string
+		patchField string
+		patchValue string
+		statusCode int
+		body       string
+		wantCode   string
+		wantStatus string
+	}{
+		{
+			name:       "model change then current success",
+			patchField: "model",
+			patchValue: "deepseek-reasoner",
+			statusCode: http.StatusOK,
+			body:       `{"model":"deepseek-reasoner","stop_reason":"tool_use","content":[{"type":"tool_use","name":"structured_result","input":{"ok":true}}]}`,
+			wantStatus: StatusHealthy,
+		},
+		{
+			name:       "base URL change then current authentication failure",
+			patchField: "base_url",
+			patchValue: "https://new-gateway.example/anthropic",
+			statusCode: http.StatusUnauthorized,
+			body:       `{"error":{"type":"authentication_error","message":"bad key"}}`,
+			wantCode:   aipkg.ErrAuthFailed,
+			wantStatus: StatusAuthFailed,
+		},
+		{
+			name:       "token change then current transient failure",
+			patchField: "api_key",
+			statusCode: http.StatusServiceUnavailable,
+			body:       `{"error":{"type":"overloaded_error","message":"busy"}}`,
+			wantCode:   aipkg.ErrOverloaded,
+			wantStatus: StatusCoolingDown,
+		},
+	}
+
+	for _, tc := range outcomes {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newGatewayHandlerEnv(t, true)
+			oldSecret := strings.Join([]string{"runtime", "old", uuid.NewString()}, "-")
+			newSecret := strings.Join([]string{"runtime", "new", uuid.NewString()}, "-")
+			key, err := env.store.Create(Key{
+				Name: "Runtime generation", APIKey: oldSecret, Model: "deepseek-chat",
+				BaseURL: "https://old-gateway.example/anthropic", Enabled: true,
+				MaxConsecutiveFailures: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			started := make(chan struct{})
+			releaseOld := make(chan struct{})
+			calls := 0
+			router := &Router{
+				Store: env.store, State: env.state, Endpoint: "https://anthropic.test/v1/messages",
+				DefaultModel: "claude-test", MaxOutputTokens: 64,
+			}
+			router.HTTPClient = &http.Client{Transport: gatewayRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					close(started)
+					<-releaseOld
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body: io.NopCloser(strings.NewReader(
+							`{"model":"deepseek-chat","stop_reason":"tool_use","content":[{"type":"tool_use","name":"structured_result","input":{"ok":true}}]}`)),
+						Request: request,
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: tc.statusCode,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(tc.body)),
+					Request:    request,
+				}, nil
+			})}
+
+			oldDone := make(chan error, 1)
+			go func() {
+				_, callErr := router.Generate(context.Background(), routerTestRequest())
+				oldDone <- callErr
+			}()
+			<-started
+
+			patchValue := tc.patchValue
+			if tc.patchField == "api_key" {
+				patchValue = newSecret
+			}
+			patchBody, err := json.Marshal(map[string]string{tc.patchField: patchValue})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := apitest.Do(t, env.engine, http.MethodPatch,
+				"/api/v1/system/claude-keys/"+key.ID, nil, string(patchBody))
+			assertSafeGatewayResponse(t, rec.Body.Bytes(), oldSecret)
+			assertSafeGatewayResponse(t, rec.Body.Bytes(), newSecret)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("patch status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			updated, err := env.store.Get(key.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			close(releaseOld)
+			if err := <-oldDone; err != nil {
+				t.Fatalf("old request returned unexpected error: %v", err)
+			}
+			_, currentErr := router.Generate(context.Background(), routerTestRequest())
+			if tc.wantCode == "" {
+				if currentErr != nil {
+					t.Fatalf("current request returned unexpected error: %v", currentErr)
+				}
+			} else if got := aipkg.AsProviderError(currentErr).Code; got != tc.wantCode {
+				t.Fatalf("current request code=%q want %q (err=%v)", got, tc.wantCode, currentErr)
+			}
+
+			fresh := NewStateTracker(env.state.path, nil)
+			fresh.mu.Lock()
+			fresh.reloadLocked()
+			got := fresh.states[key.ID]
+			fresh.mu.Unlock()
+			if got.Fingerprint != keyStateFingerprint(updated) || got.Status != tc.wantStatus {
+				t.Fatalf("current request did not own updated generation state: %+v", got)
+			}
+			if tc.wantCode == "" {
+				if got.LastSuccessAt == nil || got.LastErrorCode != nil {
+					t.Fatalf("current success diagnostics not recorded: %+v", got)
+				}
+			} else if got.LastErrorCode == nil || *got.LastErrorCode != tc.wantCode {
+				t.Fatalf("current failure diagnostics not recorded: %+v", got)
 			}
 		})
 	}

@@ -25,6 +25,8 @@ const (
 	StatusAuthFailed  = "auth_failed"
 	StatusDisabled    = "disabled"
 	StatusTesting     = "testing"
+
+	keyStateFingerprintPrefix = "config-sha256:"
 )
 
 // KeyState 是单个 Key 的非敏感运行态（持久化在 state.json）。
@@ -286,6 +288,7 @@ func (t *StateTracker) Eligible(k Key, now time.Time) bool {
 	if !k.Enabled {
 		return false
 	}
+	t.migrateLegacyStateLocked(k)
 	st := t.effectiveLocked(k, now)
 	switch st.Status {
 	case StatusAuthFailed, StatusCoolingDown, StatusDisabled:
@@ -293,6 +296,26 @@ func (t *StateTracker) Eligible(k Key, now time.Time) bool {
 	default:
 		return true
 	}
+}
+
+// migrateLegacyStateLocked upgrades pre-configuration-generation state before
+// a Worker call is admitted. A mismatching config-sha256 state is deliberately
+// left untouched: the caller may hold a stale Key, and must not overwrite a
+// newer generation already persisted by the API.
+func (t *StateTracker) migrateLegacyStateLocked(k Key) {
+	fingerprint := keyStateFingerprint(k)
+	st, exists := t.states[k.ID]
+	if !exists || fingerprint == "" || st.Fingerprint == fingerprint ||
+		strings.HasPrefix(st.Fingerprint, keyStateFingerprintPrefix) {
+		return
+	}
+	t.persistMutationLocked(k.ID, func(current KeyState, currentExists bool) (KeyState, bool) {
+		if !currentExists || current.Fingerprint == fingerprint ||
+			strings.HasPrefix(current.Fingerprint, keyStateFingerprintPrefix) {
+			return current, currentExists
+		}
+		return unknownStateForKey(k), true
+	})
 }
 
 // MarkSuccess 记录一次成功调用：healthy，清零连续失败，清除冷却。
@@ -509,14 +532,31 @@ func transientFailureState(st KeyState, k Key, code string, now time.Time, laten
 	return st
 }
 
-// Reset 清除运行态（回到 unknown；禁用展示由配置侧推导）。
-// API 侧换 Key 或改 enabled 后调用，使旧的 auth_failed/cooling_down 失效。
+// Reset 删除运行态；用于删除 Key 与不再需要代际隔离的测试清理。
 func (t *StateTracker) Reset(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.persistMutationLocked(id, func(KeyState, bool) (KeyState, bool) {
 		return KeyState{}, false
 	})
+}
+
+// ResetForKey 原子写入当前配置代际的 unknown 栅栏。API 更新配置时不能
+// 只删除旧状态，否则较早发出的请求可能在删除后重建旧代际状态，并阻塞
+// 当前 Worker 的后续结果落态。禁用展示仍由 Key.Enabled 推导。
+func (t *StateTracker) ResetForKey(k Key) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.persistMutationLocked(k.ID, func(KeyState, bool) (KeyState, bool) {
+		return unknownStateForKey(k), true
+	})
+}
+
+func unknownStateForKey(k Key) KeyState {
+	return KeyState{
+		Status:      StatusUnknown,
+		Fingerprint: keyStateFingerprint(k),
+	}
 }
 
 func keyStateFingerprint(k Key) string {
@@ -535,13 +575,15 @@ func keyStateFingerprint(k Key) string {
 		APIKey  string `json:"api_key"`
 		Model   string `json:"model"`
 		BaseURL string `json:"base_url"`
+		Enabled bool   `json:"enabled"`
 	}{
 		APIKey:  apiKey,
 		Model:   strings.TrimSpace(k.Model),
 		BaseURL: baseURL,
+		Enabled: k.Enabled,
 	})
 	sum := sha256.Sum256(material)
-	return "config-sha256:" + hex.EncodeToString(sum[:])
+	return keyStateFingerprintPrefix + hex.EncodeToString(sum[:])
 }
 
 func hasDifferentFingerprint(st KeyState, exists bool, k Key) bool {

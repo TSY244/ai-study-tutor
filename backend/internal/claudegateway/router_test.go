@@ -1298,6 +1298,94 @@ func TestStateSnapshotRejectsLegacyTokenOnlyFingerprint(t *testing.T) {
 	}
 }
 
+func TestRouterEligibleMigratesLegacyStateBeforeRecordingTransientFailures(t *testing.T) {
+	key := routerTestKey("legacy-worker-route", 10, 1)
+	key.MaxConsecutiveFailures = 2
+	router, state := newTestRouter(t, []Key{key}, nil)
+	router.Endpoint = "https://anthropic.test/v1/messages"
+	router.HTTPClient = &http.Client{Transport: gatewayRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"overloaded_error","message":"busy"}}`)),
+			Request:    request,
+		}, nil
+	})}
+	state.mu.Lock()
+	state.persistMutationLocked(key.ID, func(KeyState, bool) (KeyState, bool) {
+		return KeyState{
+			Status:      StatusHealthy,
+			Fingerprint: Fingerprint(key.APIKey),
+		}, true
+	})
+	state.mu.Unlock()
+
+	for attempt, wantStatus := range []string{StatusUnknown, StatusCoolingDown} {
+		_, err := router.Generate(context.Background(), routerTestRequest())
+		if got := aipkg.AsProviderError(err).Code; got != aipkg.ErrOverloaded {
+			t.Fatalf("attempt %d error code=%q want %q", attempt+1, got, aipkg.ErrOverloaded)
+		}
+
+		fresh := NewStateTracker(state.path, nil)
+		fresh.mu.Lock()
+		fresh.reloadLocked()
+		got := fresh.states[key.ID]
+		fresh.mu.Unlock()
+		if got.Fingerprint != keyStateFingerprint(key) || got.Status != wantStatus ||
+			got.ConsecutiveFailures != attempt+1 || got.LastErrorCode == nil ||
+			*got.LastErrorCode != aipkg.ErrOverloaded {
+			t.Fatalf("attempt %d legacy Worker state=%+v want status=%s failures=%d current generation",
+				attempt+1, got, wantStatus, attempt+1)
+		}
+	}
+}
+
+func TestStateGenerationMigrationDoesNotCrossRuntimeConfigBoundaries(t *testing.T) {
+	t.Run("enabled transition fences old outcome", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.json")
+		state := NewStateTracker(path, nil)
+		enabled := routerTestKey("enabled-generation", 10, 1)
+		disabled := enabled
+		disabled.Enabled = false
+		state.ResetForKey(disabled)
+
+		state.MarkAuthFailedForKey(enabled, aipkg.ErrAuthFailed, time.Millisecond)
+		fresh := NewStateTracker(path, nil)
+		fresh.mu.Lock()
+		fresh.reloadLocked()
+		got := fresh.states[enabled.ID]
+		fresh.mu.Unlock()
+		if got.Fingerprint != keyStateFingerprint(disabled) || got.Status != StatusUnknown ||
+			got.LastErrorCode != nil || got.Fingerprint == keyStateFingerprint(enabled) {
+			t.Fatalf("enabled transition admitted old outcome: %+v", got)
+		}
+		if state.Eligible(disabled, state.Now()) {
+			t.Fatal("disabled generation became eligible")
+		}
+	})
+
+	t.Run("stale eligible cannot replace newer config generation", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.json")
+		state := NewStateTracker(path, nil)
+		stale := routerTestKey("stale-eligible-generation", 10, 1)
+		current := stale
+		current.Model = "replacement-model"
+		state.ResetForKey(current)
+
+		if !state.Eligible(stale, state.Now()) {
+			t.Fatal("stale config mismatch should be treated as unknown for this isolated eligibility check")
+		}
+		fresh := NewStateTracker(path, nil)
+		fresh.mu.Lock()
+		fresh.reloadLocked()
+		got := fresh.states[current.ID]
+		fresh.mu.Unlock()
+		if got.Fingerprint != keyStateFingerprint(current) || got.Status != StatusUnknown {
+			t.Fatalf("stale Eligible replaced newer config generation: %+v", got)
+		}
+	})
+}
+
 func TestRouterDiscardsOrdinaryOutcomeAfterSameSecretRuntimeConfigChange(t *testing.T) {
 	configChanges := []struct {
 		name  string

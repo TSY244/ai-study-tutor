@@ -264,9 +264,10 @@ func (h *Handler) updateKey(c *gin.Context) {
 		return
 	}
 	// 换 Key 或改运行端点、模型、enabled 时复位运行态：旧的 auth_failed/cooling_down
-	// 不再适用于新配置（unknown/disabled 由配置侧推导）。
+	// 不再适用于新配置。写入新代际 unknown 栅栏，而不是删除状态，防止旧的
+	// in-flight 请求在 PATCH 后重建旧代际；disabled 仍由配置侧推导。
 	if patch.APIKey != nil || patch.Model != nil || patch.BaseURL != nil || patch.Enabled != nil {
-		h.State.Reset(updated.ID)
+		h.State.ResetForKey(updated)
 	}
 	c.JSON(http.StatusOK, safeView(updated, h.State.Snapshot(updated)))
 }
