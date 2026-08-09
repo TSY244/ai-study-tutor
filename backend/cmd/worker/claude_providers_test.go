@@ -13,6 +13,8 @@ import (
 	aipkg "github.com/TSY244/ai-study-tutor/backend/internal/ai"
 	"github.com/TSY244/ai-study-tutor/backend/internal/claudegateway"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/config"
+	"github.com/TSY244/ai-study-tutor/backend/internal/worker/aihandlers"
+	"github.com/TSY244/ai-study-tutor/backend/internal/worker/lessonimport"
 )
 
 func TestBuildClaudeProvidersKeepsGatewayHotReloadAvailableToLessonImport(t *testing.T) {
@@ -125,6 +127,43 @@ func workerGatewayTestKey(name string, priority int) claudegateway.Key {
 		Enabled: true, Priority: priority, Weight: 1, TimeoutSeconds: 1,
 		CooldownSeconds: 60, MaxConsecutiveFailures: 1,
 	}
+}
+
+func TestBuildClaudeProvidersWiresRuntimeSettingsAndHome(t *testing.T) {
+	settingsFile := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	cfg := gatewayTestConfig(filepath.Join(t.TempDir(), "keys.json"))
+	cfg.Claude.ClaudeCodeSettingsFile = settingsFile
+	cfg.DataDir = filepath.Join(t.TempDir(), "data")
+
+	t.Run("native HOME wins", func(t *testing.T) {
+		runtimeHome := filepath.Join(t.TempDir(), "runtime-home")
+		t.Setenv("HOME", "  "+runtimeHome+"  ")
+		providers := buildClaudeProviders(cfg, "", false, nil)
+		urlExtractor, ok := providers.URLExtractor.(*lessonimport.ClaudeURLCLIExtractor)
+		if !ok {
+			t.Fatalf("URLExtractor 类型错误: %T", providers.URLExtractor)
+		}
+		quizGenerator, ok := providers.QuizCLI.(*aihandlers.ClaudeQuizCLIGenerator)
+		if !ok {
+			t.Fatalf("QuizCLI 类型错误: %T", providers.QuizCLI)
+		}
+		if urlExtractor.SettingsFile != settingsFile || quizGenerator.SettingsFile != settingsFile {
+			t.Fatalf("Claude Code settings 未传给两个 CLI: URL=%q Quiz=%q", urlExtractor.SettingsFile, quizGenerator.SettingsFile)
+		}
+		if urlExtractor.Home != runtimeHome || quizGenerator.Home != runtimeHome {
+			t.Fatalf("原生 HOME 应优先: URL=%q Quiz=%q", urlExtractor.Home, quizGenerator.Home)
+		}
+	})
+
+	t.Run("blank HOME falls back to data dir", func(t *testing.T) {
+		t.Setenv("HOME", " \t ")
+		providers := buildClaudeProviders(cfg, "", false, nil)
+		urlExtractor := providers.URLExtractor.(*lessonimport.ClaudeURLCLIExtractor)
+		quizGenerator := providers.QuizCLI.(*aihandlers.ClaudeQuizCLIGenerator)
+		if urlExtractor.Home != cfg.DataDir || quizGenerator.Home != cfg.DataDir {
+			t.Fatalf("空 HOME 应回退数据目录: URL=%q Quiz=%q", urlExtractor.Home, quizGenerator.Home)
+		}
+	})
 }
 
 // TestBuildClaudeProvidersURLImportRequiresGatewayKey 证明 URL 导入只认网关

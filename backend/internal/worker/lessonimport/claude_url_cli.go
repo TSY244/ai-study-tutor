@@ -11,7 +11,7 @@ import (
 	"time"
 
 	aipkg "github.com/TSY244/ai-study-tutor/backend/internal/ai"
-	"github.com/TSY244/ai-study-tutor/backend/internal/claudegateway"
+	"github.com/TSY244/ai-study-tutor/backend/internal/worker/claudecli"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker/proc"
 )
 
@@ -21,9 +21,8 @@ import (
 //   - worker 容器内执行 `claude --allowedTools "Bash Read Write WebFetch"
 //     -p <prompt> --output-format json`；WebFetch 是 CLI 客户端工具，抓取
 //     发生在 worker 容器（需出网访问白名单站点），不经网关 server tool；
-//   - 凭证来自 claudegateway keys.json：选当前优先级最高的启用 Key，
-//     api_key 注入 CLI 的 ANTHROPIC_AUTH_TOKEN；base_url 按 Key.base_url
-//     优先、进程级 ANTHROPIC_BASE_URL 兜底解析；
+//   - 凭证来自 claudegateway keys.json：已应用 settings.json 的 Key 选择器
+//     优先，缺失时按网关优先级回退；api_key 只注入子进程环境；
 //   - api_key 只允许出现在子进程 env（容器内 argv/env 可接受），绝不进入
 //     日志、错误 detail、ai_runs 或任何持久化位置；
 //   - 错误映射保持既有稳定码：超时/429/5xx 类 → 可重试
@@ -48,11 +47,13 @@ type URLExtractor interface {
 // ClaudeURLCLIExtractor 经 proc.Runner 执行 Claude Code CLI 完成 URL 提取。
 type ClaudeURLCLIExtractor struct {
 	Proc proc.Runner
-	// KeysFile 是 claudegateway keys.json 路径（worker 已挂载，热重载由
-	// Store 负责，每次提取重新选择当前优先级最高的启用 Key）。
+	// KeysFile 是 Claude 网关 keys.json 路径（worker 已挂载）。
 	KeysFile string
+	// SettingsFile 是已应用的 Claude Code settings.json 路径；显式选择器
+	// 存在时必须与 KeysFile 中启用的 Key 完全匹配。
+	SettingsFile string
 	// BaseURL 是进程级 ANTHROPIC_BASE_URL（中转网关）；Key.base_url 非空时
-	// 优先于它，两者皆空则不注入 ANTHROPIC_BASE_URL，由 CLI 使用默认端点。
+	// 优先于它，两者皆空时由共享运行时使用 Anthropic 默认端点。
 	BaseURL string
 	// Home 是 CLI 子进程的 HOME（容器内必须可写，如 /var/lib/ai-study-tutor）。
 	Home string
@@ -86,15 +87,15 @@ func (x *ClaudeURLCLIExtractor) Extract(ctx context.Context, workDir string, req
 		return aipkg.Response{}, aipkg.WrapError(aipkg.ErrInvalidRequest,
 			"构建 Claude 请求失败。", fmt.Errorf("lesson_url_extract 缺少 canonical URL"))
 	}
-	key, err := x.selectKey()
+	runtime := claudecli.Runtime{
+		KeysFile:       x.KeysFile,
+		SettingsFile:   x.SettingsFile,
+		DefaultBaseURL: x.BaseURL,
+		Home:           x.Home,
+	}
+	selection, err := runtime.Resolve()
 	if err != nil {
 		return aipkg.Response{}, err
-	}
-	// base_url 解析：Key.base_url 优先，进程级 ANTHROPIC_BASE_URL 兜底；
-	// 纯空白视为未设置（Store.Load 不归一化）。
-	baseURL := strings.TrimSpace(key.BaseURL)
-	if baseURL == "" {
-		baseURL = x.BaseURL
 	}
 
 	timeout := x.Timeout
@@ -113,7 +114,7 @@ func (x *ClaudeURLCLIExtractor) Extract(ctx context.Context, workDir string, req
 		Args: []string{"--allowedTools", claudeCLIAllowedTools,
 			"-p", buildClaudeCLIPrompt(req.WebFetch.URL), "--output-format", "json"},
 		Dir: workDir,
-		Env: x.env(key.APIKey, baseURL),
+		Env: runtime.Env(selection),
 	})
 	// Job 取消/总时限优先：原样返回 ctx 错误，由 worker 运行器归类。
 	if ctx.Err() != nil {
@@ -158,7 +159,7 @@ func (x *ClaudeURLCLIExtractor) Extract(ctx context.Context, workDir string, req
 	}
 	return aipkg.Response{
 		JSON:              payload,
-		Model:             key.Model,
+		Model:             selection.Key.Model,
 		ProviderRequestID: env.SessionID,
 		Usage: aipkg.Usage{
 			InputTokens:      env.Usage.InputTokens,
@@ -175,53 +176,6 @@ func (x *ClaudeURLCLIExtractor) proc() proc.Runner {
 		return x.Proc
 	}
 	return proc.ExecRunner{}
-}
-
-// selectKey 从 keys.json 选当前优先级最高的启用 Key（priority 升序、同
-// 级 weight 降序、再按文件顺序）。无启用 Key → claude_not_configured。
-// 返回的 Key 含 api_key，只允许注入子进程 env。
-func (x *ClaudeURLCLIExtractor) selectKey() (claudegateway.Key, error) {
-	keys, err := claudegateway.NewStore(x.KeysFile).Load()
-	if err != nil {
-		return claudegateway.Key{}, aipkg.WrapError(aipkg.ErrUnavailable,
-			"读取 Claude 网关配置失败，请稍后重试。", err)
-	}
-	best := -1
-	for i, k := range keys {
-		if !k.Enabled {
-			continue
-		}
-		if best < 0 || k.Priority < keys[best].Priority ||
-			(k.Priority == keys[best].Priority && k.Weight > keys[best].Weight) {
-			best = i
-		}
-	}
-	if best < 0 {
-		return claudegateway.Key{}, aipkg.ErrorForCode(aipkg.ErrNotConfigured,
-			"Claude 网关没有启用的 Key；请在网关配置中启用 Key 后重试。")
-	}
-	return keys[best], nil
-}
-
-// env 构造 CLI 子进程的白名单环境：只放行 HOME/PATH/SHELL/CI/NO_COLOR
-// 与 Anthropic 凭证，不继承父进程其余变量。api_key 只出现在这里。
-// baseURL 是解析后的注入值（Key.base_url 优先于 x.BaseURL）；为空则不注入
-// ANTHROPIC_BASE_URL。
-// SHELL 必须显式设置且指向 bash：CLI 的 Bash 工具没有它时报 "No
-// suitable shell found"，busybox sh 不被接受（镜像已安装 bash）。
-func (x *ClaudeURLCLIExtractor) env(apiKey, baseURL string) []string {
-	env := []string{
-		"HOME=" + x.Home,
-		"PATH=" + os.Getenv("PATH"),
-		"SHELL=/bin/bash",
-		"CI=1",
-		"NO_COLOR=1",
-		"ANTHROPIC_AUTH_TOKEN=" + apiKey,
-	}
-	if strings.TrimSpace(baseURL) != "" {
-		env = append(env, "ANTHROPIC_BASE_URL="+strings.TrimRight(strings.TrimSpace(baseURL), "/"))
-	}
-	return env
 }
 
 // claudeCLIStatusError 把信封里的上游 HTTP 状态映射为稳定错误码：

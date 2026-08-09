@@ -31,6 +31,22 @@ func writeCLIGatewayKeys(t *testing.T, keys ...map[string]any) string {
 	return path
 }
 
+func writeCLIRuntimeSettings(t *testing.T, env map[string]string) string {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"$schema": "https://json.schemastore.org/claude-code-settings.json",
+		"env":     env,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func cliTestKey(name, apiKey string, priority, weight int, enabled bool) map[string]any {
 	return map[string]any{
 		"id": "ck_" + name, "name": name, "api_key": apiKey, "model": "claude-cli-test",
@@ -92,6 +108,7 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 	}), nil))
 
 	x := newCLIExtractor(keysFile, fake)
+	x.SettingsFile = filepath.Join(t.TempDir(), "missing-settings.json")
 	resp, err := x.Extract(context.Background(), "/work/dir", cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +167,14 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 	// env 恰好是白名单变量；api_key 是优先级最高的启用 Key。
 	wantKeys := map[string]bool{
 		"HOME": false, "PATH": false, "SHELL": false, "CI": false, "NO_COLOR": false,
-		"ANTHROPIC_BASE_URL": false, "ANTHROPIC_AUTH_TOKEN": false,
+		"ANTHROPIC_BASE_URL": false, "ANTHROPIC_AUTH_TOKEN": false, "ANTHROPIC_MODEL": false,
+		"ANTHROPIC_DEFAULT_OPUS_MODEL": false, "ANTHROPIC_DEFAULT_SONNET_MODEL": false,
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL": false, "CLAUDE_CODE_SUBAGENT_MODEL": false,
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID": false, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": false,
+		"CLAUDE_CODE_ATTRIBUTION_HEADER": false,
+	}
+	if len(cmd.Env) != len(wantKeys) {
+		t.Fatalf("env 变量数量错误: got %d want %d (%v)", len(cmd.Env), len(wantKeys), cmd.Env)
 	}
 	for _, kv := range cmd.Env {
 		name, _, _ := strings.Cut(kv, "=")
@@ -167,8 +191,104 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 	if !containsEnv(cmd.Env, "HOME=/var/lib/ai-study-tutor") ||
 		!containsEnv(cmd.Env, "CI=1") || !containsEnv(cmd.Env, "NO_COLOR=1") ||
 		!containsEnv(cmd.Env, "ANTHROPIC_BASE_URL=https://gateway.example") ||
-		!containsEnv(cmd.Env, "ANTHROPIC_AUTH_TOKEN="+cliKeySentinel) {
+		!containsEnv(cmd.Env, "ANTHROPIC_AUTH_TOKEN="+cliKeySentinel) ||
+		!containsEnv(cmd.Env, "ANTHROPIC_MODEL=claude-cli-test") ||
+		!containsEnv(cmd.Env, "ANTHROPIC_DEFAULT_OPUS_MODEL=claude-cli-test") ||
+		!containsEnv(cmd.Env, "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-cli-test") ||
+		!containsEnv(cmd.Env, "ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-cli-test") ||
+		!containsEnv(cmd.Env, "CLAUDE_CODE_SUBAGENT_MODEL=claude-cli-test") ||
+		!containsEnv(cmd.Env, "AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_winner") ||
+		!containsEnv(cmd.Env, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1") ||
+		!containsEnv(cmd.Env, "CLAUDE_CODE_ATTRIBUTION_HEADER=0") {
 		t.Fatalf("env 值错误: %v", cmd.Env)
+	}
+}
+
+func TestClaudeURLCLIRuntimeSettingsSelectAppliedKey(t *testing.T) {
+	high := cliTestKey("high", "sk-ant-high", 1, 100, true)
+	high["base_url"] = "https://high.example"
+	high["model"] = "claude-high"
+	selected := cliTestKey("applied", cliKeySentinel, 50, 1, true)
+	selected["base_url"] = "https://selected.example/anthropic/v1/messages/"
+	selected["model"] = "claude-applied"
+	keysFile := writeCLIGatewayKeys(t, high, selected)
+	settingsFile := writeCLIRuntimeSettings(t, map[string]string{
+		"ANTHROPIC_AUTH_TOKEN":         cliKeySentinel,
+		"ANTHROPIC_BASE_URL":           "https://selected.example/anthropic",
+		"ANTHROPIC_MODEL":              "claude-applied",
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID": "ck_applied",
+	})
+	fake := proc.NewFake()
+	fake.Enqueue(proc.Static(cliEnvelopeJSON(t, map[string]any{
+		"type": "result", "subtype": "success", "is_error": false,
+		"result": `{"title":"t","raw_text_markdown":"x","extraction_note":"n"}`,
+	}), nil))
+	x := newCLIExtractor(keysFile, fake)
+	x.SettingsFile = settingsFile
+	x.Home = "/runtime/home"
+
+	resp, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Model != "claude-applied" {
+		t.Fatalf("model 应取自应用的低优先级 Key: %q", resp.Model)
+	}
+	calls := fake.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("应恰好一次子进程调用: %d", len(calls))
+	}
+	want := []string{
+		"HOME=/runtime/home",
+		"ANTHROPIC_AUTH_TOKEN=" + cliKeySentinel,
+		"ANTHROPIC_BASE_URL=https://selected.example/anthropic",
+		"ANTHROPIC_MODEL=claude-applied",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL=claude-applied",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL=claude-applied",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-applied",
+		"CLAUDE_CODE_SUBAGENT_MODEL=claude-applied",
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_applied",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		"CLAUDE_CODE_ATTRIBUTION_HEADER=0",
+	}
+	for _, entry := range want {
+		if !containsEnv(calls[0].Env, entry) {
+			t.Fatalf("env 缺少 %q: %v", entry, calls[0].Env)
+		}
+	}
+}
+
+func TestClaudeURLCLIRuntimeSettingsRejectStaleSelector(t *testing.T) {
+	const staleToken = "sk-ant-stale-settings-sentinel"
+	selected := cliTestKey("selected", cliKeySentinel, 1, 100, true)
+	selected["base_url"] = "https://selected.example"
+	selected["model"] = "claude-selected"
+	keysFile := writeCLIGatewayKeys(t, selected)
+	settingsFile := writeCLIRuntimeSettings(t, map[string]string{
+		"ANTHROPIC_AUTH_TOKEN":         staleToken,
+		"ANTHROPIC_BASE_URL":           "https://selected.example",
+		"ANTHROPIC_MODEL":              "claude-selected",
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID": "ck_selected",
+	})
+	fake := proc.NewFake()
+	x := newCLIExtractor(keysFile, fake)
+	x.SettingsFile = settingsFile
+
+	_, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
+	if err == nil {
+		t.Fatal("过期设置应返回错误")
+	}
+	perr := aipkg.AsProviderError(err)
+	if perr.Code != aipkg.ErrNotConfigured || perr.Retryable {
+		t.Fatalf("过期设置应返回不可重试 claude_not_configured: %v", err)
+	}
+	for _, secret := range []string{cliKeySentinel, staleToken, "https://selected.example", "claude-selected"} {
+		if strings.Contains(err.Error(), secret) || strings.Contains(perr.Detail, secret) {
+			t.Fatalf("过期设置错误泄漏运行时配置 %q: %v", secret, err)
+		}
+	}
+	if len(fake.Calls()) != 0 {
+		t.Fatalf("过期设置不得执行子进程: %+v", fake.Calls())
 	}
 }
 
@@ -444,7 +564,7 @@ func TestReadExtractedFilesJSON(t *testing.T) {
 }
 
 // TestClaudeURLCLIEnvBaseURLPrecedence：ANTHROPIC_BASE_URL 注入优先级 ——
-// Key.base_url > 构造 BaseURL > 不注入。
+// Key.base_url > 构造 BaseURL > Anthropic 默认端点。
 func TestClaudeURLCLIEnvBaseURLPrecedence(t *testing.T) {
 	keyWithURL := cliTestKey("k", cliKeySentinel, 1, 100, true)
 	keyWithURL["base_url"] = "https://key-gw.example"
@@ -456,7 +576,7 @@ func TestClaudeURLCLIEnvBaseURLPrecedence(t *testing.T) {
 	}{
 		{"key_base_url_wins", keyWithURL, "https://gateway.example", "ANTHROPIC_BASE_URL=https://key-gw.example"},
 		{"constructor_fallback", cliTestKey("k", cliKeySentinel, 1, 100, true), "https://gateway.example", "ANTHROPIC_BASE_URL=https://gateway.example"},
-		{"empty_no_injection", cliTestKey("k", cliKeySentinel, 1, 100, true), "", ""},
+		{"empty_uses_anthropic_default", cliTestKey("k", cliKeySentinel, 1, 100, true), "", "ANTHROPIC_BASE_URL=https://api.anthropic.com"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

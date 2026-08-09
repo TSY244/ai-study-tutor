@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -173,10 +174,10 @@ type claudeProviders struct {
 	URLImportAI        aipkg.Provider
 	URLImportAvailable func() bool
 	// URLExtractor 是 URL 素材的 Claude Code CLI 提取器（与 URLImportAI
-	// 同条件装配；凭证同样取自网关 keys.json）。
+	// 同条件装配；运行时选择从 settings.json/网关 keys.json 解析）。
 	URLExtractor lessonimport.URLExtractor
 	// QuizCLI 是测验生成的 Claude Code CLI 生成器（与 URLExtractor 同条件
-	// 装配；凭证同样取自网关 keys.json）。
+	// 装配；运行时选择同样从 settings.json/网关 keys.json 解析）。
 	QuizCLI aihandlers.QuizGenerator
 }
 
@@ -205,6 +206,10 @@ func buildClaudeProviders(cfg config.Config, anthropicKey string, claudeOK bool,
 		})
 	}
 	if cfg.Claude.GatewayConfigFile != "" {
+		runtimeHome := strings.TrimSpace(os.Getenv("HOME"))
+		if runtimeHome == "" {
+			runtimeHome = cfg.DataDir
+		}
 		gateway := &claudegateway.Router{
 			Store:           claudegateway.NewStore(cfg.Claude.GatewayConfigFile),
 			State:           claudegateway.NewStateTracker(claudegateway.StatePathFor(cfg.Claude.GatewayConfigFile), logger),
@@ -226,23 +231,25 @@ func buildClaudeProviders(cfg config.Config, anthropicKey string, claudeOK bool,
 			return gateway.EnabledKeyCount() > 0
 		}
 		// URL 提取走 worker 容器内 Claude Code CLI（WebFetch 客户端抓取）：
-		// 凭证取自网关 keys.json（每次提取重选最高优先级启用 Key），
-		// base_url 取进程级 ANTHROPIC_BASE_URL；HOME 指向可写数据目录。
+		// 凭证由已应用 settings.json 选择（缺失时按网关优先级回退），
+		// HOME 使用进程运行时 HOME，空值才回退可写数据目录。
 		providers.URLExtractor = &lessonimport.ClaudeURLCLIExtractor{
-			Proc:      proc.ExecRunner{},
-			KeysFile:  cfg.Claude.GatewayConfigFile,
-			BaseURL:   cfg.Claude.AnthropicBaseURL,
-			Home:      cfg.DataDir,
-			ClaudeBin: "claude",
+			Proc:         proc.ExecRunner{},
+			KeysFile:     cfg.Claude.GatewayConfigFile,
+			SettingsFile: cfg.Claude.ClaudeCodeSettingsFile,
+			BaseURL:      cfg.Claude.AnthropicBaseURL,
+			Home:         runtimeHome,
+			ClaudeBin:    "claude",
 		}
 		// 测验生成走 worker 容器内 Claude Code CLI 文件契约（资料落盘、
 		// agent 自读、quiz.json 产出），绕开单响应 max_tokens 截断。
 		providers.QuizCLI = &aihandlers.ClaudeQuizCLIGenerator{
-			Proc:      proc.ExecRunner{},
-			KeysFile:  cfg.Claude.GatewayConfigFile,
-			BaseURL:   cfg.Claude.AnthropicBaseURL,
-			Home:      cfg.DataDir,
-			ClaudeBin: "claude",
+			Proc:         proc.ExecRunner{},
+			KeysFile:     cfg.Claude.GatewayConfigFile,
+			SettingsFile: cfg.Claude.ClaudeCodeSettingsFile,
+			BaseURL:      cfg.Claude.AnthropicBaseURL,
+			Home:         runtimeHome,
+			ClaudeBin:    "claude",
 		}
 		return providers
 	}

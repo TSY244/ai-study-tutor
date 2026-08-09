@@ -72,6 +72,22 @@ func writeQuizCLIGatewayKeys(t *testing.T, keys ...map[string]any) string {
 	return path
 }
 
+func writeQuizCLIRuntimeSettings(t *testing.T, env map[string]string) string {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"$schema": "https://json.schemastore.org/claude-code-settings.json",
+		"env":     env,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func quizCLITestKey(name, apiKey string, priority, weight int, enabled bool) map[string]any {
 	return map[string]any{
 		"id": "ck_" + name, "name": name, "api_key": apiKey, "model": "claude-quiz-cli-test",
@@ -124,6 +140,7 @@ func TestQuizCLIGenerateSuccess(t *testing.T) {
 			"cache_read_input_tokens": 30, "cache_creation_input_tokens": 40},
 	})))
 	g := newQuizCLIGenerator(keysFile, fake)
+	g.SettingsFile = filepath.Join(t.TempDir(), "missing-settings.json")
 	req := buildQuizCLIRequest("/wd", quizCLIPromptInput{LessonTitle: "做空", QuestionCount: 8})
 
 	resp, err := g.Generate(context.Background(), t.TempDir(), req)
@@ -161,16 +178,25 @@ func TestQuizCLIGenerateSuccess(t *testing.T) {
 	// env 恰好是白名单变量；api_key 来自最高优先级启用 Key。
 	wantEnv := map[string]bool{
 		"HOME=/var/lib/ai-study-tutor": true,
+		"PATH=" + os.Getenv("PATH"):    true,
 		"SHELL=/bin/bash":              true,
 		"CI=1":                         true,
 		"NO_COLOR=1":                   true,
-		"ANTHROPIC_AUTH_TOKEN=" + quizCLIKeySentinel: true,
-		"ANTHROPIC_BASE_URL=https://gateway.example": true,
+		"ANTHROPIC_AUTH_TOKEN=" + quizCLIKeySentinel:          true,
+		"ANTHROPIC_BASE_URL=https://gateway.example":          true,
+		"ANTHROPIC_MODEL=claude-quiz-cli-test":                true,
+		"ANTHROPIC_DEFAULT_OPUS_MODEL=claude-quiz-cli-test":   true,
+		"ANTHROPIC_DEFAULT_SONNET_MODEL=claude-quiz-cli-test": true,
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-quiz-cli-test":  true,
+		"CLAUDE_CODE_SUBAGENT_MODEL=claude-quiz-cli-test":     true,
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_winner":              true,
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1":          true,
+		"CLAUDE_CODE_ATTRIBUTION_HEADER=0":                    true,
+	}
+	if len(cmd.Env) != len(wantEnv) {
+		t.Fatalf("env 变量数量错误: got %d want %d (%v)", len(cmd.Env), len(wantEnv), cmd.Env)
 	}
 	for _, e := range cmd.Env {
-		if strings.HasPrefix(e, "PATH=") {
-			continue
-		}
 		if !wantEnv[e] {
 			t.Fatalf("env 出现非白名单变量: %s", e)
 		}
@@ -179,6 +205,69 @@ func TestQuizCLIGenerateSuccess(t *testing.T) {
 	if len(wantEnv) != 0 {
 		t.Fatalf("env 缺少变量: %v", wantEnv)
 	}
+}
+
+func TestQuizCLIRuntimeSettingsSelectAppliedKey(t *testing.T) {
+	high := quizCLITestKey("high", "sk-ant-high", 1, 100, true)
+	high["base_url"] = "https://high.example"
+	high["model"] = "claude-high"
+	selected := quizCLITestKey("applied", quizCLIKeySentinel, 50, 1, true)
+	selected["base_url"] = "https://selected.example/anthropic/v1/messages/"
+	selected["model"] = "claude-applied"
+	keysFile := writeQuizCLIGatewayKeys(t, high, selected)
+	settingsFile := writeQuizCLIRuntimeSettings(t, map[string]string{
+		"ANTHROPIC_AUTH_TOKEN":         quizCLIKeySentinel,
+		"ANTHROPIC_BASE_URL":           "https://selected.example/anthropic",
+		"ANTHROPIC_MODEL":              "claude-applied",
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID": "ck_applied",
+	})
+	fake := proc.NewFake()
+	fake.Enqueue(writeQuizCLIOutput(t, quizCLIEnvelopeJSON(t, map[string]any{
+		"type": "result", "subtype": "success", "is_error": false, "result": "done",
+	})))
+	g := newQuizCLIGenerator(keysFile, fake)
+	g.SettingsFile = settingsFile
+	g.Home = "/runtime/home"
+	req := buildQuizCLIRequest("/wd", quizCLIPromptInput{LessonTitle: "t", QuestionCount: 1})
+
+	resp, err := g.Generate(context.Background(), t.TempDir(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Model != "claude-applied" {
+		t.Fatalf("model 应取自应用的低优先级 Key: %q", resp.Model)
+	}
+	calls := fake.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("应恰好一次 CLI 调用: %d", len(calls))
+	}
+	want := []string{
+		"HOME=/runtime/home",
+		"ANTHROPIC_AUTH_TOKEN=" + quizCLIKeySentinel,
+		"ANTHROPIC_BASE_URL=https://selected.example/anthropic",
+		"ANTHROPIC_MODEL=claude-applied",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL=claude-applied",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL=claude-applied",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-applied",
+		"CLAUDE_CODE_SUBAGENT_MODEL=claude-applied",
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_applied",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		"CLAUDE_CODE_ATTRIBUTION_HEADER=0",
+	}
+	for _, entry := range want {
+		if !containsQuizCLIEnv(calls[0].Env, entry) {
+			t.Fatalf("env 缺少 %q: %v", entry, calls[0].Env)
+		}
+	}
+}
+
+func containsQuizCLIEnv(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestQuizCLIGenerateErrorMapping(t *testing.T) {
@@ -290,7 +379,7 @@ func TestQuizCLIGenerateCorruptKeysFile(t *testing.T) {
 }
 
 // TestQuizCLIEnvBaseURLPrecedence：ANTHROPIC_BASE_URL 注入优先级 ——
-// Key.base_url > 构造 BaseURL > 不注入。
+// Key.base_url > 构造 BaseURL > Anthropic 默认端点。
 func TestQuizCLIEnvBaseURLPrecedence(t *testing.T) {
 	keyWithURL := quizCLITestKey("k", quizCLIKeySentinel, 1, 100, true)
 	keyWithURL["base_url"] = "https://key-gw.example"
@@ -302,7 +391,7 @@ func TestQuizCLIEnvBaseURLPrecedence(t *testing.T) {
 	}{
 		{"key_base_url_wins", keyWithURL, "https://gateway.example", "ANTHROPIC_BASE_URL=https://key-gw.example"},
 		{"constructor_fallback", quizCLITestKey("k", quizCLIKeySentinel, 1, 100, true), "https://gateway.example", "ANTHROPIC_BASE_URL=https://gateway.example"},
-		{"empty_no_injection", quizCLITestKey("k", quizCLIKeySentinel, 1, 100, true), "", ""},
+		{"empty_uses_anthropic_default", quizCLITestKey("k", quizCLIKeySentinel, 1, 100, true), "", "ANTHROPIC_BASE_URL=https://api.anthropic.com"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

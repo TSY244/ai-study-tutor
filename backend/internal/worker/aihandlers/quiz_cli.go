@@ -8,11 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	aipkg "github.com/TSY244/ai-study-tutor/backend/internal/ai"
-	claudegateway "github.com/TSY244/ai-study-tutor/backend/internal/claudegateway"
+	"github.com/TSY244/ai-study-tutor/backend/internal/worker/claudecli"
 	proc "github.com/TSY244/ai-study-tutor/backend/internal/worker/proc"
 )
 
@@ -91,14 +90,17 @@ func writeQuizCLIInputs(workDir, raw, student string) error {
 }
 
 // ClaudeQuizCLIGenerator 经 proc.Runner 执行 Claude Code CLI 完成命题。
-// 选 Key/env/信封逻辑与 lessonimport.ClaudeURLCLIExtractor 同构（有意不
-// 共用：错误映射语义不同，见 spec 2026-07-26-quiz-cli-agent-design.md）。
+// Key/env 由 claudecli.Runtime 统一解析；信封与错误映射仍保持测验专用
+// 语义（见 spec 2026-07-26-quiz-cli-agent-design.md）。
 type ClaudeQuizCLIGenerator struct {
 	Proc proc.Runner
-	// KeysFile 是 claudegateway keys.json 路径（每次调用重选最高优先级启用 Key）。
+	// KeysFile 是 Claude 网关 keys.json 路径。
 	KeysFile string
+	// SettingsFile 是已应用的 Claude Code settings.json 路径；显式选择器
+	// 存在时必须与 KeysFile 中启用的 Key 完全匹配。
+	SettingsFile string
 	// BaseURL 是进程级 ANTHROPIC_BASE_URL；Key.base_url 非空时优先于它，
-	// 两者皆空则不注入。
+	// 两者皆空时由共享运行时使用 Anthropic 默认端点。
 	BaseURL string
 	// Home 是 CLI 子进程的 HOME（容器内必须可写）。
 	Home string
@@ -133,15 +135,15 @@ type quizCLIEnvelope struct {
 // Generate 执行一次 CLI 命题：agent 阅读 workDir 下资料文件并写出
 // quiz.json；本函数读回该文件作为结构化结果。
 func (g *ClaudeQuizCLIGenerator) Generate(ctx context.Context, workDir string, req aipkg.Request) (aipkg.Response, error) {
-	key, err := g.selectKey()
+	runtime := claudecli.Runtime{
+		KeysFile:       g.KeysFile,
+		SettingsFile:   g.SettingsFile,
+		DefaultBaseURL: g.BaseURL,
+		Home:           g.Home,
+	}
+	selection, err := runtime.Resolve()
 	if err != nil {
 		return aipkg.Response{}, err
-	}
-	// base_url 解析：Key.base_url 优先，进程级 ANTHROPIC_BASE_URL 兜底；
-	// 纯空白视为未设置（Store.Load 不归一化）。
-	baseURL := strings.TrimSpace(key.BaseURL)
-	if baseURL == "" {
-		baseURL = g.BaseURL
 	}
 	timeout := g.Timeout
 	if timeout <= 0 {
@@ -158,7 +160,7 @@ func (g *ClaudeQuizCLIGenerator) Generate(ctx context.Context, workDir string, r
 		Name: bin,
 		Args: []string{"--allowedTools", quizCLIAllowedTools, "-p", req.User, "--output-format", "json"},
 		Dir:  workDir,
-		Env:  g.env(key.APIKey, baseURL),
+		Env:  runtime.Env(selection),
 	})
 	// Job 取消/总时限优先：原样返回 ctx 错误，由 worker 运行器归类。
 	if ctx.Err() != nil {
@@ -202,7 +204,7 @@ func (g *ClaudeQuizCLIGenerator) Generate(ctx context.Context, workDir string, r
 	}
 	return aipkg.Response{
 		JSON:              json.RawMessage(trimmed),
-		Model:             key.Model,
+		Model:             selection.Key.Model,
 		ProviderRequestID: env.SessionID,
 		Usage: aipkg.Usage{
 			InputTokens:      env.Usage.InputTokens,
@@ -219,47 +221,6 @@ func (g *ClaudeQuizCLIGenerator) proc() proc.Runner {
 		return g.Proc
 	}
 	return proc.ExecRunner{}
-}
-
-// selectKey 从 keys.json 选当前优先级最高的启用 Key（priority 升序、同
-// 级 weight 降序、再按文件顺序）。api_key 只允许注入子进程 env。
-func (g *ClaudeQuizCLIGenerator) selectKey() (claudegateway.Key, error) {
-	keys, err := claudegateway.NewStore(g.KeysFile).Load()
-	if err != nil {
-		return claudegateway.Key{}, aipkg.WrapError(aipkg.ErrUnavailable, "读取 Claude 网关配置失败，请稍后重试。", err)
-	}
-	best := -1
-	for i, k := range keys {
-		if !k.Enabled {
-			continue
-		}
-		if best < 0 || k.Priority < keys[best].Priority ||
-			(k.Priority == keys[best].Priority && k.Weight > keys[best].Weight) {
-			best = i
-		}
-	}
-	if best < 0 {
-		return claudegateway.Key{}, aipkg.ErrorForCode(aipkg.ErrNotConfigured, "Claude 网关没有启用的 Key；请在网关配置中启用 Key 后重试。")
-	}
-	return keys[best], nil
-}
-
-// env 构造 CLI 子进程的白名单环境。SHELL 必须显式指向 bash（CLI 的 Bash
-// 工具要求）。api_key 只出现在这里。baseURL 是解析后的注入值（Key.base_url
-// 优先于 g.BaseURL）；为空则不注入 ANTHROPIC_BASE_URL。
-func (g *ClaudeQuizCLIGenerator) env(apiKey, baseURL string) []string {
-	env := []string{
-		"HOME=" + g.Home,
-		"PATH=" + os.Getenv("PATH"),
-		"SHELL=/bin/bash",
-		"CI=1",
-		"NO_COLOR=1",
-		"ANTHROPIC_AUTH_TOKEN=" + apiKey,
-	}
-	if strings.TrimSpace(baseURL) != "" {
-		env = append(env, "ANTHROPIC_BASE_URL="+strings.TrimRight(strings.TrimSpace(baseURL), "/"))
-	}
-	return env
 }
 
 // quizCLIStatusError 把信封里的上游 HTTP 状态映射为稳定错误码。spec 只
