@@ -30,23 +30,52 @@ test.describe('新建课程', () => {
     expect(hasHorizontalOverflow).toBe(false)
   })
 
-  test('客户端校验：空标题不发请求，错误绑定字段且焦点归字段，修正后可创建', async ({ page }) => {
+  test('空白标题可创建课程，省略标题并显示待 AI 命名', async ({ page }) => {
     await page.goto('/courses/new')
 
     const titleInput = page.getByLabel(/课程标题/)
+    await expect(titleInput).not.toHaveAttribute('required')
+    await titleInput.fill('   ')
+    const responsePromise = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/v1/courses' &&
+        response.request().method() === 'POST',
+    )
+    await page.getByRole('button', { name: '创建课程' }).click()
+
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    expect(response.request().postDataJSON()).toEqual({})
+    await expect(page).toHaveURL(/\/courses\/[0-9a-f-]{36}$/)
+    await expect(page.getByRole('heading', { name: '待 AI 命名' })).toBeVisible()
+  })
+
+  test('客户端校验：超长标题不发请求，错误绑定字段且焦点归字段，修正后可创建', async ({ page }) => {
+    await page.goto('/courses/new')
+
+    const coursePosts: string[] = []
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === '/api/v1/courses' && request.method() === 'POST') {
+        coursePosts.push(request.url())
+      }
+    })
+    const titleInput = page.getByLabel(/课程标题/)
+    await titleInput.fill('长'.repeat(201))
     await page.getByRole('button', { name: '创建课程' }).click()
 
     // 错误绑定：字段提示 + aria-invalid；焦点归属出错字段；仍在原页
-    await expect(page.getByText('请输入课程标题。')).toBeVisible()
+    await expect(page.getByText('课程标题最长 200 字。')).toBeVisible()
     await expect(titleInput).toHaveAttribute('aria-invalid', 'true')
     await expect(titleInput).toBeFocused()
     await expect(page).toHaveURL(/\/courses\/new$/)
+    expect(coursePosts).toHaveLength(0)
 
     // 修正后错误消除，可以完成创建
     await titleInput.fill('E2E 校验修正')
-    await expect(page.getByText('请输入课程标题。')).toBeHidden()
+    await expect(page.getByText('课程标题最长 200 字。')).toBeHidden()
     await page.getByRole('button', { name: '创建课程' }).click()
     await expect(page).toHaveURL(/\/courses\/[0-9a-f-]{36}$/)
     await expect(page.getByRole('heading', { name: 'E2E 校验修正' })).toBeVisible()
+    expect(coursePosts).toHaveLength(1)
   })
 })
