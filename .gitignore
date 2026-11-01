@@ -8,6 +8,8 @@ __pycache__/
 legacy-data/
 data/
 backups/
+# Keep generated backup API sources; only runtime backups should be ignored.
+!/frontend/src/api/generated/endpoints/backups/
 import-reports/
 deploy/secrets/*.txt
 !deploy/secrets/README.md
