@@ -305,6 +305,8 @@ describe('JobStreamClient 终态对账', () => {
     queryClient.setQueryData(queryKeys.jobs({ active: true }), emptyJobList())
     queryClient.setQueryData(queryKeys.lesson(LESSON_JOB.aggregate_id!), {})
     queryClient.setQueryData(queryKeys.lessons('course-1'), {})
+    queryClient.setQueryData(queryKeys.course('course-1'), {})
+    queryClient.setQueryData(queryKeys.courses({}), {})
     queryClient.setQueryData(queryKeys.quizzes(LESSON_JOB.aggregate_id!), {})
     queryClient.setQueryData(queryKeys.documents(LESSON_JOB.aggregate_id!), {})
 
@@ -325,6 +327,8 @@ describe('JobStreamClient 终态对账', () => {
       queryClient.getQueryState(queryKeys.lesson(LESSON_JOB.aggregate_id!))?.isInvalidated,
     ).toBe(true)
     expect(queryClient.getQueryState(queryKeys.lessons('course-1'))?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(queryKeys.course('course-1'))?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(queryKeys.courses({}))?.isInvalidated).toBe(true)
     expect(
       queryClient.getQueryState(queryKeys.quizzes(LESSON_JOB.aggregate_id!))?.isInvalidated,
     ).toBe(true)

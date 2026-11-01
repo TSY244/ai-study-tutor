@@ -54,19 +54,20 @@ function courseJson(title: string) {
 }
 
 describe('NewCourseForm', () => {
-  it('客户端校验：空标题错误绑定字段、焦点归字段、不发请求', async () => {
+  it('课程标题可留空，创建后等待 AI 命名', async () => {
     const user = userEvent.setup()
     const { requests, stop } = captureCoursePosts()
-    renderWithRouter('/courses/new')
-
+    const { router } = renderWithRouter('/courses/new')
     const titleInput = await screen.findByLabelText(/课程标题/)
+    expect(titleInput).not.toBeRequired()
+    await user.type(titleInput, '   ')
     await user.click(screen.getByRole('button', { name: '创建课程' }))
-
-    expect(await screen.findByText('请输入课程标题。')).toBeInTheDocument()
-    expect(titleInput).toHaveAttribute('aria-invalid', 'true')
-    expect(titleInput).toHaveAttribute('aria-describedby', 'course-title-error')
-    expect(titleInput).toHaveFocus()
-    expect(requests).toHaveLength(0)
+    await waitFor(() =>
+      expect(router.state.location.pathname).toMatch(/^\/courses\/[0-9a-f-]{36}$/),
+    )
+    expect(await screen.findByRole('heading', { name: '待 AI 命名' })).toBeInTheDocument()
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.body).toEqual({})
     stop()
   })
 
@@ -237,7 +238,7 @@ describe('NewCourseForm', () => {
     expect(((await conflict.json()) as { code: string }).code).toBe('idempotency_conflict')
 
     // 非法载荷 → 422 validation_error + 字段错误（契约 04 §3）
-    const invalid = await post({ title: '   ' }, '771f7e5f-1c92-4b8c-9ec4-a74ed6ef6bec')
+    const invalid = await post({ title: '长'.repeat(201) }, '771f7e5f-1c92-4b8c-9ec4-a74ed6ef6bec')
     expect(invalid.status).toBe(422)
     const problem = (await invalid.json()) as { code: string; errors: { field: string }[] }
     expect(problem.code).toBe('validation_error')

@@ -59,13 +59,15 @@ func conceptsSlice(raw []byte) []string {
 
 // QuizDTO 是试卷详情（契约 Quiz）。
 type QuizDTO struct {
-	ID        string        `json:"id"`
-	LessonID  string        `json:"lesson_id"`
-	Title     string        `json:"title"`
-	Source    string        `json:"source"`
-	Status    string        `json:"status"`
-	Questions []QuestionDTO `json:"questions"`
-	CreatedAt string        `json:"created_at"`
+	Version         int64         `json:"version"`
+	GenerationNotes string        `json:"generation_notes"`
+	ID              string        `json:"id"`
+	LessonID        string        `json:"lesson_id"`
+	Title           string        `json:"title"`
+	Source          string        `json:"source"`
+	Status          string        `json:"status"`
+	Questions       []QuestionDTO `json:"questions"`
+	CreatedAt       string        `json:"created_at"`
 }
 
 // ToQuizDTO 映射试卷详情（学生视图）。
@@ -74,35 +76,47 @@ func ToQuizDTO(z *Quiz, questions []QuizQuestion) QuizDTO {
 	for _, qq := range questions {
 		qs = append(qs, ToQuestionDTO(qq))
 	}
-	return QuizDTO{
-		ID:        z.ID.String(),
-		LessonID:  z.LessonID.String(),
-		Title:     z.Title,
-		Source:    z.Source,
-		Status:    z.Status,
-		Questions: qs,
-		CreatedAt: httpx.Time(z.CreatedAt),
+	return QuizDTO{Version: z.Version,
+		GenerationNotes: generationNotes(z.PolicySnapshot),
+		ID:              z.ID.String(),
+		LessonID:        z.LessonID.String(),
+		Title:           z.Title,
+		Source:          z.Source,
+		Status:          z.Status,
+		Questions:       qs,
+		CreatedAt:       httpx.Time(z.CreatedAt),
 	}
 }
 
 // QuizSummaryDTO 是试卷列表项（契约 QuizSummary）。
 type QuizSummaryDTO struct {
-	ID            string `json:"id"`
-	LessonID      string `json:"lesson_id"`
-	Title         string `json:"title"`
-	Source        string `json:"source"`
-	QuestionCount int32  `json:"question_count"`
-	CreatedAt     string `json:"created_at"`
+	Version         int64  `json:"version"`
+	GenerationNotes string `json:"generation_notes"`
+	ID              string `json:"id"`
+	LessonID        string `json:"lesson_id"`
+	Title           string `json:"title"`
+	Source          string `json:"source"`
+	QuestionCount   int32  `json:"question_count"`
+	CreatedAt       string `json:"created_at"`
 }
 
 // ToQuizSummaryDTO 映射列表行。
 func ToQuizSummaryDTO(r SummaryRow) QuizSummaryDTO {
-	return QuizSummaryDTO{
-		ID:            r.ID.String(),
-		LessonID:      r.LessonID.String(),
-		Title:         r.Title,
-		Source:        r.Source,
-		QuestionCount: r.QuestionCount,
-		CreatedAt:     httpx.Time(r.CreatedAt),
+	return QuizSummaryDTO{Version: r.Version,
+		GenerationNotes: generationNotes(r.PolicySnapshot),
+		ID:              r.ID.String(),
+		LessonID:        r.LessonID.String(),
+		Title:           r.Title,
+		Source:          r.Source,
+		QuestionCount:   r.QuestionCount,
+		CreatedAt:       httpx.Time(r.CreatedAt),
 	}
+}
+
+func generationNotes(raw []byte) string {
+	var p struct {
+		Notes string `json:"generation_notes"`
+	}
+	_ = json.Unmarshal(raw, &p)
+	return p.Notes
 }

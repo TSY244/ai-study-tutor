@@ -5,8 +5,10 @@ import {
   invalidateCourseChanged,
   invalidateCourseRemoved,
   invalidateCoursesList,
+  invalidateCoursesRemoved,
   invalidateJobChanged,
   invalidateLessonCreated,
+  invalidateLessonsRemoved,
   invalidateQuizGenerationAccepted,
 } from '@/api/invalidation'
 import { queryKeys } from '@/api/query-client'
@@ -89,6 +91,57 @@ describe('精确失效关系', () => {
     expect(invalidated(client, ['courses', { limit: 20 }])).toBe(true)
     expect(invalidated(client, ['jobs', { active: true }])).toBe(false)
     expect(invalidated(client, queryKeys.lesson('l1'))).toBe(false)
+  })
+
+  it('批量删除课程：移除全部所选课程缓存，保留其他课程', async () => {
+    const { client } = seedClient()
+    for (const id of ['c2', 'c3']) {
+      client.setQueryData(queryKeys.course(id), { seeded: true })
+      client.setQueryData(queryKeys.lessons(id), { seeded: true })
+      client.setQueryData(queryKeys.progress(id), { seeded: true })
+    }
+    await invalidateCoursesRemoved(client, ['c1', 'c2'])
+
+    for (const id of ['c1', 'c2']) {
+      expect(client.getQueryState(queryKeys.course(id))).toBeUndefined()
+      expect(client.getQueryState(queryKeys.lessons(id))).toBeUndefined()
+      expect(client.getQueryState(queryKeys.progress(id))).toBeUndefined()
+    }
+    expect(client.getQueryData(queryKeys.course('c3'))).toEqual({ seeded: true })
+    expect(invalidated(client, queryKeys.lessons('c3'))).toBe(false)
+    expect(invalidated(client, queryKeys.progress('c3'))).toBe(false)
+    expect(invalidated(client, ['courses', { limit: 20 }])).toBe(true)
+  })
+
+  it('批量删除课时：移除所选课时详情，刷新共享数据并保留未选课时', async () => {
+    const { client } = seedClient()
+    client.setQueryData(queryKeys.lesson('l2'), { seeded: true })
+    client.setQueryData(queryKeys.lesson('l3'), { seeded: true })
+    for (const key of [
+      ['quizzes', 'l1'],
+      ['documents', 'l1'],
+      ['summary-evaluations', 'l1'],
+      ['knowledge-points', 'c1', null],
+    ])
+      client.setQueryData(key, { seeded: true })
+    await invalidateLessonsRemoved(client, ['l1', 'l2'], 'c1')
+
+    expect(client.getQueryState(queryKeys.lesson('l1'))).toBeUndefined()
+    expect(client.getQueryState(queryKeys.lesson('l2'))).toBeUndefined()
+    expect(client.getQueryData(queryKeys.lesson('l3'))).toEqual({ seeded: true })
+    for (const key of [
+      ['quizzes', 'l1'],
+      ['documents', 'l1'],
+      ['summary-evaluations', 'l1'],
+    ])
+      expect(client.getQueryState(key)).toBeUndefined()
+    expect(invalidated(client, ['knowledge-points', 'c1', null])).toBe(true)
+    expect(invalidated(client, ['weaknesses', {}])).toBe(true)
+    expect(invalidated(client, queryKeys.lessons('c1'))).toBe(true)
+    expect(invalidated(client, queryKeys.course('c1'))).toBe(true)
+    expect(invalidated(client, queryKeys.progress('c1'))).toBe(true)
+    expect(invalidated(client, ['courses', { limit: 20 }])).toBe(true)
+    expect(invalidated(client, ['jobs', { active: true }])).toBe(false)
   })
 
   it('invalidateJobChanged：任务列表 + 指定任务详情', async () => {

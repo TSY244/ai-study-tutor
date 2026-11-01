@@ -52,9 +52,10 @@ func defaultQuizPolicy(context.Context, database.Querier, uuid.UUID) (bool, erro
 // quizGenerationPayload 是 quiz_generate Job 的 payload（Worker 输入）；
 // question_count/title 缺省时序列化为 null。
 type quizGenerationPayload struct {
-	LessonID      uuid.UUID `json:"lesson_id"`
-	QuestionCount *int32    `json:"question_count"`
-	Title         *string   `json:"title"`
+	LessonID        uuid.UUID `json:"lesson_id"`
+	QuestionCount   *int32    `json:"question_count"`
+	Title           *string   `json:"title"`
+	GenerationNotes string    `json:"generation_notes,omitempty"`
 }
 
 // reviewQuizGenerationPayload 是 review_quiz_generate Job 的 payload；
@@ -64,6 +65,7 @@ type reviewQuizGenerationPayload struct {
 	QuestionCount    *int32      `json:"question_count"`
 	IncludeLessonIDs []uuid.UUID `json:"include_lesson_ids"`
 	WeaknessIDs      []uuid.UUID `json:"weakness_ids"`
+	GenerationNotes  string      `json:"generation_notes,omitempty"`
 }
 
 // CreateQuizGeneration 在单个事务内创建常规试卷生成任务：业务门禁 → 课时
@@ -72,11 +74,12 @@ type reviewQuizGenerationPayload struct {
 // 显式 question_count 是用户覆盖（legacy：user_override 短路提前停止评估），
 // 不再调用策略钩子；question_count 为空时才由策略决定是否继续练习。
 func (s *GenerationService) CreateQuizGeneration(ctx context.Context, rec *idempotency.Record,
-	lessonID uuid.UUID, questionCount *int32, title *string) (int, *JobAccepted, error) {
+	lessonID uuid.UUID, questionCount *int32, title *string, notes ...string) (int, *JobAccepted, error) {
 	payload, err := json.Marshal(quizGenerationPayload{
-		LessonID:      lessonID,
-		QuestionCount: questionCount,
-		Title:         title,
+		LessonID:        lessonID,
+		QuestionCount:   questionCount,
+		Title:           title,
+		GenerationNotes: firstNote(notes),
 	})
 	if err != nil {
 		return 0, nil, err
@@ -110,7 +113,7 @@ func (s *GenerationService) CreateQuizGeneration(ctx context.Context, rec *idemp
 // CreateReviewQuizGeneration 在单个事务内创建复习试卷生成任务（无练习策略
 // 限制：复习场景不受 practice_not_needed 约束）。缺省数组字段归一化为 []。
 func (s *GenerationService) CreateReviewQuizGeneration(ctx context.Context, rec *idempotency.Record,
-	lessonID uuid.UUID, questionCount *int32, includeLessonIDs, weaknessIDs []uuid.UUID) (int, *JobAccepted, error) {
+	lessonID uuid.UUID, questionCount *int32, includeLessonIDs, weaknessIDs []uuid.UUID, notes ...string) (int, *JobAccepted, error) {
 	if includeLessonIDs == nil {
 		includeLessonIDs = []uuid.UUID{}
 	}
@@ -122,6 +125,7 @@ func (s *GenerationService) CreateReviewQuizGeneration(ctx context.Context, rec 
 		QuestionCount:    questionCount,
 		IncludeLessonIDs: includeLessonIDs,
 		WeaknessIDs:      weaknessIDs,
+		GenerationNotes:  firstNote(notes),
 	})
 	if err != nil {
 		return 0, nil, err
@@ -153,7 +157,7 @@ func (s *GenerationService) runGenerationTx(ctx context.Context, rec *idempotenc
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 		return 0, nil, err
 	}
-	if _, err := s.lessons.GetByID(ctx, tx, lessonID); err != nil {
+	if err := s.lessons.LockForGeneration(ctx, tx, lessonID); err != nil {
 		if errors.Is(err, lesson.ErrNotFound) {
 			// httpx 不能反向依赖 lesson 包，404 映射在本模块完成。
 			return 0, nil, httpx.NewProblemError(http.StatusNotFound, "not_found",
@@ -193,4 +197,11 @@ func (s *GenerationService) activeJobConflict(ctx context.Context, lessonID uuid
 		return nil
 	}
 	return job.ResourceBusyError(active.ID)
+}
+
+func firstNote(notes []string) string {
+	if len(notes) > 0 {
+		return notes[0]
+	}
+	return ""
 }

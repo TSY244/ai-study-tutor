@@ -5,8 +5,10 @@
  */
 import type {
   ListMaterialsParams,
+  MaterialDetail,
   MaterialJobAccepted,
   MaterialList,
+  MaterialUpdate,
   TextMaterialCreate,
   UploadMaterialBody,
   UrlMaterialCreate
@@ -145,6 +147,54 @@ export const deleteMaterial = async (materialId: string, options?: RequestInit):
     method: 'DELETE'
 
 
+  }
+);}
+
+
+export const getGetMaterialUrl = (materialId: string,) => {
+
+
+
+
+  return `/api/v1/materials/${materialId}`
+}
+
+/**
+ * @summary 读取素材编辑内容
+ */
+export const getMaterial = async (materialId: string, options?: RequestInit): Promise<MaterialDetail> => {
+
+  return apiFetch<MaterialDetail>(getGetMaterialUrl(materialId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+export const getUpdateMaterialUrl = (materialId: string,) => {
+
+
+
+
+  return `/api/v1/materials/${materialId}`
+}
+
+/**
+ * 至少提供一个修改字段，携带 version。素材 kind 不可变；文本可改 text，链接可改 source_url。上传文件替换使用原上传接口，不能伪造 file_object_id。返回重新导入任务，旧文档保留直到新结果发布。
+ * @summary 修改素材并重新导入
+ */
+export const updateMaterial = async (materialId: string,
+    materialUpdate: MaterialUpdate, options?: RequestInit): Promise<MaterialJobAccepted> => {
+
+  return apiFetch<MaterialJobAccepted>(getUpdateMaterialUrl(materialId),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(materialUpdate)
   }
 );}
 

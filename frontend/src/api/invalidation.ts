@@ -33,9 +33,19 @@ export async function invalidateCourseRemoved(
   client: QueryClient,
   courseId: string,
 ): Promise<void> {
-  client.removeQueries({ queryKey: queryKeys.course(courseId) })
-  client.removeQueries({ queryKey: queryKeys.lessons(courseId) })
-  client.removeQueries({ queryKey: queryKeys.progress(courseId) })
+  await invalidateCoursesRemoved(client, [courseId])
+}
+
+/** 批量删除课程：逐个移除详情，共享列表只刷新一次。 */
+export async function invalidateCoursesRemoved(
+  client: QueryClient,
+  courseIds: string[],
+): Promise<void> {
+  for (const courseId of courseIds) {
+    client.removeQueries({ queryKey: queryKeys.course(courseId) })
+    client.removeQueries({ queryKey: queryKeys.lessons(courseId) })
+    client.removeQueries({ queryKey: queryKeys.progress(courseId) })
+  }
   await client.invalidateQueries({ queryKey: ['courses'] })
 }
 
@@ -73,12 +83,38 @@ export async function invalidateLessonRemoved(
   lessonId: string,
   courseId: string,
 ): Promise<void> {
-  client.removeQueries({ queryKey: queryKeys.lesson(lessonId) })
+  await invalidateLessonsRemoved(client, [lessonId], courseId)
+}
+
+/** 批量删除课时：逐个移除详情，共享列表/课程/进度各刷新一次。 */
+export async function invalidateLessonsRemoved(
+  client: QueryClient,
+  lessonIds: string[],
+  courseId: string,
+): Promise<void> {
+  for (const lessonId of lessonIds) {
+    client.removeQueries({ queryKey: queryKeys.lesson(lessonId) })
+    for (const prefix of [
+      'documents',
+      'document',
+      'document-versions',
+      'materials',
+      'quizzes',
+      'lesson-attempts',
+      'summary-evaluations',
+    ]) {
+      client.removeQueries({ queryKey: [prefix, lessonId] })
+    }
+    client.removeQueries({ queryKey: queryKeys.progressLesson(lessonId) })
+  }
   await Promise.all([
     client.invalidateQueries({ queryKey: queryKeys.lessons(courseId) }),
     client.invalidateQueries({ queryKey: queryKeys.course(courseId) }),
     client.invalidateQueries({ queryKey: queryKeys.progress(courseId) }),
     client.invalidateQueries({ queryKey: ['courses'] }),
+    client.invalidateQueries({ queryKey: ['knowledge-points', courseId] }),
+    client.invalidateQueries({ queryKey: ['weaknesses'] }),
+    client.invalidateQueries({ queryKey: ['attempt'] }),
   ])
 }
 

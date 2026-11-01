@@ -15,7 +15,13 @@ COPY frontend ./
 COPY api/openapi.yaml /src/api/openapi.yaml
 
 RUN npm run typecheck
-RUN npm run test
+# Keep test workers bounded inside the build VM; Vitest otherwise uses all
+# reported host CPUs, causing UI timing failures during image builds.
+ARG TEST_MAX_WORKERS=2
+# The build VM can be busy with other services; keep all assertions enabled
+# while allowing page-level UI tests enough wall time under CPU contention.
+ARG TEST_TIMEOUT=45000
+RUN npm run test -- --maxWorkers=${TEST_MAX_WORKERS} --testTimeout=${TEST_TIMEOUT}
 RUN npm run build
 
 FROM caddy:2-alpine AS runtime

@@ -20,7 +20,7 @@ func TestBuildQuizCLIRequest(t *testing.T) {
 	if req.Purpose != aipkg.PurposeQuizGenerate {
 		t.Fatalf("purpose 错误: %s", req.Purpose)
 	}
-	if req.PromptTemplateVersion != aipkg.PromptQuizCLIV1 {
+	if req.PromptTemplateVersion != aipkg.PromptQuizCLIV2 {
 		t.Fatalf("prompt 版本错误: %s", req.PromptTemplateVersion)
 	}
 	if req.SchemaVersion != aipkg.SchemaQuizV1 {
@@ -49,7 +49,7 @@ func TestBuildQuizCLIRequestReview(t *testing.T) {
 	if req.Purpose != aipkg.PurposeReviewQuizGenerate {
 		t.Fatalf("purpose 错误: %s", req.Purpose)
 	}
-	if req.PromptTemplateVersion != aipkg.PromptReviewQuizCLIV1 {
+	if req.PromptTemplateVersion != aipkg.PromptReviewQuizCLIV2 {
 		t.Fatalf("prompt 版本错误: %s", req.PromptTemplateVersion)
 	}
 	if !strings.Contains(req.User, "5 道复习") {
@@ -105,11 +105,11 @@ func quizCLIEnvelopeJSON(t *testing.T, env map[string]any) *proc.Result {
 	return &proc.Result{Stdout: raw}
 }
 
-func newQuizCLIGenerator(keysFile string, runner proc.Runner) *ClaudeQuizCLIGenerator {
-	return &ClaudeQuizCLIGenerator{
+func newQuizCLIGenerator(keysFile string, runner proc.Runner) *PiQuizGenerator {
+	return &PiQuizGenerator{
 		Proc: runner, KeysFile: keysFile,
 		BaseURL: "https://gateway.example", Home: "/var/lib/ai-study-tutor",
-		ClaudeBin: "claude", Timeout: time.Minute,
+		NodeBin: "node", Timeout: time.Minute,
 	}
 }
 
@@ -140,6 +140,7 @@ func TestQuizCLIGenerateSuccess(t *testing.T) {
 			"cache_read_input_tokens": 30, "cache_creation_input_tokens": 40},
 	})))
 	g := newQuizCLIGenerator(keysFile, fake)
+	g.NodeBin = "" // exercise the production default
 	g.SettingsFile = filepath.Join(t.TempDir(), "missing-settings.json")
 	req := buildQuizCLIRequest("/wd", quizCLIPromptInput{LessonTitle: "做空", QuestionCount: 8})
 
@@ -166,7 +167,10 @@ func TestQuizCLIGenerateSuccess(t *testing.T) {
 		t.Fatalf("应恰好一次 CLI 调用: %d", len(calls))
 	}
 	cmd := calls[0]
-	wantArgs := []string{"--allowedTools", quizCLIAllowedTools, "-p", req.User, "--output-format", "json"}
+	if cmd.Name != "node" {
+		t.Fatalf("expected Pi Node bridge, got %q", cmd.Name)
+	}
+	wantArgs := []string{"/app/pi-runtime/agent.mjs", "--tools", quizCLIAllowedTools, "--prompt", req.User}
 	if len(cmd.Args) != len(wantArgs) {
 		t.Fatalf("argv 错误: %v", cmd.Args)
 	}
@@ -177,21 +181,16 @@ func TestQuizCLIGenerateSuccess(t *testing.T) {
 	}
 	// env 恰好是白名单变量；api_key 来自最高优先级启用 Key。
 	wantEnv := map[string]bool{
-		"HOME=/var/lib/ai-study-tutor": true,
-		"PATH=" + os.Getenv("PATH"):    true,
-		"SHELL=/bin/bash":              true,
-		"CI=1":                         true,
-		"NO_COLOR=1":                   true,
-		"ANTHROPIC_AUTH_TOKEN=" + quizCLIKeySentinel:          true,
-		"ANTHROPIC_BASE_URL=https://gateway.example":          true,
-		"ANTHROPIC_MODEL=claude-quiz-cli-test":                true,
-		"ANTHROPIC_DEFAULT_OPUS_MODEL=claude-quiz-cli-test":   true,
-		"ANTHROPIC_DEFAULT_SONNET_MODEL=claude-quiz-cli-test": true,
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-quiz-cli-test":  true,
-		"CLAUDE_CODE_SUBAGENT_MODEL=claude-quiz-cli-test":     true,
-		"AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_winner":              true,
-		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1":          true,
-		"CLAUDE_CODE_ATTRIBUTION_HEADER=0":                    true,
+		"AI_STUDY_TUTOR_AI_PROTOCOL=anthropic":       true,
+		"HOME=/var/lib/ai-study-tutor":               true,
+		"PATH=" + os.Getenv("PATH"):                  true,
+		"SHELL=/bin/bash":                            true,
+		"CI=1":                                       true,
+		"NO_COLOR=1":                                 true,
+		"ANTHROPIC_AUTH_TOKEN=" + quizCLIKeySentinel: true,
+		"ANTHROPIC_BASE_URL=https://gateway.example": true,
+		"ANTHROPIC_MODEL=claude-quiz-cli-test":       true,
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_winner":     true,
 	}
 	if len(cmd.Env) != len(wantEnv) {
 		t.Fatalf("env 变量数量错误: got %d want %d (%v)", len(cmd.Env), len(wantEnv), cmd.Env)
@@ -246,13 +245,7 @@ func TestQuizCLIRuntimeSettingsSelectAppliedKey(t *testing.T) {
 		"ANTHROPIC_AUTH_TOKEN=" + quizCLIKeySentinel,
 		"ANTHROPIC_BASE_URL=https://selected.example/anthropic",
 		"ANTHROPIC_MODEL=claude-applied",
-		"ANTHROPIC_DEFAULT_OPUS_MODEL=claude-applied",
-		"ANTHROPIC_DEFAULT_SONNET_MODEL=claude-applied",
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-applied",
-		"CLAUDE_CODE_SUBAGENT_MODEL=claude-applied",
 		"AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_applied",
-		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-		"CLAUDE_CODE_ATTRIBUTION_HEADER=0",
 	}
 	for _, entry := range want {
 		if !containsQuizCLIEnv(calls[0].Env, entry) {
@@ -298,6 +291,7 @@ func TestQuizCLIGenerateErrorMapping(t *testing.T) {
 			"usage": map[string]any{"input_tokens": 51, "output_tokens": 62,
 				"cache_read_input_tokens": 7, "cache_creation_input_tokens": 8},
 		}), nil), aipkg.ErrAuthFailed, false},
+		{"quota_403", proc.Static(quizCLIEnvelopeJSON(t, map[string]any{"type": "result", "subtype": "error", "is_error": true, "api_error_status": 403, "api_error_code": aipkg.ErrQuotaExhausted}), &proc.ExitError{Code: 1}), aipkg.ErrQuotaExhausted, false},
 		{"auth_403", proc.Static(quizCLIEnvelopeJSON(t, map[string]any{"type": "result", "subtype": "error", "is_error": true, "api_error_status": 403}), nil), aipkg.ErrAuthFailed, false},
 		{"rate_429", proc.Static(quizCLIEnvelopeJSON(t, map[string]any{"type": "result", "subtype": "error", "is_error": true, "api_error_status": 429}), nil), aipkg.ErrRateLimited, true},
 		{"server_500", proc.Static(quizCLIEnvelopeJSON(t, map[string]any{"type": "result", "subtype": "error", "is_error": true, "api_error_status": 500}), nil), aipkg.ErrUnavailable, true},

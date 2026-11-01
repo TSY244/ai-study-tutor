@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
@@ -46,6 +46,9 @@ describe('学习总结', () => {
 
     // 202 接受后先进入「评估进行中」
     expect(await screen.findByText('AI 评估进行中…')).toBeInTheDocument()
+    const jobs = await screen.findByRole('region', { name: '总结正在评估' })
+    expect(within(jobs).getByRole('progressbar')).toBeInTheDocument()
+    expect(within(jobs).getByRole('link', { name: '查看任务详情' })).toBeInTheDocument()
 
     // 模拟 SSE 终态对账：失效评估查询 → 重取时 MSW 推进为完成
     await client.invalidateQueries({ queryKey: ['summary-evaluation'] })

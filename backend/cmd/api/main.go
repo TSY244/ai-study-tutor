@@ -76,8 +76,9 @@ func main() {
 	var bilibiliCookie *sitecookie.Handler
 	if cfg.SiteCookiesFile != "" {
 		bilibiliCookie = &sitecookie.Handler{
-			Store: sitecookie.NewStore(cfg.SiteCookiesFile),
-			Jobs:  job.NewService(pool),
+			Store:    sitecookie.NewStore(cfg.SiteCookiesFile),
+			Jobs:     job.NewService(pool),
+			Sessions: sitecookie.NewLoginSessions(cfg.DataDir),
 		}
 	}
 

@@ -156,6 +156,11 @@ function AttemptTakingInner({
               </div>
               <div className="mt-2 text-sm leading-6 text-text">
                 <MarkdownReader markdown={question.stem} />
+                {question.tested_concepts.length > 0 ? (
+                  <p className="mt-2 text-xs text-text-muted">
+                    考查知识点：{question.tested_concepts.join('、')}
+                  </p>
+                ) : null}
               </div>
               <div className="mt-3">
                 <QuestionInput

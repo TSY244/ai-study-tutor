@@ -254,11 +254,19 @@ func mapHTTPError(status int, h http.Header, raw []byte) *ProviderError {
 	}
 	var payload struct {
 		Error struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
+			Type string `json:"type"`
+			Code string `json:"code"`
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(raw, &payload)
+	// Only recognize known machine codes. Never retain upstream messages,
+	// balances, request echoes or credentials in errors/audit records.
+	for _, reason := range []string{payload.Error.Code, payload.Error.Type} {
+		switch reason {
+		case "insufficient_quota", "insufficient_user_quota", "insufficient_token_quota", "quota_exhausted", "billing_hard_limit_reached":
+			return QuotaExhaustedError()
+		}
+	}
 	if payload.Error.Type == "overloaded_error" {
 		code = ErrOverloaded
 		detail = "Claude 服务繁忙；系统将自动重试。"
@@ -267,7 +275,7 @@ func mapHTTPError(status int, h http.Header, raw []byte) *ProviderError {
 	if ra := parseRetryAfter(h.Get("Retry-After")); ra > 0 {
 		err.RetryAfter = ra
 	}
-	err.cause = fmt.Errorf("anthropic status %d type %s", status, payload.Error.Type)
+	err.cause = fmt.Errorf("upstream HTTP status %d", status)
 	return err
 }
 

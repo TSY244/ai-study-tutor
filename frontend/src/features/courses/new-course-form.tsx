@@ -109,18 +109,23 @@ export function NewCourseForm() {
       ) : null}
 
       <div className="space-y-1.5">
-        <Label htmlFor={FIELD_IDS.title} required>
-          课程标题
-        </Label>
+        <Label htmlFor={FIELD_IDS.title}>课程标题（可选）</Label>
         <Input
           id={FIELD_IDS.title}
           type="text"
           autoComplete="off"
-          required
+          placeholder="留空，后续由 AI 根据学习内容命名"
           aria-invalid={errors.title ? true : undefined}
-          aria-describedby={errors.title ? `${FIELD_IDS.title}-error` : undefined}
+          aria-describedby={
+            errors.title
+              ? `${FIELD_IDS.title}-hint ${FIELD_IDS.title}-error`
+              : `${FIELD_IDS.title}-hint`
+          }
           {...register('title')}
         />
+        <p id={`${FIELD_IDS.title}-hint`} className="text-sm text-text-muted">
+          留空时先显示“待 AI 命名”，首次生成学习总结后自动命名；手动填写的名称会保留。
+        </p>
         {errors.title ? (
           <p id={`${FIELD_IDS.title}-error`} className="text-sm text-danger">
             {errors.title.message}
@@ -144,6 +149,10 @@ export function NewCourseForm() {
           </p>
         ) : null}
       </div>
+
+      <p className="text-sm text-text-muted">
+        AI 总结统一包含：内容概览、核心知识点、知识结构、示例与应用、结论与复习、来源与局限。
+      </p>
 
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>

@@ -20,9 +20,10 @@ import (
 func TestMain(m *testing.M) { databasetest.Main(m) }
 
 type handlerEnv struct {
-	pool   *pgxpool.Pool
-	engine http.Handler
-	store  *Store
+	pool     *pgxpool.Pool
+	engine   http.Handler
+	store    *Store
+	sessions *LoginSessions
 }
 
 func newHandlerEnv(t *testing.T) handlerEnv {
@@ -30,11 +31,12 @@ func newHandlerEnv(t *testing.T) handlerEnv {
 	pool := databasetest.New(t)
 	engine := apitest.NewEngine(t)
 	store := NewStore(filepath.Join(t.TempDir(), "cookies", "bilibili.txt"))
-	h := &Handler{Store: store, Jobs: job.NewService(pool)}
+	sessions := NewLoginSessions(t.TempDir())
+	h := &Handler{Store: store, Jobs: job.NewService(pool), Sessions: sessions}
 	h.RegisterRoutes(engine.Group("/api/v1"),
 		httpserver.BodyLimit(1<<20, http.StatusBadRequest, "bad_request"),
 		&httpx.IdemExecutor{Svc: idempotency.NewService(pool)})
-	return handlerEnv{pool: pool, engine: engine, store: store}
+	return handlerEnv{pool: pool, engine: engine, store: store, sessions: sessions}
 }
 
 func jsonHeaders() map[string]string {

@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import { http } from 'msw'
 import { describe, expect, it } from 'vitest'
 
@@ -67,6 +67,32 @@ describe('学习总览', () => {
     expect(link).toHaveAttribute('href', `/courses/${COURSE_STATS_ID}/lessons/${LESSON_RANDOM_ID}`)
     expect(screen.getByText(/上次学习/)).toBeInTheDocument()
     expect(screen.queryByText('还没有学习记录')).not.toBeInTheDocument()
+  })
+
+  it('「继续学习」中已删除课时的记录被隐藏并从本地清理', async () => {
+    recordRecentLearning({
+      courseId: COURSE_STATS_ID,
+      lessonId: 'lesson-already-deleted',
+      lessonTitle: '已删除的课时',
+    })
+    server.use(
+      http.get('*/api/v1/lessons/lesson-already-deleted', () =>
+        problemResponse({
+          status: 404,
+          code: 'not_found',
+          title: '资源不存在',
+          detail: '课时不存在或已被删除。',
+        }),
+      ),
+    )
+    renderWithRouter('/dashboard')
+
+    // 校验完成前记录短暂可见；404 确认后隐藏并清空本地记录
+    await waitFor(() =>
+      expect(screen.queryByRole('link', { name: /已删除的课时/ })).not.toBeInTheDocument(),
+    )
+    expect(await screen.findByText('还没有学习记录')).toBeInTheDocument()
+    await waitFor(() => expect(loadRecentLearning()).toEqual([]))
   })
 
   it('打开课时工作区后写入学习记录', async () => {

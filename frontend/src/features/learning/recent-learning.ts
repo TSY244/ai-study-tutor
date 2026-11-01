@@ -105,3 +105,30 @@ export function resetRecentLearning(): void {
     // 与写入同理，清除失败不阻塞
   }
 }
+
+/**
+ * 清理指向已删除课程/课时的记录：删除课程/课时成功后调用，
+ * 避免「继续学习」残留指向 404 的条目。与写入同理，失败不阻塞。
+ */
+export function removeRecentLearningEntries(filter: {
+  courseId?: string
+  lessonId?: string
+}): void {
+  try {
+    const entries = loadRecentLearning().filter(
+      (entry) =>
+        (!filter.courseId || entry.courseId !== filter.courseId) &&
+        (!filter.lessonId || entry.lessonId !== filter.lessonId),
+    )
+    const store = storage()
+    if (!store) return
+    if (entries.length === 0) {
+      store.removeItem(RECENT_LEARNING_STORAGE_KEY)
+      return
+    }
+    const payload: RecentLearningPayload = { version: 1, entries }
+    store.setItem(RECENT_LEARNING_STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    // 与写入同理，清除失败不阻塞
+  }
+}

@@ -16,8 +16,9 @@ import (
 // quizGenerationRequest 是 createQuizGeneration 的请求体（契约
 // QuizGenerationCreate：question_count 5..15 可空，title ≤300 可空）。
 type quizGenerationRequest struct {
-	QuestionCount *int32  `json:"question_count"`
-	Title         *string `json:"title"`
+	QuestionCount   *int32  `json:"question_count"`
+	Title           *string `json:"title"`
+	GenerationNotes string  `json:"generation_notes"`
 }
 
 // reviewQuizGenerationRequest 是 createReviewQuizGeneration 的请求体
@@ -26,6 +27,7 @@ type reviewQuizGenerationRequest struct {
 	QuestionCount    *int32      `json:"question_count"`
 	IncludeLessonIDs []uuid.UUID `json:"include_lesson_ids"`
 	WeaknessIDs      []uuid.UUID `json:"weakness_ids"`
+	GenerationNotes  string      `json:"generation_notes"`
 }
 
 // GenerationHandler 只做 HTTP 绑定与响应映射；业务在 GenerationService。
@@ -62,6 +64,9 @@ func (h *GenerationHandler) createQuizGeneration(c *gin.Context) {
 	if req.Title != nil && utf8.RuneCountInString(*req.Title) > 300 {
 		errs = append(errs, httpx.FieldErr("title", "too_long", "title 不能超过 300 字符。"))
 	}
+	if utf8.RuneCountInString(req.GenerationNotes) > 3000 {
+		errs = append(errs, httpx.FieldErr("generation_notes", "too_long", "出题备注不能超过 3000 字符。"))
+	}
 	if len(errs) > 0 {
 		httpx.WriteValidation(c, errs)
 		return
@@ -69,7 +74,7 @@ func (h *GenerationHandler) createQuizGeneration(c *gin.Context) {
 	hash := httpx.HashRequest(c.Request.Method, c.FullPath(), httpx.CanonicalJSON(req), "")
 	h.idem.Run(c, "createQuizGeneration", hash,
 		func(ctx context.Context, rec *idempotency.Record) (int, any, error) {
-			return h.svc.CreateQuizGeneration(ctx, rec, lessonID, req.QuestionCount, req.Title)
+			return h.svc.CreateQuizGeneration(ctx, rec, lessonID, req.QuestionCount, req.Title, req.GenerationNotes)
 		})
 }
 
@@ -88,11 +93,15 @@ func (h *GenerationHandler) createReviewQuizGeneration(c *gin.Context) {
 		httpx.WriteValidation(c, []httpserver.FieldError{*e})
 		return
 	}
+	if utf8.RuneCountInString(req.GenerationNotes) > 3000 {
+		httpx.WriteValidation(c, []httpserver.FieldError{httpx.FieldErr("generation_notes", "too_long", "出题备注不能超过 3000 字符。")})
+		return
+	}
 	hash := httpx.HashRequest(c.Request.Method, c.FullPath(), httpx.CanonicalJSON(req), "")
 	h.idem.Run(c, "createReviewQuizGeneration", hash,
 		func(ctx context.Context, rec *idempotency.Record) (int, any, error) {
 			return h.svc.CreateReviewQuizGeneration(ctx, rec, lessonID,
-				req.QuestionCount, req.IncludeLessonIDs, req.WeaknessIDs)
+				req.QuestionCount, req.IncludeLessonIDs, req.WeaknessIDs, req.GenerationNotes)
 		})
 }
 

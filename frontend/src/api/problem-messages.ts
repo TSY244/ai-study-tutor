@@ -166,6 +166,24 @@ const JOB_ERROR_MESSAGES: Record<
     title: '链接内容超出大小限制',
     message: '提取的内容超出可处理的长度。请截取需要的部分，改用文本或文件分批导入。',
   }),
+  claude_quota_exhausted: () => ({
+    title: '模型网关额度不足',
+    message:
+      '上游账户余额或额度不足。请在网关账户补充额度，或切换有可用额度的 Key，再手动重试；反复重试不会恢复额度。',
+  }),
+  claude_auth_failed: () => ({
+    title: '模型网关认证失败',
+    message: '上游拒绝了当前 Key 的访问，请检查 Key、接口地址及调用权限后重新测试。',
+  }),
+  claude_overloaded: () => ({
+    title: '上游模型服务暂不可用',
+    message:
+      '上游网关返回服务繁忙或暂不可用。请等待提供方恢复后手动重试，或切换可用的模型、Key 或网关。',
+  }),
+  claude_rate_limited: () => ({
+    title: '模型网关请求受限',
+    message: '上游限制了请求频率，请稍后重试。若持续发生，请检查账户限额或切换可用 Key。',
+  }),
   claude_timeout: () => ({
     title: 'Claude 响应超时',
     message: '等待 Claude 响应超时。任务和你的输入已保留，请稍后重试。',

@@ -1,3 +1,4 @@
+import { DeleteContentButton } from '@/features/content/delete-content-button'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
@@ -10,6 +11,8 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/error-state'
 import { SkeletonText } from '@/components/ui/skeleton'
+import { ResourceJobs } from '@/features/jobs/resource-jobs'
+import { useActiveResourceJobs } from '@/features/jobs/use-active-resource-jobs'
 import { formatDateTime } from '@/lib/format'
 import { ATTEMPT_STATUS_META } from '@/lib/status'
 
@@ -25,6 +28,10 @@ export const Route = createFileRoute('/_shell/courses/$courseId/lessons/$lessonI
  */
 function LessonAttemptsPage() {
   const { courseId, lessonId } = Route.useParams()
+  const jobsQuery = useActiveResourceJobs('attempt', undefined, [
+    'attempt_grade',
+    'wrong_answer_analyze',
+  ])
   const attemptsQuery = useInfiniteQuery({
     queryKey: queryKeys.lessonAttempts(lessonId),
     queryFn: ({ pageParam }) => listLessonAttempts(lessonId, { cursor: pageParam, limit: 20 }),
@@ -38,7 +45,7 @@ function LessonAttemptsPage() {
       <div className="min-w-0 space-y-1">
         <h2 className="text-base font-semibold text-text">作答记录</h2>
         <p className="text-sm text-text-muted">
-          批阅中的作答会出现在任务中心；完成后这里可查看成绩与 AI 反馈。
+          这里会显示作答批阅进度；完成后可查看成绩与 AI 反馈。
         </p>
       </div>
       <Link
@@ -92,9 +99,18 @@ function LessonAttemptsPage() {
   return (
     <div className="space-y-4">
       {header}
+      <ResourceJobs
+        query={{
+          ...jobsQuery,
+          jobs: jobsQuery.jobs.filter((job) =>
+            attempts.some((attempt) => attempt.id === job.aggregate_id),
+          ),
+        }}
+        title="作答正在处理"
+      />
       <ul className="divide-y divide-border rounded-md border border-border bg-surface">
         {attempts.map((attempt) => (
-          <AttemptRow key={attempt.id} attempt={attempt} />
+          <AttemptRow key={attempt.id} attempt={attempt} courseId={courseId} lessonId={lessonId} />
         ))}
       </ul>
       {attemptsQuery.hasNextPage ? (
@@ -113,14 +129,22 @@ function LessonAttemptsPage() {
   )
 }
 
-function AttemptRow({ attempt }: { attempt: AttemptSummary }) {
+function AttemptRow({
+  attempt,
+  courseId,
+  lessonId,
+}: {
+  attempt: AttemptSummary
+  courseId: string
+  lessonId: string
+}) {
   const meta = ATTEMPT_STATUS_META[attempt.status]
   return (
-    <li>
+    <li className="flex items-center pr-3">
       <Link
         to="/attempts/$attemptId"
         params={{ attemptId: attempt.id }}
-        className="group flex items-center gap-3 px-4 py-3 hover:bg-surface-sunken"
+        className="group flex min-w-0 flex-1 items-center gap-3 px-4 py-3 hover:bg-surface-sunken"
       >
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-2">
@@ -143,6 +167,13 @@ function AttemptRow({ attempt }: { attempt: AttemptSummary }) {
           className="h-4 w-4 shrink-0 text-text-subtle group-hover:text-accent"
         />
       </Link>
+      <DeleteContentButton
+        kind="attempt"
+        id={attempt.id}
+        name={`${attempt.quiz_title} · ${formatDateTime(attempt.started_at)}`}
+        courseId={courseId}
+        lessonId={lessonId}
+      />
     </li>
   )
 }

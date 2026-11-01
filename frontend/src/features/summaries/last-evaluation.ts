@@ -1,8 +1,7 @@
 /**
  * 每个课时最近一次总结评估 id 的 localStorage 记录。
  *
- * 契约没有「按课时列出历史评估」的接口，页面只能在本地记住
- * 最近一次提交的 evaluationId， revisit 时按 id 重取结果。
+ * 保存用户最近查看的 evaluationId，返回时按 id 重取结果。
  * 存储不可用（隐私模式）时静默降级：刷新后不再回显上次结果。
  */
 
@@ -31,6 +30,15 @@ export function saveLastEvaluationId(lessonId: string, evaluationId: string): vo
     storage()?.setItem(LAST_EVALUATION_STORAGE_PREFIX + lessonId, evaluationId)
   } catch {
     // 配额/隐私模式：降级为不回显
+  }
+}
+
+/** 删除评估后忘掉该课时的选择。 */
+export function forgetLastEvaluationId(lessonId: string): void {
+  try {
+    storage()?.removeItem(LAST_EVALUATION_STORAGE_PREFIX + lessonId)
+  } catch {
+    /* 隐私模式 */
   }
 }
 

@@ -1,10 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { DeleteContentButton } from '@/features/content/delete-content-button'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileText, Send } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import {
   createSummaryEvaluation,
   getSummaryEvaluation,
+  listSummaryEvaluations,
 } from '@/api/generated/endpoints/summaries/summaries'
 import type { SummaryEvaluation } from '@/api/generated/model'
 import { invalidateSummaryEvaluationAccepted } from '@/api/invalidation'
@@ -18,7 +20,13 @@ import { FormAlert } from '@/components/ui/form-alert'
 import { Label } from '@/components/ui/label'
 import { SkeletonText } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
-import { loadLastEvaluationId, saveLastEvaluationId } from '@/features/summaries/last-evaluation'
+import { ResourceJobs } from '@/features/jobs/resource-jobs'
+import { useActiveResourceJobs } from '@/features/jobs/use-active-resource-jobs'
+import {
+  forgetLastEvaluationId,
+  loadLastEvaluationId,
+  saveLastEvaluationId,
+} from '@/features/summaries/last-evaluation'
 import { formatDateTime } from '@/lib/format'
 import {
   beginIdempotencyIntent,
@@ -36,8 +44,8 @@ interface SummaryPanelProps {
 /**
  * 学习总结：手写总结 + 提交 AI 评估。
  *
- * 契约没有历史评估列表接口，页面只在本地记住最近一次评估 id
- * 并重取结果；评估进行中由 SSE 终态对账自动刷新（F6）。
+ * 服务端历史列表支持查看与删除；本地记住最近查看的评估，
+ * 评估进行中由 SSE 终态对账自动刷新（F6）。
  */
 export function SummaryPanel({ lessonId }: SummaryPanelProps) {
   const queryClient = useQueryClient()
@@ -47,12 +55,26 @@ export function SummaryPanel({ lessonId }: SummaryPanelProps) {
     loadLastEvaluationId(lessonId),
   )
   const scope = `summary-evaluation:${lessonId}`
+  const jobsQuery = useActiveResourceJobs('summary_evaluation', evaluationId, ['summary_evaluate'])
 
   const evaluationQuery = useQuery({
     queryKey: queryKeys.summaryEvaluation(evaluationId ?? ''),
     queryFn: () => getSummaryEvaluation(evaluationId as string),
     enabled: evaluationId !== null,
   })
+
+  const historyQuery = useInfiniteQuery({
+    queryKey: ['summary-evaluations', lessonId],
+    queryFn: ({ pageParam }) => listSummaryEvaluations(lessonId, { cursor: pageParam, limit: 20 }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) =>
+      page.page_info.has_more ? (page.page_info.next_cursor ?? undefined) : undefined,
+  })
+  const history = historyQuery.data?.pages.flatMap((page) => page.items) ?? []
+  const entries =
+    evaluationQuery.isSuccess && !history.some((item) => item.id === evaluationQuery.data.id)
+      ? [evaluationQuery.data, ...history]
+      : history
 
   // 评估在服务端已不存在（如数据被清理）：忘掉本地记录，回到纯表单。
   useEffect(() => {
@@ -61,9 +83,10 @@ export function SummaryPanel({ lessonId }: SummaryPanelProps) {
       isApiProblemError(evaluationQuery.error) &&
       evaluationQuery.error.status === 404
     ) {
+      forgetLastEvaluationId(lessonId)
       setEvaluationId(null)
     }
-  }, [evaluationQuery.isError, evaluationQuery.error])
+  }, [evaluationQuery.isError, evaluationQuery.error, lessonId])
 
   const submitMutation = useMutation({
     mutationFn: (text: string) =>
@@ -80,7 +103,10 @@ export function SummaryPanel({ lessonId }: SummaryPanelProps) {
         queryKeys.summaryEvaluation(accepted.evaluation.id),
         accepted.evaluation,
       )
-      await invalidateSummaryEvaluationAccepted(queryClient, accepted.job.id)
+      await Promise.all([
+        invalidateSummaryEvaluationAccepted(queryClient, accepted.job.id),
+        queryClient.invalidateQueries({ queryKey: ['summary-evaluations', lessonId] }),
+      ])
     },
     onError: (mutationError) => {
       if (isApiProblemError(mutationError) && mutationError.code === 'idempotency_conflict') {
@@ -137,6 +163,83 @@ export function SummaryPanel({ lessonId }: SummaryPanelProps) {
         ) : null}
       </section>
 
+      <section
+        aria-label="总结历史"
+        className="space-y-3 rounded-lg border border-border bg-surface p-4"
+      >
+        <h2 className="text-base font-medium text-text">总结历史</h2>
+        {historyQuery.isPending ? (
+          <p className="text-sm text-text-muted">正在读取总结历史…</p>
+        ) : null}
+        {historyQuery.isError ? (
+          <ErrorState
+            title="总结历史加载失败"
+            error={historyQuery.error}
+            onRetry={() => void historyQuery.refetch()}
+          />
+        ) : null}
+        {historyQuery.isSuccess && entries.length === 0 ? (
+          <p className="text-sm text-text-muted">暂无已提交的总结。</p>
+        ) : null}
+        <ul className="divide-y divide-border">
+          {entries.map((entry) => (
+            <li key={entry.id} className="flex flex-wrap items-center gap-3 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="line-clamp-2 whitespace-pre-wrap text-sm text-text">
+                  {entry.summary_text || '学习总结'}
+                </p>
+                <p className="text-xs text-text-subtle">
+                  {formatDateTime(entry.created_at)} ·{' '}
+                  {
+                    { queued: '排队中', evaluating: '评估中', succeeded: '已完成', failed: '失败' }[
+                      entry.status
+                    ]
+                  }
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  saveLastEvaluationId(lessonId, entry.id)
+                  setEvaluationId(entry.id)
+                }}
+              >
+                查看评估
+              </Button>
+              <DeleteContentButton
+                kind="summary"
+                id={entry.id}
+                name={formatDateTime(entry.created_at)}
+                lessonId={lessonId}
+                onDeleted={() => {
+                  if (evaluationId === entry.id) {
+                    forgetLastEvaluationId(lessonId)
+                    setEvaluationId(null)
+                  }
+                  queryClient.removeQueries({
+                    queryKey: queryKeys.summaryEvaluation(entry.id),
+                    exact: true,
+                  })
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+        {historyQuery.hasNextPage ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={historyQuery.isFetchingNextPage}
+            onClick={() => void historyQuery.fetchNextPage()}
+          >
+            {historyQuery.isFetchingNextPage ? '加载中…' : '加载更多总结'}
+          </Button>
+        ) : null}
+      </section>
+
+      <ResourceJobs query={jobsQuery} title="总结正在评估" />
+
       {evaluationId !== null ? (
         evaluationQuery.isPending ? (
           <div role="status" aria-busy="true" aria-label="评估结果加载中" className="space-y-3">
@@ -152,6 +255,8 @@ export function SummaryPanel({ lessonId }: SummaryPanelProps) {
         ) : (
           <EvaluationResult evaluation={evaluationQuery.data} />
         )
+      ) : entries.length > 0 ? (
+        <p className="text-sm text-text-muted">从总结历史中选择一条查看评估。</p>
       ) : (
         <section
           aria-label="评估说明"

@@ -265,6 +265,7 @@ func TestQuizAndReviewGenerationPublishReadyQuiz(t *testing.T) {
 			_, lessonID := seedLesson(t, e.pool)
 			publishDoc(t, e.pool, lessonID, document.KindRawText, "学习资料：极限定义。")
 			publishDoc(t, e.pool, lessonID, document.KindStudentNotes, "学生笔记：极限描述趋势。")
+			e.fake.Enqueue(knowledgeResponse("极限定义"))
 			e.fake.Enqueue(ai.Response{JSON: json.RawMessage(`{
 				"title":"AI 生成试卷",
 				"questions":[{
@@ -300,8 +301,8 @@ func TestQuizAndReviewGenerationPublishReadyQuiz(t *testing.T) {
 			if count != 1 || source != tc.source {
 				t.Fatalf("试卷发布错误: count=%d source=%s", count, source)
 			}
-			if aiRunCount(t, e.pool, jobID) != 1 {
-				t.Fatal("quiz 生成应记录一条脱敏 ai_run")
+			if aiRunCount(t, e.pool, jobID) != 2 {
+				t.Fatal("知识点分析和出题分别记录脱敏 ai_run")
 			}
 		})
 	}
@@ -477,8 +478,8 @@ func TestLessonRegeneratePublishesRequestedDocuments(t *testing.T) {
 	e := newEnv(t)
 	_, lessonID := seedLesson(t, e.pool)
 	publishDoc(t, e.pool, lessonID, document.KindRawText, "学习资料：极限。")
-	e.fake.Enqueue(ai.Response{JSON: json.RawMessage(`{"markdown":"# 教师教纲\n讲解极限"}`), Model: "fake-claude", ProviderRequestID: "req_teacher"})
-	e.fake.Enqueue(ai.Response{JSON: json.RawMessage(`{"markdown":"# 学生笔记\n理解极限"}`), Model: "fake-claude", ProviderRequestID: "req_student"})
+	e.fake.Enqueue(ai.Response{JSON: json.RawMessage(`{"markdown":"# 教师教纲\n讲解极限\n\n## 综合总结\n\n### 内容概览\n围绕极限展开学习。\n\n### 核心知识点\n极限描述趋近关系。\n\n### 知识结构\n从直观图像到概念。\n\n### 示例与应用\n资料未提供示例。\n\n### 结论与复习\n复习：什么是极限？\n\n### 来源与局限\n依据给定资料，无其他来源。"}`), Model: "fake-claude", ProviderRequestID: "req_teacher"})
+	e.fake.Enqueue(ai.Response{JSON: json.RawMessage(`{"markdown":"# 学生笔记\n理解极限\n\n## 综合总结\n\n### 内容概览\n围绕极限展开学习。\n\n### 核心知识点\n极限描述趋近关系。\n\n### 知识结构\n从直观图像到概念。\n\n### 示例与应用\n资料未提供示例。\n\n### 结论与复习\n复习：什么是极限？\n\n### 来源与局限\n依据给定资料，无其他来源。"}`), Model: "fake-claude", ProviderRequestID: "req_student"})
 	family := job.GenerationFamilyLessonGeneration
 	jobID := newJob(t, e.pool, &job.Job{
 		Kind: job.KindLessonRegenerate, AggregateType: "lesson", AggregateID: lessonID, GenerationFamily: &family,
@@ -533,7 +534,15 @@ func (f *fakeQuizCLIGenerator) Generate(_ context.Context, workDir string, req a
 		return ai.Response{}, err
 	}
 	f.notes = string(b)
+	if f.err == nil && req.SchemaVersion == "knowledge-points/v1" {
+		return knowledgeResponse(f.raw), nil
+	}
 	return f.resp, f.err
+}
+
+func knowledgeResponse(excerpt string) ai.Response {
+	b, _ := json.Marshal(map[string]any{"points": []map[string]string{{"label": "极限", "explanation": "极限描述趋势。", "learning_objective": "能解释极限的含义。", "source_excerpt": excerpt, "importance": "core"}}})
+	return ai.Response{JSON: b, Model: "knowledge-test"}
 }
 
 func newEnvWithQuizCLI(t *testing.T, gen aihandlers.QuizGenerator) *env {
@@ -601,11 +610,11 @@ func TestQuizGenerationViaCLIPublishesReadyQuiz(t *testing.T) {
 			if count != 1 || source != tc.source {
 				t.Fatalf("试卷发布错误: count=%d source=%s", count, source)
 			}
-			if aiRunCount(t, e.pool, jobID) != 1 {
-				t.Fatal("CLI quiz 生成应记录一条脱敏 ai_run")
+			if aiRunCount(t, e.pool, jobID) != 2 {
+				t.Fatal("CLI 知识点分析和出题分别记录脱敏 ai_run")
 			}
-			if gen.calls != 1 {
-				t.Fatalf("应恰好一次 CLI 生成调用: %d", gen.calls)
+			if gen.calls != 2 {
+				t.Fatalf("应先分析知识点再生成题目: %d", gen.calls)
 			}
 			if gen.raw != "学习资料：极限定义。" || gen.notes != "学生笔记：极限描述趋势。" {
 				t.Fatalf("写盘资料内容错误: raw=%q notes=%q", gen.raw, gen.notes)
@@ -644,5 +653,24 @@ func TestQuizGenerationCLIFailureDoesNotPublish(t *testing.T) {
 	}
 	if quizzes != 0 {
 		t.Fatalf("CLI 失败不得发布试卷: %d", quizzes)
+	}
+}
+
+func TestUnrelatedQuizDoesNotPublishKnowledgeOrQuiz(t *testing.T) {
+	gen := &fakeQuizCLIGenerator{resp: ai.Response{Model: "test", JSON: json.RawMessage(`{"title":"无关测验","questions":[{"type":"single_choice","stem":"视频标题是什么？","options":{"A":"极限","B":"导数"},"correct_answer":"A","explanation":"标题是极限。","tested_concepts":["视频标题"],"difficulty":"easy","cognitive_level":"recall","score":5}]}`)}}
+	e := newEnvWithQuizCLI(t, gen)
+	_, lessonID := seedLesson(t, e.pool)
+	publishDoc(t, e.pool, lessonID, document.KindRawText, "极限描述趋势。")
+	family := job.GenerationFamilyLessonGeneration
+	jobID := newJob(t, e.pool, &job.Job{Kind: job.KindQuizGenerate, AggregateType: "lesson", AggregateID: lessonID, GenerationFamily: &family, Payload: mustJSON(t, map[string]any{"lesson_id": lessonID.String(), "question_count": 1}), MaxAttempts: 1})
+	e.runOnce(t)
+	if j := getJob(t, e.pool, jobID); j.Status != job.StatusFailed || j.ErrorCode == nil || *j.ErrorCode != worker.ErrCodeClaudeDomainInvalid {
+		t.Fatalf("unrelated quiz accepted: %s %v", j.Status, j.ErrorCode)
+	}
+	for _, query := range []string{`SELECT count(*) FROM quizzes WHERE lesson_id=$1`, `SELECT count(*) FROM course_knowledge_points WHERE lesson_id=$1`} {
+		var n int
+		if err := e.pool.QueryRow(context.Background(), query, lessonID).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("partial publication: %d %v", n, err)
+		}
 	}
 }

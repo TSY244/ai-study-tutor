@@ -14,6 +14,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/TSY244/ai-study-tutor/backend/internal/httpx"
@@ -61,15 +62,6 @@ type evaluatePayload struct {
 // 幂等记录 → 提交。
 func (s *Service) CreateEvaluation(ctx context.Context, rec *idempotency.Record,
 	lessonID uuid.UUID, summaryText string) (int, *Accepted, error) {
-	evaluationID := uuid.New()
-	payload, err := json.Marshal(evaluatePayload{
-		EvaluationID: evaluationID,
-		LessonID:     lessonID,
-		Summary:      summaryText,
-	})
-	if err != nil {
-		return 0, nil, err
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, nil, err
@@ -78,7 +70,7 @@ func (s *Service) CreateEvaluation(ctx context.Context, rec *idempotency.Record,
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 		return 0, nil, err
 	}
-	if _, err := s.lessons.GetByID(ctx, tx, lessonID); err != nil {
+	if _, err := s.lessons.GetByIDForGeneration(ctx, tx, lessonID); err != nil {
 		if errors.Is(err, lesson.ErrNotFound) {
 			// httpx 不能反向依赖 lesson 包，404 映射在本模块完成。
 			return 0, nil, httpx.NewProblemError(http.StatusNotFound, "not_found",
@@ -86,28 +78,8 @@ func (s *Service) CreateEvaluation(ctx context.Context, rec *idempotency.Record,
 		}
 		return 0, nil, err
 	}
-	j := &job.Job{
-		Kind:             job.KindSummaryEvaluate,
-		AggregateType:    "summary_evaluation",
-		AggregateID:      evaluationID,
-		Payload:          payload,
-		IdempotencyScope: &rec.Scope,
-		IdempotencyKey:   &rec.Key,
-	}
-	if err := s.jobs.Create(ctx, tx, j); err != nil {
-		return 0, nil, err
-	}
-	e := &Evaluation{
-		ID:          evaluationID,
-		LessonID:    lessonID,
-		SummaryText: summaryText,
-		JobID:       &j.ID,
-	}
-	if err := s.repo.Create(ctx, tx, e); err != nil {
-		return 0, nil, err
-	}
-	body := &Accepted{Evaluation: ToDTO(e), Job: job.ToDTO(j, nil)}
-	if err := httpx.CompleteJSON(ctx, tx, s.idem, rec.ID, http.StatusAccepted, body, nil, nil, nil, &j.ID); err != nil {
+	body, err := s.createInTx(ctx, tx, rec, lessonID, summaryText)
+	if err != nil {
 		return 0, nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -128,4 +100,42 @@ func (s *Service) GetEvaluation(ctx context.Context, id uuid.UUID) (*DTO, error)
 	}
 	dto := ToDTO(e)
 	return &dto, nil
+}
+
+func (s *Service) createInTx(ctx context.Context, tx pgx.Tx, rec *idempotency.Record, lessonID uuid.UUID, summaryText string) (*Accepted, error) {
+	evaluationID := uuid.New()
+	payload, err := json.Marshal(evaluatePayload{
+		EvaluationID: evaluationID,
+		LessonID:     lessonID,
+		Summary:      summaryText,
+	})
+	if err != nil {
+		return nil, err
+	}
+	j := &job.Job{
+		Kind:             job.KindSummaryEvaluate,
+		AggregateType:    "summary_evaluation",
+		AggregateID:      evaluationID,
+		Payload:          payload,
+		IdempotencyScope: &rec.Scope,
+		IdempotencyKey:   &rec.Key,
+	}
+	if err := s.jobs.Create(ctx, tx, j); err != nil {
+		return nil, err
+	}
+	e := &Evaluation{
+		ID:          evaluationID,
+		LessonID:    lessonID,
+		SummaryText: summaryText,
+		JobID:       &j.ID,
+	}
+	if err := s.repo.Create(ctx, tx, e); err != nil {
+		return nil, err
+	}
+	body := &Accepted{Evaluation: ToDTO(e), Job: job.ToDTO(j, nil)}
+	if err := httpx.CompleteJSON(ctx, tx, s.idem, rec.ID, http.StatusAccepted, body, nil, nil, nil, &j.ID); err != nil {
+		return nil, err
+	}
+
+	return body, nil
 }

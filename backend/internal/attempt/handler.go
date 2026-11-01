@@ -30,6 +30,7 @@ func NewHandler(svc *Service, idem *httpx.IdemExecutor) *Handler {
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, jsonLimit gin.HandlerFunc) {
 	rg.POST("/quizzes/:quiz_id/attempts", jsonLimit, h.createAttempt)
 	rg.GET("/attempts/:attempt_id", h.getAttempt)
+	rg.DELETE("/attempts/:attempt_id", h.deleteAttempt)
 	rg.GET("/lessons/:lesson_id/attempts", h.listAttempts)
 	rg.PATCH("/attempts/:attempt_id/answers/:question_id", jsonLimit, h.saveAnswer)
 	rg.POST("/attempts/:attempt_id/submit", jsonLimit, h.submit)

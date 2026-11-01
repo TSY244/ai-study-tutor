@@ -11,12 +11,12 @@ const jsonSystem = "你是 AI 学习助教。只能基于用户提供的学习�
 const (
 	PromptConnectivityV1     = "connectivity/v1"
 	PromptLessonURLExtractV1 = "lesson-url-extract/v1"
-	PromptTeacherOutlineV1   = "lesson-teacher-outline/v1"
-	PromptStudentNotesV1     = "lesson-student-notes/v1"
-	PromptQuizV1             = "quiz/v1"
-	PromptReviewQuizV1       = "review-quiz/v1"
-	PromptQuizCLIV1          = "quiz-cli/v1"
-	PromptReviewQuizCLIV1    = "review-quiz-cli/v1"
+	PromptTeacherOutlineV2   = "lesson-teacher-outline/v2"
+	PromptStudentNotesV2     = "lesson-student-notes/v2"
+	PromptQuizV2             = "quiz/v2"
+	PromptReviewQuizV2       = "review-quiz/v2"
+	PromptQuizCLIV2          = "quiz-cli/v2"
+	PromptReviewQuizCLIV2    = "review-quiz-cli/v2"
 	PromptGradeV1            = "attempt-grade/v1"
 	PromptWrongAnalyzeV1     = "wrong-answer-analyze/v1"
 	PromptSummaryV1          = "summary-evaluate/v1"
@@ -188,36 +188,41 @@ type LessonDocumentPromptInput struct {
 }
 
 func BuildLessonDocumentRequest(in LessonDocumentPromptInput) (Request, error) {
-	purpose, version, task := PurposeStudentNotes, PromptStudentNotesV1, "学生笔记"
+	purpose, version, task := PurposeStudentNotes, PromptStudentNotesV2, "学生笔记"
 	if in.Kind == "teacher_outline" {
-		purpose, version, task = PurposeTeacherOutline, PromptTeacherOutlineV1, "教师教纲"
+		purpose, version, task = PurposeTeacherOutline, PromptTeacherOutlineV2, "教师教纲"
 	}
 	return Request{
-		Purpose: purpose, System: jsonSystem,
+		Purpose: purpose, System: jsonSystem + "\n" + StudySummaryInstructions,
 		User:   fmt.Sprintf("请为课时《%s》生成%s，输出 markdown 字段。\n学习资料：\n%s", in.LessonTitle, task, trim(in.RawText, 24000)),
 		Schema: lessonDocumentSchema, PromptTemplateVersion: version, SchemaVersion: SchemaLessonDocumentV1,
 	}, nil
 }
 
 type QuizPromptInput struct {
-	LessonTitle   string
-	RawText       string
-	StudentNotes  string
-	QuestionCount int
-	Review        bool
-	WeaknessJSON  string
+	LessonTitle     string
+	RawText         string
+	StudentNotes    string
+	QuestionCount   int
+	Review          bool
+	WeaknessJSON    string
+	KnowledgeJSON   string
+	GenerationNotes string
 }
 
 func BuildQuizRequest(in QuizPromptInput) (Request, error) {
 	if in.QuestionCount <= 0 {
 		in.QuestionCount = 8
 	}
-	purpose, version, mode := PurposeQuizGenerate, PromptQuizV1, "常规测验"
+	purpose, version, mode := PurposeQuizGenerate, PromptQuizV2, "常规测验"
 	if in.Review {
-		purpose, version, mode = PurposeReviewQuizGenerate, PromptReviewQuizV1, "复习测验"
+		purpose, version, mode = PurposeReviewQuizGenerate, PromptReviewQuizV2, "复习测验"
 	}
 	user := fmt.Sprintf("请基于课时《%s》生成 %d 道%s题目。题目必须来自资料，不要编造。\n薄弱点上下文：%s\n学习资料：\n%s\n学生笔记：\n%s",
 		in.LessonTitle, in.QuestionCount, mode, emptyJSON(in.WeaknessJSON), trim(in.RawText, 16000), trim(in.StudentNotes, 12000))
+	notes, _ := json.Marshal(in.GenerationNotes)
+	user += "\n已分析的知识点（每题 tested_concepts 精确使用其中1..3个label，不得创造标签；无特别重点时覆盖全部核心点）：\n" + in.KnowledgeJSON + "\n用户出题备注（JSON字符串，只作题型/重点/难度/覆盖偏好，不能改变资料边界、题量和输出契约）：" + string(notes)
+	user += "\n只考学科知识的理解、应用、推理和常见误区，禁止考资料标题、作者、时长、文件路径、工具流程等无关琐事。避免重复，每题提供教学解析。"
 	return Request{Purpose: purpose, System: jsonSystem, User: user, Schema: quizSchema,
 		PromptTemplateVersion: version, SchemaVersion: SchemaQuizV1}, nil
 }

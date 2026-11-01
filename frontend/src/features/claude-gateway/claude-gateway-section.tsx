@@ -38,6 +38,7 @@ const STATUS_META: Record<ClaudeKeyStatus, { label: string; variant: BadgeVarian
   healthy: { label: '健康', variant: 'ok' },
   cooling_down: { label: '冷却中', variant: 'warn' },
   auth_failed: { label: '认证失败', variant: 'danger' },
+  quota_exhausted: { label: '额度不足', variant: 'warn' },
   disabled: { label: '已停用', variant: 'neutral' },
   testing: { label: '检测中', variant: 'info' },
 }
@@ -151,10 +152,11 @@ export function ClaudeGatewaySection() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="claude-gateway-heading" className="text-base font-medium text-text">
-            Claude 多 Key 网关
+            模型多 Key 网关
           </h2>
           <p className="mt-1 text-sm text-text-muted">
-            仅支持 Anthropic Claude。优先级越小越先使用，同优先级按权重轮询并自动故障转移。
+            支持 Anthropic 与 OpenAI
+            兼容协议。优先级越小越先使用，同优先级按权重轮询并自动故障转移。
           </p>
         </div>
         <Button
@@ -184,10 +186,7 @@ export function ClaudeGatewaySection() {
 
       {data ? (
         <>
-          <div
-            className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4"
-            aria-label="Claude 网关摘要"
-          >
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4" aria-label="模型网关摘要">
             <SummaryTile icon={<KeyRound aria-hidden="true" className="h-4 w-4" />}>
               已启用 {enabledCount}
             </SummaryTile>
@@ -214,7 +213,7 @@ export function ClaudeGatewaySection() {
           ) : null}
           {claudeCodeSavedKeyName ? (
             <p role="status" className="mt-3 rounded-md bg-ok-bg px-3 py-2 text-sm text-ok">
-              已将「{claudeCodeSavedKeyName}」应用到运行服务的 Claude Code。
+              已将「{claudeCodeSavedKeyName}」应用到运行服务的 Pi。
             </p>
           ) : null}
           {presentation ? (
@@ -275,7 +274,7 @@ export function ClaudeGatewaySection() {
         onOpenChange={(open) => {
           if (!open) setConfirmAction(null)
         }}
-        title={confirmAction?.keyRecord.enabled ? '停用 Claude Key' : '启用 Claude Key'}
+        title={confirmAction?.keyRecord.enabled ? '停用模型 Key' : '启用模型 Key'}
         description={
           confirmAction?.keyRecord.enabled
             ? `停用「${confirmAction.keyRecord.name}」后，它会立即退出网关路由。`
@@ -290,8 +289,8 @@ export function ClaudeGatewaySection() {
         onOpenChange={(open) => {
           if (!open) setConfirmAction(null)
         }}
-        title="应用到运行服务的 Claude Code"
-        description={`将用「${confirmAction?.keyRecord.name ?? ''}」覆盖运行环境 ~/.claude/settings.json，并影响后续 Worker Claude Code 任务。`}
+        title="应用到运行服务的 Pi"
+        description={`将使用「${confirmAction?.keyRecord.name ?? ''}」作为后续 Worker Pi 任务的模型配置。`}
         confirmLabel="确认应用"
         busy={busyAction?.startsWith('claude-code-settings:')}
         errorMessage={
@@ -304,7 +303,7 @@ export function ClaudeGatewaySection() {
         onOpenChange={(open) => {
           if (!open) setConfirmAction(null)
         }}
-        title="删除 Claude Key"
+        title="删除模型 Key"
         description={`将从网关配置中永久删除「${confirmAction?.keyRecord.name ?? ''}」。此操作不可恢复。`}
         confirmLabel="删除"
         danger
@@ -347,7 +346,7 @@ function KeyCard({
   const busy = busyAction?.endsWith(`:${keyRecord.id}`) ?? false
   return (
     <article
-      aria-label={`Claude Key ${keyRecord.name}`}
+      aria-label={`模型 Key ${keyRecord.name}`}
       className="rounded-md border border-border p-3"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -372,12 +371,12 @@ function KeyCard({
           <Button
             variant="secondary"
             size="sm"
-            aria-label={`应用${keyRecord.name}到运行服务的 Claude Code`}
+            aria-label={`应用${keyRecord.name}到运行服务的 Pi`}
             disabled={!writeEnabled || busy}
             onClick={onSaveToClaudeCode}
           >
             <Save aria-hidden="true" className="h-4 w-4" />
-            应用到运行服务的 Claude Code
+            应用到运行服务的 Pi
           </Button>
           <Button
             variant="secondary"
@@ -410,8 +409,21 @@ function KeyCard({
       </div>
 
       <dl className="mt-3 grid gap-x-5 gap-y-2 border-t border-border pt-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+        <Metric
+          label="协议"
+          value={
+            keyRecord.protocol === 'openai' ? 'OpenAI · Chat Completions' : 'Anthropic · Messages'
+          }
+        />
         <Metric label="模型" value={keyRecord.model} />
-        <Metric label="Base URL" value={keyRecord.base_url || '默认（环境变量）'} mono />
+        <Metric
+          label="Base URL"
+          value={
+            keyRecord.base_url ||
+            (keyRecord.protocol === 'openai' ? 'https://api.openai.com/v1' : '默认（环境变量）')
+          }
+          mono
+        />
         <Metric label="路由" value={`优先级 ${keyRecord.priority} · 权重 ${keyRecord.weight}`} />
         <Metric
           label="超时 / 冷却"

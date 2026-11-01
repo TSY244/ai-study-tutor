@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/TSY244/ai-study-tutor/backend/internal/contentwrite"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/database"
 )
 
@@ -27,14 +28,15 @@ var (
 
 // Course 是 courses 表的领域表示。
 type Course struct {
-	ID          uuid.UUID
-	Slug        string
-	Title       string
-	Description *string
-	Archived    bool
-	Version     int64
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           uuid.UUID
+	Slug         string
+	Title        string
+	TitlePending bool
+	Description  *string
+	Archived     bool
+	Version      int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type Repository struct{}
@@ -50,10 +52,10 @@ func (Repository) Create(ctx context.Context, q database.Querier, c *Course) err
 		c.ID = uuid.New()
 	}
 	err := q.QueryRow(ctx, `
-		INSERT INTO courses (id, slug, title, description)
-		VALUES ($1,$2,$3,$4)
+		INSERT INTO courses (id, slug, title, description, title_pending)
+		VALUES ($1,$2,$3,$4,$5)
 		RETURNING version, created_at, updated_at`,
-		c.ID, c.Slug, c.Title, c.Description).
+		c.ID, c.Slug, c.Title, c.Description, c.TitlePending).
 		Scan(&c.Version, &c.CreatedAt, &c.UpdatedAt)
 	if isUnique(err, "courses_slug_key") {
 		return ErrSlugTaken
@@ -68,13 +70,59 @@ func (Repository) Create(ctx context.Context, q database.Querier, c *Course) err
 func (Repository) GetByID(ctx context.Context, q database.Querier, id uuid.UUID) (*Course, error) {
 	var c Course
 	err := q.QueryRow(ctx, `
-		SELECT id, slug, title, description, archived, version, created_at, updated_at
+		SELECT id, slug, title, description, archived, version, created_at, updated_at, title_pending
 		FROM courses WHERE id = $1`, id).Scan(
-		&c.ID, &c.Slug, &c.Title, &c.Description, &c.Archived, &c.Version, &c.CreatedAt, &c.UpdatedAt)
+		&c.ID, &c.Slug, &c.Title, &c.Description, &c.Archived, &c.Version, &c.CreatedAt, &c.UpdatedAt, &c.TitlePending)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return &c, err
+}
+
+// LockForDelete 先锁全部课程以阻止新增课时，再按统一顺序锁全部课时，
+// 让活动任务检查与级联删除共享同一事务保护范围。
+func (Repository) LockForDelete(ctx context.Context, q database.Querier, ids []uuid.UUID) error {
+	rows, err := q.Query(ctx, `SELECT id FROM courses WHERE id = ANY($1) ORDER BY id FOR UPDATE`, ids)
+	if err != nil {
+		return err
+	}
+	found := make(map[uuid.UUID]bool, len(ids))
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		found[id] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if !found[id] {
+			return ErrNotFound
+		}
+	}
+	rows, err = q.Query(ctx, `SELECT id FROM lessons WHERE course_id = ANY($1) ORDER BY id FOR UPDATE`, ids)
+	if err != nil {
+		return err
+	}
+	lessonIDs := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		lessonIDs = append(lessonIDs, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	return contentwrite.LockLessonDependents(ctx, q, lessonIDs)
 }
 
 // Exists 返回课程是否存在（供 mastery 等模块以结构化接口校验范围）。
@@ -88,11 +136,11 @@ func (Repository) Exists(ctx context.Context, q database.Querier, id uuid.UUID) 
 func (Repository) Update(ctx context.Context, q database.Querier, c *Course) error {
 	err := q.QueryRow(ctx, `
 		UPDATE courses
-		SET title = $3, description = $4, archived = $5,
+		SET title = $3, description = $4, archived = $5, title_pending = $6,
 		    version = version + 1, updated_at = now()
 		WHERE id = $1 AND version = $2
 		RETURNING version, updated_at`,
-		c.ID, c.Version, c.Title, c.Description, c.Archived).Scan(&c.Version, &c.UpdatedAt)
+		c.ID, c.Version, c.Title, c.Description, c.Archived, c.TitlePending).Scan(&c.Version, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrVersionConflict
 	}
@@ -147,7 +195,7 @@ func (Repository) List(ctx context.Context, q database.Querier, f ListFilter) ([
 	args = append(args, f.Limit)
 	rows, err := q.Query(ctx, `
 		SELECT c.id, c.slug, c.title, c.description, c.archived, c.version,
-		       c.created_at, c.updated_at,
+		       c.created_at, c.updated_at, c.title_pending,
 		       (SELECT count(*) FROM lessons l WHERE l.course_id = c.id) AS lesson_count
 		FROM courses c `+where+`
 		ORDER BY c.created_at ASC, c.id ASC
@@ -160,7 +208,7 @@ func (Repository) List(ctx context.Context, q database.Querier, f ListFilter) ([
 	for rows.Next() {
 		var c CourseWithCount
 		if err := rows.Scan(&c.ID, &c.Slug, &c.Title, &c.Description, &c.Archived,
-			&c.Version, &c.CreatedAt, &c.UpdatedAt, &c.LessonCount); err != nil {
+			&c.Version, &c.CreatedAt, &c.UpdatedAt, &c.TitlePending, &c.LessonCount); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -173,11 +221,11 @@ func (Repository) GetWithCount(ctx context.Context, q database.Querier, id uuid.
 	var c CourseWithCount
 	err := q.QueryRow(ctx, `
 		SELECT c.id, c.slug, c.title, c.description, c.archived, c.version,
-		       c.created_at, c.updated_at,
+		       c.created_at, c.updated_at, c.title_pending,
 		       (SELECT count(*) FROM lessons l WHERE l.course_id = c.id) AS lesson_count
 		FROM courses c WHERE c.id = $1`, id).Scan(
 		&c.ID, &c.Slug, &c.Title, &c.Description, &c.Archived,
-		&c.Version, &c.CreatedAt, &c.UpdatedAt, &c.LessonCount)
+		&c.Version, &c.CreatedAt, &c.UpdatedAt, &c.TitlePending, &c.LessonCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -191,13 +239,7 @@ func (Repository) GetWithCount(ctx context.Context, q database.Querier, id uuid.
 // lesson_generation 任务（删除保护，04 §8）。
 func (Repository) HasActiveGenerationJob(ctx context.Context, q database.Querier, id uuid.UUID) (bool, error) {
 	var busy bool
-	err := q.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM jobs j
-			WHERE j.aggregate_type = 'lesson'
-			  AND j.aggregate_id IN (SELECT id FROM lessons WHERE course_id = $1)
-			  AND j.generation_family = 'lesson_generation'
-			  AND j.status IN ('queued','running','validating','cancel_requested'))`, id).Scan(&busy)
+	err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j WHERE j.status IN ('queued','running','validating','cancel_requested') AND ((j.aggregate_type='course' AND j.aggregate_id=$1) OR (j.aggregate_type='lesson' AND j.aggregate_id IN(SELECT id FROM lessons WHERE course_id=$1)) OR j.payload->>'lesson_id' IN(SELECT id::text FROM lessons WHERE course_id=$1) OR (j.aggregate_type='summary_evaluation' AND j.aggregate_id IN(SELECT se.id FROM summary_evaluations se JOIN lessons l ON l.id=se.lesson_id WHERE l.course_id=$1)) OR (j.aggregate_type='attempt' AND j.aggregate_id IN(SELECT a.id FROM attempts a JOIN quizzes z ON z.id=a.quiz_id JOIN lessons l ON l.id=z.lesson_id WHERE l.course_id=$1))))`, id).Scan(&busy)
 	return busy, err
 }
 
@@ -252,4 +294,13 @@ func (Repository) DeleteCascade(ctx context.Context, q database.Querier, id uuid
 func escapeLike(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return r.Replace(s)
+}
+
+// ApplyGeneratedTitle names only a pending course. The conditional update also
+// protects a manual rename or a title already published by another lesson.
+func (Repository) ApplyGeneratedTitle(ctx context.Context, q database.Querier, lessonID uuid.UUID, title string) error {
+	_, err := q.Exec(ctx, `UPDATE courses c SET title=$2, title_pending=false,
+        version=version+1, updated_at=now()
+        WHERE title_pending AND EXISTS (SELECT 1 FROM lessons l WHERE l.id=$1 AND l.course_id=c.id)`, lessonID, title)
+	return err
 }

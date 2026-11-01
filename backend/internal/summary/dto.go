@@ -12,8 +12,9 @@ import (
 // DTO 是总结评估的 API 表示（契约 SummaryEvaluation）。
 // 表 status 到契约枚举的映射：evaluating→evaluating、completed→succeeded、
 // failed→failed（表无 queued：创建即 evaluating，恒如此映射）。
-// summary_text 是用户内容，不属于契约字段，不得出现在 DTO 中。
+// SummaryText supports reading and revising a saved learning summary.
 type DTO struct {
+	SummaryText    string        `json:"summary_text"`
 	ID             uuid.UUID     `json:"id"`
 	LessonID       uuid.UUID     `json:"lesson_id"`
 	Status         string        `json:"status"`
@@ -43,7 +44,7 @@ type resultPayload struct {
 // error 优先取 jobs 错误列（与 job.ToDTO 的错误映射一致），缺失时回退
 // result.code 与错误码重试分类。
 func ToDTO(e *Evaluation) DTO {
-	dto := DTO{
+	dto := DTO{SummaryText: e.SummaryText,
 		ID:             e.ID,
 		LessonID:       e.LessonID,
 		Status:         contractStatus(e.Status),

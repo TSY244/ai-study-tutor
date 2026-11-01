@@ -640,6 +640,28 @@ func (r *Repository) RetryFailed(ctx context.Context, q database.Querier, id uui
 	return nj, nil
 }
 
+// LockRetryTarget 在服务层重试事务中检查保留审计所指向的业务资源，
+// 并持有共享行锁直到任务提交，防止资源删除与重试交错。
+func (r *Repository) LockRetryTarget(ctx context.Context, q database.Querier, j *Job) error {
+	var sql string
+	switch j.AggregateType {
+	case "lesson":
+		sql = `SELECT id FROM lessons WHERE id = $1 FOR KEY SHARE`
+	case "attempt":
+		sql = `SELECT id FROM attempts WHERE id = $1 FOR KEY SHARE`
+	case "summary_evaluation":
+		sql = `SELECT id FROM summary_evaluations WHERE id = $1 FOR KEY SHARE`
+	default:
+		return nil // 系统和备份任务沿用各自的生命周期规则。
+	}
+	var id uuid.UUID
+	err := q.QueryRow(ctx, sql, j.AggregateID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
 // CancelRequested 返回任务是否已被请求取消（Worker 取消轮询用，03 §7.2）。
 func (r *Repository) CancelRequested(ctx context.Context, q database.Querier, id uuid.UUID) (bool, error) {
 	var requested bool
@@ -753,4 +775,14 @@ func columnsPrefixed(prefix string) string {
 		out += prefix + "." + c
 	}
 	return out
+}
+
+// GetActiveRelatedLessonJob includes evaluation/grading/export jobs as well as
+// generation jobs, for manual edits and deletion of the lesson's contents.
+func (r *Repository) GetActiveRelatedLessonJob(ctx context.Context, q database.Querier, lessonID uuid.UUID) (*Job, error) {
+	j, err := scanJob(q.QueryRow(ctx, `SELECT `+columns+` FROM jobs j WHERE j.status IN ('queued','running','validating','cancel_requested') AND ((j.aggregate_type='lesson' AND j.aggregate_id=$1) OR j.payload->>'lesson_id'=$1::text OR (j.aggregate_type='attempt' AND j.aggregate_id IN (SELECT a.id FROM attempts a JOIN quizzes z ON z.id=a.quiz_id WHERE z.lesson_id=$1)) OR (j.aggregate_type='summary_evaluation' AND j.aggregate_id IN (SELECT id FROM summary_evaluations WHERE lesson_id=$1))) ORDER BY j.created_at LIMIT 1`, lessonID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return j, err
 }

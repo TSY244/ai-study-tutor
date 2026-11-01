@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/TSY244/ai-study-tutor/backend/internal/contentwrite"
 	"github.com/TSY244/ai-study-tutor/backend/internal/course"
 	"github.com/TSY244/ai-study-tutor/backend/internal/httpx"
 	"github.com/TSY244/ai-study-tutor/backend/internal/job"
@@ -279,9 +280,15 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (Les
 	return dto, nil
 }
 
-// Delete 物理删除课时及其子数据。有活动 lesson_generation 任务或
-// 被任何试卷引用（保护作答历史）时拒绝（409 resource_busy）。
+// Delete 级联删除课时、测验和作答等子数据；仅有活动任务时拒绝。
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
+	return s.DeleteMany(ctx, []uuid.UUID{id})
+}
+
+// DeleteMany 原子批量删除课时：单个事务内先对全部 id 做存在性、
+// 活动任务检查，任一失败整体回滚
+// （404/409 resource_busy）；全部通过后在同一事务逐个级联删除。
+func (s *Service) DeleteMany(ctx context.Context, ids []uuid.UUID) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -290,25 +297,36 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 		return err
 	}
-	if _, err := s.repo.GetByID(ctx, tx, id); err != nil {
+	if err := s.repo.LockForDelete(ctx, tx, ids); err != nil {
 		return mapReadErr(err)
 	}
-	j, err := s.jobs.GetActiveGenerationJob(ctx, tx, id)
-	if err != nil {
+	if err := contentwrite.LockLessonDependents(ctx, tx, ids); err != nil {
 		return err
 	}
-	if j != nil {
-		return job.ResourceBusyError(j.ID)
+	courseIDs := map[uuid.UUID]bool{}
+	for _, id := range ids {
+		j, err := s.jobs.GetActiveRelatedLessonJob(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if j != nil {
+			return job.ResourceBusyError(j.ID)
+		}
+		l, err := s.repo.GetByID(ctx, tx, id)
+		if err != nil {
+			return mapReadErr(err)
+		}
+		courseIDs[l.CourseID] = true
 	}
-	referenced, err := s.repo.HasQuizReference(ctx, tx, id)
-	if err != nil {
-		return err
+	for _, id := range ids {
+		if err := s.repo.DeleteCascade(ctx, tx, id); err != nil {
+			return err
+		}
 	}
-	if referenced {
-		return httpx.NewProblemError(409, "resource_busy", "资源繁忙", "课时已被试卷引用，不能删除。")
-	}
-	if err := s.repo.DeleteCascade(ctx, tx, id); err != nil {
-		return err
+	for courseID := range courseIDs {
+		if err := mastery.NewApplyService(mastery.Repository{}).Refresh(ctx, tx, courseID, nil); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }

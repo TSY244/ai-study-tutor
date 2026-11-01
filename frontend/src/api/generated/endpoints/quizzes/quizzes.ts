@@ -6,7 +6,10 @@
 import type {
   AsyncAcceptedResponse,
   ListQuizzesParams,
+  ManualQuizCreate,
+  ManualQuizUpdate,
   Quiz,
+  QuizEditor,
   QuizGenerationCreate,
   QuizList,
   ReviewQuizGenerationCreate
@@ -94,6 +97,30 @@ export const listQuizzes = async (lessonId: string,
 );}
 
 
+export const getCreateManualQuizUrl = (lessonId: string,) => {
+
+
+
+
+  return `/api/v1/lessons/${lessonId}/quizzes`
+}
+
+/**
+ * @summary 手工创建测验与题目
+ */
+export const createManualQuiz = async (lessonId: string,
+    manualQuizCreate: ManualQuizCreate, options?: RequestInit): Promise<QuizEditor> => {
+
+  return apiFetch<QuizEditor>(getCreateManualQuizUrl(lessonId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(manualQuizCreate)
+  }
+);}
+
+
 export const getGetQuizUrl = (quizId: string,) => {
 
 
@@ -108,6 +135,79 @@ export const getGetQuizUrl = (quizId: string,) => {
 export const getQuiz = async (quizId: string, options?: RequestInit): Promise<Quiz> => {
 
   return apiFetch<Quiz>(getGetQuizUrl(quizId),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+export const getUpdateQuizUrl = (quizId: string,) => {
+
+
+
+
+  return `/api/v1/quizzes/${quizId}`
+}
+
+/**
+ * 携带当前 version。只修改标题/备注时保留 ID；提供完整 questions 数组时创建新的试卷 ID，旧试卷归档并从测验列表移除，历史作答继续引用原题目。调用方必须采用响应中的新 ID 和 version。
+ * @summary 编辑测验及题目
+ */
+export const updateQuiz = async (quizId: string,
+    manualQuizUpdate: ManualQuizUpdate, options?: RequestInit): Promise<QuizEditor> => {
+
+  return apiFetch<QuizEditor>(getUpdateQuizUrl(quizId),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(manualQuizUpdate)
+  }
+);}
+
+
+export const getDeleteQuizUrl = (quizId: string,) => {
+
+
+
+
+  return `/api/v1/quizzes/${quizId}`
+}
+
+/**
+ * 级联删除测验、作答、答案和相关进度快照，清理薄弱点证据并重新计算进度；有进行中任务时返回 409 resource_busy。历史修改前试卷 ID 也可用此接口清理。
+ * @summary 删除测验
+ */
+export const deleteQuiz = async (quizId: string, options?: RequestInit): Promise<void> => {
+
+  return apiFetch<void>(getDeleteQuizUrl(quizId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+export const getGetQuizEditorUrl = (quizId: string,) => {
+
+
+
+
+  return `/api/v1/quizzes/${quizId}/editor`
+}
+
+/**
+ * 内容管理专用表示，含标准答案与解析。学生 GET /quizzes/{quiz_id} 的答案隐藏规则不变。
+ * @summary 读取测验编辑内容（含参考答案）
+ */
+export const getQuizEditor = async (quizId: string, options?: RequestInit): Promise<QuizEditor> => {
+
+  return apiFetch<QuizEditor>(getGetQuizEditorUrl(quizId),
   {
     ...options,
     method: 'GET'

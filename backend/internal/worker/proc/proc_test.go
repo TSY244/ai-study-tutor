@@ -93,3 +93,49 @@ func TestFakeBlockUntilDone(t *testing.T) {
 		t.Fatalf("期望 ctx 错误，得到 %v", err)
 	}
 }
+
+func TestExecRunnerStreamsBeforeExit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	// exec replaces the shell so cancellation cannot leave a sleeping child
+	// holding inherited stdout/stderr pipes open.
+	lines := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, err := (ExecRunner{}).Run(ctx, Cmd{Name: "/bin/sh", Args: []string{"-c", "echo live >&2; exec sleep 10"}, OnStderrLine: func(line []byte) { lines <- string(line) }})
+		done <- err
+	}()
+	select {
+	case line := <-lines:
+		if line != "live" {
+			t.Fatalf("line=%q", line)
+		}
+	case <-ctx.Done():
+		t.Fatal("progress buffered until process exit")
+	}
+	select {
+	case <-done:
+		t.Fatal("process exited before cancellation")
+	default:
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel=%v", err)
+	}
+}
+
+func TestLineWriterBoundsAndResumes(t *testing.T) {
+	var lines []string
+	w := &lineWriter{onLine: func(b []byte) { lines = append(lines, string(b)) }}
+	w.Write([]byte("one"))
+	w.Write([]byte("\ntw"))
+	w.Write([]byte("o\n"))
+	w.Write(make([]byte, 2048))
+	w.Write([]byte("\nafter\npartial"))
+	if len(lines) != 3 || lines[0] != "one" || lines[1] != "two" || lines[2] != "after" {
+		t.Fatalf("lines=%q", lines)
+	}
+	if len(w.buf) > 1024 {
+		t.Fatal("unbounded record buffer")
+	}
+}

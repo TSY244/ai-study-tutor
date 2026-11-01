@@ -98,16 +98,17 @@ func (h *Handler) listKeys(c *gin.Context) {
 }
 
 type createKeyRequest struct {
-	APIKey                 string `json:"api_key"`
-	Name                   string `json:"name"`
-	Model                  string `json:"model"`
-	BaseURL                string `json:"base_url"`
-	Enabled                *bool  `json:"enabled"`
-	Priority               *int   `json:"priority"`
-	Weight                 *int   `json:"weight"`
-	TimeoutSeconds         *int   `json:"timeout_seconds"`
-	CooldownSeconds        *int   `json:"cooldown_seconds"`
-	MaxConsecutiveFailures *int   `json:"max_consecutive_failures"`
+	Protocol               *string `json:"protocol"`
+	APIKey                 string  `json:"api_key"`
+	Name                   string  `json:"name"`
+	Model                  string  `json:"model"`
+	BaseURL                string  `json:"base_url"`
+	Enabled                *bool   `json:"enabled"`
+	Priority               *int    `json:"priority"`
+	Weight                 *int    `json:"weight"`
+	TimeoutSeconds         *int    `json:"timeout_seconds"`
+	CooldownSeconds        *int    `json:"cooldown_seconds"`
+	MaxConsecutiveFailures *int    `json:"max_consecutive_failures"`
 }
 
 func (h *Handler) createKey(c *gin.Context) {
@@ -119,12 +120,17 @@ func (h *Handler) createKey(c *gin.Context) {
 		badRequest(c, "请求体不是有效的 JSON。")
 		return
 	}
+	if req.Protocol != nil && (*req.Protocol == "" || !validProtocol(*req.Protocol)) {
+		badRequest(c, "protocol 必须是 anthropic 或 openai。")
+		return
+	}
 	baseURL, ok := validateBaseURL(req.BaseURL)
 	if !ok {
 		badRequest(c, "base_url 必须是 https URL，且不得包含用户名密码。")
 		return
 	}
 	key := Key{
+		Protocol:               ProtocolAnthropic,
 		APIKey:                 strings.TrimSpace(req.APIKey),
 		Name:                   strings.TrimSpace(req.Name),
 		Model:                  strings.TrimSpace(req.Model),
@@ -135,6 +141,9 @@ func (h *Handler) createKey(c *gin.Context) {
 		TimeoutSeconds:         DefaultTimeoutSeconds,
 		CooldownSeconds:        DefaultCooldownSeconds,
 		MaxConsecutiveFailures: DefaultMaxConsecutiveFailures,
+	}
+	if req.Protocol != nil {
+		key.Protocol = *req.Protocol
 	}
 	if req.Enabled != nil {
 		key.Enabled = *req.Enabled
@@ -188,6 +197,7 @@ func (h *Handler) createKey(c *gin.Context) {
 }
 
 type updateKeyRequest struct {
+	Protocol               *string `json:"protocol"`
 	APIKey                 *string `json:"api_key"`
 	Name                   *string `json:"name"`
 	Model                  *string `json:"model"`
@@ -210,7 +220,12 @@ func (h *Handler) updateKey(c *gin.Context) {
 		badRequest(c, "请求体不是有效的 JSON。")
 		return
 	}
+	if req.Protocol != nil && (*req.Protocol == "" || !validProtocol(*req.Protocol)) {
+		badRequest(c, "protocol 必须是 anthropic 或 openai。")
+		return
+	}
 	patch := KeyPatch{
+		Protocol:               req.Protocol,
 		APIKey:                 req.APIKey,
 		Name:                   req.Name,
 		Model:                  req.Model,
@@ -266,7 +281,7 @@ func (h *Handler) updateKey(c *gin.Context) {
 	// 换 Key 或改运行端点、模型、enabled 时复位运行态：旧的 auth_failed/cooling_down
 	// 不再适用于新配置。写入新代际 unknown 栅栏，而不是删除状态，防止旧的
 	// in-flight 请求在 PATCH 后重建旧代际；disabled 仍由配置侧推导。
-	if patch.APIKey != nil || patch.Model != nil || patch.BaseURL != nil || patch.Enabled != nil {
+	if patch.Protocol != nil || patch.APIKey != nil || patch.Model != nil || patch.BaseURL != nil || patch.Enabled != nil {
 		h.State.ResetForKey(updated)
 	}
 	c.JSON(http.StatusOK, safeView(updated, h.State.Snapshot(updated)))
@@ -339,6 +354,7 @@ func (h *Handler) saveClaudeCodeSettings(c *gin.Context) {
 type claudeCodeSettingsDocument struct {
 	Schema string `json:"$schema"`
 	Env    struct {
+		Protocol                    string `json:"AI_STUDY_TUTOR_AI_PROTOCOL"`
 		AnthropicBaseURL            string `json:"ANTHROPIC_BASE_URL"`
 		AnthropicAuthToken          string `json:"ANTHROPIC_AUTH_TOKEN"`
 		AnthropicModel              string `json:"ANTHROPIC_MODEL"`
@@ -372,7 +388,8 @@ func writeClaudeCodeSettings(path string, key Key, configuredBaseURL string) err
 		return errors.New("Claude Code settings file is not configured")
 	}
 	doc := claudeCodeSettingsDocument{Schema: "https://json.schemastore.org/claude-code-settings.json"}
-	doc.Env.AnthropicBaseURL = EffectiveBaseURL(key.BaseURL, configuredBaseURL)
+	doc.Env.Protocol = EffectiveProtocol(key.Protocol)
+	doc.Env.AnthropicBaseURL = EffectiveKeyBaseURL(key, configuredBaseURL)
 	doc.Env.AnthropicAuthToken = key.APIKey
 	doc.Env.AnthropicModel = key.Model
 	doc.Env.AnthropicDefaultOpusModel = key.Model

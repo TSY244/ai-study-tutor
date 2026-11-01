@@ -1,3 +1,4 @@
+import { DeleteContentButton } from '@/features/content/delete-content-button'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 
@@ -10,6 +11,9 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/error-state'
 import { SkeletonText } from '@/components/ui/skeleton'
 import { StartAttemptButton } from '@/features/attempts/start-attempt-button'
+import { ResourceJobs } from '@/features/jobs/resource-jobs'
+import { useActiveResourceJobs } from '@/features/jobs/use-active-resource-jobs'
+import { KnowledgePoints } from '@/features/knowledge/knowledge-points'
 import { GenerateQuizButton } from '@/features/quizzes/generate-quiz-button'
 import { formatDateTime } from '@/lib/format'
 
@@ -30,6 +34,10 @@ const QUIZ_SOURCE_LABEL: Record<QuizList['items'][number]['source'], string> = {
  */
 function LessonQuizzesPage() {
   const { courseId, lessonId } = Route.useParams()
+  const jobsQuery = useActiveResourceJobs('lesson', lessonId, [
+    'quiz_generate',
+    'review_quiz_generate',
+  ])
   const quizzesQuery = useInfiniteQuery({
     queryKey: queryKeys.quizzes(lessonId),
     queryFn: ({ pageParam }) => listQuizzes(lessonId, { cursor: pageParam, limit: 20 }),
@@ -62,25 +70,21 @@ function LessonQuizzesPage() {
       <div className="min-w-0 space-y-1">
         <h2 className="text-base font-semibold text-text">测验</h2>
         <p className="text-sm text-text-muted">
-          常规测验会由后端根据课时内容、历史成绩和薄弱点策略生成。
+          先分析资料知识点，再围绕学习目标出题；可备注想加强的内容和题型。
         </p>
       </div>
       <GenerateQuizButton courseId={courseId} lessonId={lessonId} />
     </div>
   )
 
-  if (quizzes.length === 0) {
-    return (
-      <div className="space-y-4">
-        {header}
-        <EmptyState title="本课时还没有测验" description="课时内容就绪后可以生成测验。" />
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-4">
       {header}
+      <KnowledgePoints courseId={courseId} lessonId={lessonId} />
+      <ResourceJobs query={jobsQuery} title="测验正在生成" />
+      {quizzes.length === 0 && jobsQuery.isSuccess && jobsQuery.jobs.length === 0 ? (
+        <EmptyState title="本课时还没有测验" description="课时内容就绪后可以生成测验。" />
+      ) : null}
       <ul className="space-y-3">
         {quizzes.map((quiz) => (
           <li
@@ -96,7 +100,13 @@ function LessonQuizzesPage() {
                 {quiz.question_count} 题 · 创建于 {formatDateTime(quiz.created_at)}
               </p>
             </div>
-            <StartAttemptButton quiz={quiz} />
+            {quiz.generation_notes ? (
+              <p className="text-sm text-text-muted">出题备注：{quiz.generation_notes}</p>
+            ) : null}
+            <div className="flex items-center gap-2">
+              <StartAttemptButton quiz={quiz} />
+              <DeleteContentButton kind="quiz" id={quiz.id} name={quiz.title} lessonId={lessonId} />
+            </div>
           </li>
         ))}
       </ul>

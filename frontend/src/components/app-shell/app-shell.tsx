@@ -3,6 +3,7 @@ import { Link, Outlet } from '@tanstack/react-router'
 import { Breadcrumbs } from '@/components/app-shell/breadcrumbs'
 import { CommandPalette } from '@/components/app-shell/command-palette'
 import { JobsCenter } from '@/components/app-shell/jobs-center'
+import { ThemeToggle } from '@/components/app-shell/theme-toggle'
 import { env } from '@/env'
 import { cn } from '@/lib/cn'
 
@@ -15,8 +16,8 @@ const NAV_ITEMS = [
 ] as const
 
 /**
- * 全局产品壳：skip link -> 顶栏（标题 / 主导航 / 命令面板 / 任务中心）->
- * 面包屑 -> 主内容。任务中心入口常驻顶栏右侧，全页面可见。
+ * 全局产品壳：skip link -> 顶栏（标题 / 主导航 / 命令面板 / 任务中心 / 主题切换）->
+ * 面包屑 -> 主内容。任务中心入口常驻顶栏右侧，全页面可见；主题切换在最右。
  * 考试作答路由（/attempts/:id）不走此壳，使用专注模式布局。
  */
 export function AppShell() {
@@ -59,6 +60,7 @@ export function AppShell() {
           <div className="flex shrink-0 items-center gap-1.5">
             <CommandPalette />
             <JobsCenter />
+            <ThemeToggle />
           </div>
         </div>
       </header>

@@ -22,6 +22,7 @@ import type {
   AttemptSubmitAccepted,
   AttemptSubmitCompleted,
   AttemptSummary,
+  BatchDelete,
   ClaudeKey,
   ClaudeKeyCreate,
   ClaudeKeyUpdate,
@@ -343,9 +344,7 @@ function paginate<T>(
 
 function validateCourseFields(body: Partial<CourseCreate> | null): FieldError[] {
   const fieldErrors: FieldError[] = []
-  if (!body || typeof body.title !== 'string' || body.title.trim().length === 0) {
-    fieldErrors.push({ field: 'title', code: 'required', message: '请输入课程标题。' })
-  } else if (body.title.length > 200) {
+  if (typeof body?.title === 'string' && body.title.length > 200) {
     fieldErrors.push({ field: 'title', code: 'too_long', message: '课程标题最长 200 字。' })
   }
   if (typeof body?.description === 'string' && body.description.length > 5000) {
@@ -764,6 +763,7 @@ const curatedHandlers = [
 
     const now = nowIso()
     const key: ClaudeKey = {
+      protocol: body.protocol ?? 'anthropic',
       id: `ck_${globalThis.crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`,
       name: body.name.trim(),
       masked_key: maskGatewaySecret(body.api_key.trim()),
@@ -888,7 +888,7 @@ const curatedHandlers = [
     const now = nowIso()
     const course: Course = {
       id: globalThis.crypto.randomUUID(),
-      title: (body?.title as string).trim(),
+      title: body?.title?.trim() || '待 AI 命名',
       description: typeof body?.description === 'string' ? body.description : '',
       archived: false,
       lesson_count: 0,
@@ -900,6 +900,9 @@ const curatedHandlers = [
     rememberIdempotent(request, fingerprint, course)
     return json(request, course, { status: 201 })
   }),
+  http.get('*/api/v1/courses/:courseId/knowledge-points', ({ request }) =>
+    json(request, { items: [] }),
+  ),
   http.get('*/api/v1/courses/:courseId', ({ request, params }) => {
     const course = findCourse(params.courseId as string)
     return course ? json(request, course) : notFound(request, '课程不存在或已删除。')
@@ -947,6 +950,21 @@ const curatedHandlers = [
     }
     return new HttpResponse(null, { status: 204, headers: echoRequestId(request) })
   }),
+  // 批量删除课程：原子语义——任一 id 不存在则 404 整体回滚。
+  http.post('*/api/v1/courses\\:batch-delete', async ({ request }) => {
+    const body = (await request.json().catch(() => null)) as BatchDelete | null
+    const ids = body?.ids ?? []
+    if (ids.length === 0 || ids.some((id) => !findCourse(id))) {
+      return notFound(request, '所选课程不存在或已删除，未执行删除。')
+    }
+    for (const courseId of ids) {
+      deletedCourseIds.add(courseId)
+      for (const lesson of baseLessons()) {
+        if (lesson.course_id === courseId) deletedLessonIds.add(lesson.id)
+      }
+    }
+    return new HttpResponse(null, { status: 204, headers: echoRequestId(request) })
+  }),
 
   // 课时
   http.get('*/api/v1/courses/:courseId/lessons', ({ request, params }) => {
@@ -973,7 +991,7 @@ const curatedHandlers = [
       id: globalThis.crypto.randomUUID(),
       course_id: course.id,
       ordinal: body?.ordinal as number,
-      title: (body?.title as string).trim(),
+      title: body?.title?.trim() || '待 AI 命名',
       description: typeof body?.description === 'string' ? body.description : '',
       status: 'draft',
       active_job_id: null,
@@ -1032,6 +1050,16 @@ const curatedHandlers = [
     const lessonId = params.lessonId as string
     if (!findLesson(lessonId)) return notFound(request, '课时不存在或已删除。')
     deletedLessonIds.add(lessonId)
+    return new HttpResponse(null, { status: 204, headers: echoRequestId(request) })
+  }),
+  // 批量删除课时：原子语义——任一 id 不存在则 404 整体回滚。
+  http.post('*/api/v1/lessons\\:batch-delete', async ({ request }) => {
+    const body = (await request.json().catch(() => null)) as BatchDelete | null
+    const ids = body?.ids ?? []
+    if (ids.length === 0 || ids.some((id) => !findLesson(id))) {
+      return notFound(request, '所选课时不存在或已删除，未执行删除。')
+    }
+    for (const lessonId of ids) deletedLessonIds.add(lessonId)
     return new HttpResponse(null, { status: 204, headers: echoRequestId(request) })
   }),
 
@@ -1129,50 +1157,79 @@ const curatedHandlers = [
   }),
 
   // 测验生成：创建 quiz_generate 后台任务；题目发布由 Worker 成功后完成。
-  http.post('*/api/v1/lessons/:lessonId/quiz-generations', async ({ request, params }) => {
-    const lesson = findLesson(params.lessonId as string)
-    if (!lesson) return notFound(request, '课时不存在或已删除。')
-    const body = (await request.json().catch(() => ({}))) as Partial<QuizGenerationCreate> | null
-    const fieldErrors: FieldError[] = []
-    if (
-      body?.question_count !== undefined &&
-      body.question_count !== null &&
-      (!Number.isInteger(body.question_count) ||
-        body.question_count < 5 ||
-        body.question_count > 15)
-    ) {
-      fieldErrors.push({
-        field: 'question_count',
-        code: 'invalid',
-        message: '题量必须是 5–15，或留空由策略决定。',
-      })
-    }
-    if (typeof body?.title === 'string' && body.title.length > 300) {
-      fieldErrors.push({ field: 'title', code: 'too_long', message: '测验标题最长 300 字。' })
-    }
-    if (fieldErrors.length > 0) return validationProblem(request, fieldErrors)
+  http.post(
+    /\/api\/v1\/lessons\/([^/]+)\/(?:review-)?quiz-generations$/,
+    async ({ request, params }) => {
+      const lesson = findLesson((params.lessonId ?? params[0]) as string)
+      if (!lesson) return notFound(request, '课时不存在或已删除。')
+      const body = (await request.json().catch(() => ({}))) as Partial<QuizGenerationCreate> | null
+      const fieldErrors: FieldError[] = []
+      if (
+        body?.question_count !== undefined &&
+        body.question_count !== null &&
+        (!Number.isInteger(body.question_count) ||
+          body.question_count < 5 ||
+          body.question_count > 15)
+      ) {
+        fieldErrors.push({
+          field: 'question_count',
+          code: 'invalid',
+          message: '题量必须是 5–15，或留空由策略决定。',
+        })
+      }
+      if (typeof body?.title === 'string' && body.title.length > 300) {
+        fieldErrors.push({ field: 'title', code: 'too_long', message: '测验标题最长 300 字。' })
+      }
+      if (fieldErrors.length > 0) return validationProblem(request, fieldErrors)
 
-    const fingerprint = `quiz-generation:${lesson.id}:${JSON.stringify(body ?? {})}`
-    const replay = replayIdempotent<AsyncAccepted>(request, fingerprint)
-    if (replay && 'conflict' in replay) return idempotencyConflictProblem(request)
-    if (replay) return json(request, replay.replay, { status: 202 })
+      if (
+        typeof body?.generation_notes === 'string' &&
+        Array.from(body.generation_notes).length > 3000
+      ) {
+        return validationProblem(request, [
+          { field: 'generation_notes', code: 'too_long', message: '出题备注最多 3000 字。' },
+        ])
+      }
+      const fingerprint = `${new URL(request.url).pathname}:${lesson.id}:${JSON.stringify(body ?? {})}`
+      const replay = replayIdempotent<AsyncAccepted>(request, fingerprint)
+      if (replay && 'conflict' in replay) return idempotencyConflictProblem(request)
+      if (replay) return json(request, replay.replay, { status: 202 })
 
-    if (lesson.status === 'processing' && lesson.active_job_id) {
-      return problem(request, {
-        status: 409,
-        code: 'resource_busy',
-        title: '已有任务在进行',
-        detail: '同一课时同时只允许一个生成任务，请等待现有任务完成。',
-        extensions: { active_job_id: lesson.active_job_id, generation_family: 'lesson_generation' },
-      })
-    }
+      if (lesson.status === 'processing' && lesson.active_job_id) {
+        return problem(request, {
+          status: 409,
+          code: 'resource_busy',
+          title: '已有任务在进行',
+          detail: '同一课时同时只允许一个生成任务，请等待现有任务完成。',
+          extensions: {
+            active_job_id: lesson.active_job_id,
+            generation_family: 'lesson_generation',
+          },
+        })
+      }
 
-    const job = newQuizGenerationJob(lesson.id)
-    createdJobs.unshift(job)
-    patchLesson(lesson.id, { status: 'processing', active_job_id: job.id })
-    const accepted: AsyncAccepted = { job }
-    rememberIdempotent(request, fingerprint, accepted)
-    return json(request, accepted, { status: 202 })
+      const job = newQuizGenerationJob(lesson.id)
+      createdJobs.unshift(job)
+      patchLesson(lesson.id, { status: 'processing', active_job_id: job.id })
+      const accepted: AsyncAccepted = { job }
+      rememberIdempotent(request, fingerprint, accepted)
+      return json(request, accepted, { status: 202 })
+    },
+  ),
+
+  http.get('*/api/v1/lessons/:lessonId/summary-evaluations', ({ request, params }) => {
+    return json(
+      request,
+      paginate(
+        [...summaryEvaluationsStore.values()].filter((item) => item.lesson_id === params.lessonId),
+        new URL(request.url),
+      ),
+    )
+  }),
+  http.delete('*/api/v1/summary-evaluations/:evaluationId', ({ request, params }) => {
+    if (!summaryEvaluationsStore.delete(params.evaluationId as string))
+      return notFound(request, '评估不存在或已删除。')
+    return new HttpResponse(null, { status: 204 })
   }),
 
   // 总结评估：创建 summary_evaluate 后台任务；评估结果由 Worker 完成后写回。
@@ -1198,6 +1255,7 @@ const curatedHandlers = [
     const evaluation: SummaryEvaluation = {
       id: globalThis.crypto.randomUUID(),
       lesson_id: lesson.id,
+      summary_text: body?.summary,
       status: 'evaluating',
       coverage_score: null,
       correct_points: [],

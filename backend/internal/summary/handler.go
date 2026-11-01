@@ -33,6 +33,9 @@ func NewHandler(svc *Service, idem *httpx.IdemExecutor) *Handler {
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, jsonLimit gin.HandlerFunc) {
 	rg.POST("/lessons/:lesson_id/summary-evaluations", jsonLimit, h.createEvaluation)
 	rg.GET("/summary-evaluations/:evaluation_id", h.getEvaluation)
+	rg.GET("/lessons/:lesson_id/summary-evaluations", h.listEvaluations)
+	rg.PATCH("/summary-evaluations/:evaluation_id", jsonLimit, h.editEvaluation)
+	rg.DELETE("/summary-evaluations/:evaluation_id", h.deleteEvaluation)
 }
 
 // POST /api/v1/lessons/:lesson_id/summary-evaluations —— 创建学习总结评估任务。

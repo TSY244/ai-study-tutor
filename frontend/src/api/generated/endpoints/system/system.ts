@@ -7,6 +7,7 @@ import type {
   AsyncAcceptedResponse,
   BilibiliCookieStatus,
   BilibiliCookieUpsert,
+  BilibiliLoginStatus,
   ClaudeCodeSettingsSaved,
   ClaudeKey,
   ClaudeKeyCreate,
@@ -333,6 +334,52 @@ export const getCreateBilibiliCookieTestUrl = () => {
 export const createBilibiliCookieTest = async ( options?: RequestInit): Promise<AsyncAcceptedResponse> => {
 
   return apiFetch<AsyncAcceptedResponse>(getCreateBilibiliCookieTestUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+export const getCreateBilibiliLoginUrl = () => {
+
+
+
+
+  return `/api/v1/system/bilibili-cookie/logins`
+}
+
+/**
+ * @summary 创建 B 站扫码登录会话（Worker 执行）
+ */
+export const createBilibiliLogin = async ( options?: RequestInit): Promise<AsyncAcceptedResponse> => {
+
+  return apiFetch<AsyncAcceptedResponse>(getCreateBilibiliLoginUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+export const getPollBilibiliLoginUrl = (loginId: string,) => {
+
+
+
+
+  return `/api/v1/system/bilibili-cookie/logins/${loginId}/poll`
+}
+
+/**
+ * @summary 查询扫码状态并在确认后自动保存 Cookie
+ */
+export const pollBilibiliLogin = async (loginId: string, options?: RequestInit): Promise<BilibiliLoginStatus> => {
+
+  return apiFetch<BilibiliLoginStatus>(getPollBilibiliLoginUrl(loginId),
   {
     ...options,
     method: 'POST'

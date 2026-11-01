@@ -18,7 +18,15 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       // 单元测试（vitest）不需要路由代码生成/转换，避免其注入代码干扰组件测试。
-      ...(mode === 'test' ? [] : [tanstackRouter({ target: 'react', autoCodeSplitting: true })]),
+      ...(mode === 'test'
+        ? []
+        : [
+            tanstackRouter({
+              target: 'react',
+              autoCodeSplitting: true,
+              routeFileIgnorePattern: '\\.(test|spec)\\.',
+            }),
+          ]),
       react(),
       tailwindcss(),
       // 每次生产构建输出 dist/bundle-report.html（gzip/brotli 体积， treemap）。
@@ -77,6 +85,8 @@ export default defineConfig(({ mode }) => {
       include: ['src/**/*.{test,spec}.{ts,tsx}'],
       restoreMocks: true,
       unstubGlobals: true,
+      // Docker 构建环境 CPU 受限，重型集成用例（整页渲染 + MSW）容易超时报抖动。
+      testTimeout: 15000,
       coverage: {
         provider: 'v8',
         reporter: ['text', 'html'],

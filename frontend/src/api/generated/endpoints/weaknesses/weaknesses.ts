@@ -7,7 +7,9 @@ import type {
   ListWeaknessesParams,
   ResourceVersion,
   Weakness,
-  WeaknessList
+  WeaknessCreate,
+  WeaknessList,
+  WeaknessUpdate
 } from '../../model';
 
 import { apiFetch } from '../../../http';
@@ -65,6 +67,54 @@ export const getWeakness = async (weaknessId: string, options?: RequestInit): Pr
 );}
 
 
+export const getUpdateWeaknessUrl = (weaknessId: string,) => {
+
+
+
+
+  return `/api/v1/weaknesses/${weaknessId}`
+}
+
+/**
+ * 携带当前 version，修改后重新计算课时/课程掌握度。
+ * @summary 编辑薄弱点
+ */
+export const updateWeakness = async (weaknessId: string,
+    weaknessUpdate: WeaknessUpdate, options?: RequestInit): Promise<Weakness> => {
+
+  return apiFetch<Weakness>(getUpdateWeaknessUrl(weaknessId),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(weaknessUpdate)
+  }
+);}
+
+
+export const getDeleteWeaknessUrl = (weaknessId: string,) => {
+
+
+
+
+  return `/api/v1/weaknesses/${weaknessId}`
+}
+
+/**
+ * @summary 删除薄弱点
+ */
+export const deleteWeakness = async (weaknessId: string, options?: RequestInit): Promise<void> => {
+
+  return apiFetch<void>(getDeleteWeaknessUrl(weaknessId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
 export const getResolveWeaknessUrl = (weaknessId: string,) => {
 
 
@@ -109,6 +159,30 @@ export const reopenWeakness = async (weaknessId: string,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     body: JSON.stringify(resourceVersion)
+  }
+);}
+
+
+export const getCreateWeaknessUrl = (courseId: string,) => {
+
+
+
+
+  return `/api/v1/courses/${courseId}/weaknesses`
+}
+
+/**
+ * @summary 手工新增薄弱点
+ */
+export const createWeakness = async (courseId: string,
+    weaknessCreate: WeaknessCreate, options?: RequestInit): Promise<Weakness> => {
+
+  return apiFetch<Weakness>(getCreateWeaknessUrl(courseId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(weaknessCreate)
   }
 );}
 

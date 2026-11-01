@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/TSY244/ai-study-tutor/backend/internal/contentwrite"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/database"
 )
 
@@ -77,6 +78,63 @@ func (Repository) GetByID(ctx context.Context, q database.Querier, id uuid.UUID)
 		return nil, ErrNotFound
 	}
 	return &l, err
+}
+
+// LockForGeneration 保证创建生成任务期间课时不会被删除；与删除入口的
+// FOR UPDATE 冲突，但允许同一课时的生成请求交给任务唯一索引仲裁。
+func (Repository) LockForGeneration(ctx context.Context, q database.Querier, id uuid.UUID) error {
+	var locked uuid.UUID
+	err := q.QueryRow(ctx, `SELECT id FROM lessons WHERE id = $1 FOR KEY SHARE`, id).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+// GetByIDForGeneration 返回受删除保护的课时，用于素材导入等需要字段的创建事务。
+func (r Repository) GetByIDForGeneration(ctx context.Context, q database.Querier, id uuid.UUID) (*Lesson, error) {
+	if err := r.LockForGeneration(ctx, q, id); err != nil {
+		return nil, err
+	}
+	return r.GetByID(ctx, q, id)
+}
+
+// LockForDelete 在所有保护检查之前锁住课时；统一按 id 排序，避免
+// 多个批量删除请求以不同选择顺序获取锁时互相死锁。
+func (Repository) LockForDelete(ctx context.Context, q database.Querier, ids []uuid.UUID) error {
+	parents, err := q.Query(ctx, `SELECT c.id FROM courses c JOIN lessons l ON l.course_id=c.id WHERE l.id=ANY($1) ORDER BY c.id FOR KEY SHARE OF c`, ids)
+	if err != nil {
+		return err
+	}
+	for parents.Next() {
+	}
+	err = parents.Err()
+	parents.Close()
+	if err != nil {
+		return err
+	}
+	rows, err := q.Query(ctx, `SELECT id FROM lessons WHERE id = ANY($1) ORDER BY id FOR UPDATE`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := make(map[uuid.UUID]bool, len(ids))
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		found[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if !found[id] {
+			return ErrNotFound
+		}
+	}
+	return nil
 }
 
 // GetCourseID 返回课时所属课程；课时不存在时 found=false（供 mastery 等
@@ -200,18 +258,31 @@ func (Repository) DocumentAvailabilityByLesson(ctx context.Context, q database.Q
 	return out, rows.Err()
 }
 
-// HasQuizReference 报告课时是否被任何试卷引用（不限状态，保护作答历史）。
-func (Repository) HasQuizReference(ctx context.Context, q database.Querier, id uuid.UUID) (bool, error) {
-	var referenced bool
-	err := q.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM quizzes WHERE lesson_id = $1)`, id).Scan(&referenced)
-	return referenced, err
-}
-
 // DeleteCascade 在调用方事务内物理删除课时及其子数据，并把关联
-// file_objects 标记为 deleted。调用方必须已确认无试卷引用、无活动任务；
+// file_objects 标记为 deleted。调用方必须已锁定依赖行并确认无活动任务；
 // jobs/job_events/ai_runs 作为任务审计保留。
 func (Repository) DeleteCascade(ctx context.Context, q database.Querier, id uuid.UUID) error {
+	rows, err := q.Query(ctx, `SELECT id FROM quizzes WHERE lesson_id=$1 ORDER BY id`, id)
+	if err != nil {
+		return err
+	}
+	quizIDs := []uuid.UUID{}
+	for rows.Next() {
+		var quizID uuid.UUID
+		if err := rows.Scan(&quizID); err != nil {
+			rows.Close()
+			return err
+		}
+		quizIDs = append(quizIDs, quizID)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if err := contentwrite.DeleteQuizzes(ctx, q, quizIDs); err != nil {
+		return err
+	}
 	stmts := []string{
 		// 关联文件对象标记删除（temporary 行的 Owner 字段一并清空以满足 CHECK）。
 		`UPDATE file_objects SET state = 'deleted',

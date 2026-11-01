@@ -32,7 +32,7 @@ import { presentProblem } from '@/api/problem-messages'
 import { systemStatusMeta } from '@/lib/status'
 
 /**
- * 设置：Claude 网关、连接状态、系统信息与本地诊断。
+ * 设置：模型网关、连接状态、系统信息与本地诊断。
  * 安全边界：完整 Key 只在新增/替换表单中短暂存在并直送本机 API；
  * 前端存储、查询缓存、响应、任务与诊断都不得保存完整 Key。
  */
@@ -43,7 +43,7 @@ export const Route = createFileRoute('/_shell/settings')({
 function SettingsPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <PageHeader title="设置" description="管理本地 Claude 网关、连接状态与诊断信息。" />
+      <PageHeader title="设置" description="管理本地 模型网关、连接状态与诊断信息。" />
       <ClaudeSection />
       <ClaudeGatewaySection />
       <BilibiliCookieSection />
@@ -83,7 +83,7 @@ function useSystemStatus() {
 function ClaudeSection() {
   const statusQuery = useSystemStatus()
   return (
-    <Section id="claude-heading" title="Claude 网关连接">
+    <Section id="claude-heading" title="模型网关连接">
       {statusQuery.isPending ? <Skeleton className="h-4 w-40" /> : null}
       {statusQuery.isError ? (
         <ErrorState error={statusQuery.error} onRetry={() => void statusQuery.refetch()} />
@@ -150,7 +150,7 @@ function ClaudeConnectivityTestButton() {
         }}
       >
         <PlugZap aria-hidden="true" className="h-4 w-4" />
-        {testMutation.isPending ? '创建测试任务中…' : '测试 Claude 网关连接'}
+        {testMutation.isPending ? '创建测试任务中…' : '测试 模型网关连接'}
       </Button>
       {presentation ? (
         <FormAlert

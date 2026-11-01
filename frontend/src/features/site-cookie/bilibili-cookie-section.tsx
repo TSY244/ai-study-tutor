@@ -19,6 +19,7 @@ import { ErrorState } from '@/components/ui/error-state'
 import { FormAlert } from '@/components/ui/form-alert'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BilibiliCookieDialog } from '@/features/site-cookie/bilibili-cookie-dialog'
+import { BilibiliLogin } from '@/features/site-cookie/bilibili-login'
 import {
   beginIdempotencyIntent,
   resolveIdempotencyIntent,
@@ -106,43 +107,46 @@ export function BilibiliCookieSection() {
             用于导入 bilibili 视频链接时获取登录后才可见的字幕。保存后立即生效，无需重启。
           </p>
         </div>
-        {data?.configured ? (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={busyAction !== null}
-              onClick={() => void runTest()}
-            >
-              <PlugZap aria-hidden="true" className="h-4 w-4" />
-              {busyAction === 'test' ? '创建检测任务中…' : '检测可用性'}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={busyAction !== null}
-              onClick={() => {
-                setActionError(null)
-                setDialogOpen(true)
-              }}
-            >
-              <Pencil aria-hidden="true" className="h-4 w-4" />
-              替换
-            </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              disabled={busyAction !== null}
-              onClick={() => {
-                setActionError(null)
-                setConfirmDelete(true)
-              }}
-            >
-              <Trash2 aria-hidden="true" className="h-4 w-4" />
-              删除
-            </Button>
-          </div>
-        ) : null}
+        <div className="flex flex-wrap gap-2">
+          <BilibiliLogin disabled={busyAction !== null} />
+          {data?.configured ? (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busyAction !== null}
+                onClick={() => void runTest()}
+              >
+                <PlugZap aria-hidden="true" className="h-4 w-4" />
+                {busyAction === 'test' ? '创建检测任务中…' : '检测可用性'}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busyAction !== null}
+                onClick={() => {
+                  setActionError(null)
+                  setDialogOpen(true)
+                }}
+              >
+                <Pencil aria-hidden="true" className="h-4 w-4" />
+                替换
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={busyAction !== null}
+                onClick={() => {
+                  setActionError(null)
+                  setConfirmDelete(true)
+                }}
+              >
+                <Trash2 aria-hidden="true" className="h-4 w-4" />
+                删除
+              </Button>
+            </>
+          ) : null}
+        </div>
       </div>
 
       {statusQuery.isPending ? (

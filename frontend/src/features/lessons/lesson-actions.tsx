@@ -43,7 +43,7 @@ export function LessonActions({ lesson }: { lesson: Lesson }) {
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title="删除课时"
-        description={`将删除「${lesson.title}」及其素材与生成内容，此操作不可恢复。`}
+        description={`将删除「${lesson.title}」及其素材、全部文档、知识点、测验、作答、总结和课时薄弱点，此操作不可恢复。`}
         confirmLabel="删除"
         danger
         busy={deleteLesson.isPending}

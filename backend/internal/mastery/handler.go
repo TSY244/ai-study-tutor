@@ -29,6 +29,9 @@ func NewHandler(weakness *WeaknessService, progress *ProgressService, idem *http
 // RegisterRoutes 注册薄弱点与进度端点；resolve/reopen 要求 Idempotency-Key。
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, jsonLimit gin.HandlerFunc) {
 	rg.GET("/weaknesses", h.listWeaknesses)
+	rg.POST("/courses/:course_id/weaknesses", jsonLimit, h.createWeakness)
+	rg.PATCH("/weaknesses/:weakness_id", jsonLimit, h.editWeakness)
+	rg.DELETE("/weaknesses/:weakness_id", h.deleteWeakness)
 	rg.GET("/weaknesses/:weakness_id", h.getWeakness)
 	rg.POST("/weaknesses/:weakness_id/resolve", jsonLimit, h.resolve)
 	rg.POST("/weaknesses/:weakness_id/reopen", jsonLimit, h.reopen)

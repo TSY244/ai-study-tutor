@@ -371,7 +371,7 @@ func TestDeleteLesson(t *testing.T) {
 	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusNotFound, "not_found")
 }
 
-func TestDeleteLessonReferencedByQuiz(t *testing.T) {
+func TestDeleteLessonCascadesReferencedQuiz(t *testing.T) {
 	pool := databasetest.New(t)
 	e := newEngine(t, pool)
 	contract := apitest.Load(t)
@@ -380,12 +380,98 @@ func TestDeleteLessonReferencedByQuiz(t *testing.T) {
 	created := createLesson(t, e, courseID, uuid.NewString(), `{"ordinal":1,"title":"被引用"}`)
 	id := created["id"].(string)
 
-	// 播种引用该课时的试卷（保护作答历史，禁止删除）
+	// 关联试卷随课时一起删除，无需用户先删试卷。
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO quizzes (id, lesson_id, title, source) VALUES ($1,$2,'试卷','regular')`,
 		uuid.New(), id); err != nil {
 		t.Fatal(err)
 	}
 	rec := apitest.Do(t, e, http.MethodDelete, "/api/v1/lessons/"+id, nil, "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = apitest.Do(t, e, http.MethodGet, "/api/v1/lessons/"+id, nil, "")
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusNotFound, "not_found")
+}
+
+const batchDeleteLessonsURL = "/api/v1/lessons:batch-delete"
+
+func TestBatchDeleteLessons(t *testing.T) {
+	pool := databasetest.New(t)
+	e := newEngine(t, pool)
+	contract := apitest.Load(t)
+	courseID := seedCourse(t, pool)
+	hdr := map[string]string{"Content-Type": "application/json"}
+
+	// 空 ids / 缺 ids / 非法 UUID / 超上限 → 400 bad_request
+	rec := apitest.Do(t, e, http.MethodPost, batchDeleteLessonsURL, hdr, `{"ids":[]}`)
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
+	rec = apitest.Do(t, e, http.MethodPost, batchDeleteLessonsURL, hdr, `{}`)
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
+	rec = apitest.Do(t, e, http.MethodPost, batchDeleteLessonsURL, hdr, `{"ids":["not-a-uuid"]}`)
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
+	many := make([]string, 101)
+	for i := range many {
+		many[i] = uuid.NewString()
+	}
+	body, _ := json.Marshal(map[string]any{"ids": many})
+	rec = apitest.Do(t, e, http.MethodPost, batchDeleteLessonsURL, hdr, string(body))
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
+
+	// 成功删除多个（重复 id 去重后仍全部删除）
+	a := createLesson(t, e, courseID, uuid.NewString(), `{"ordinal":1,"title":"批删甲"}`)["id"].(string)
+	b := createLesson(t, e, courseID, uuid.NewString(), `{"ordinal":2,"title":"批删乙"}`)["id"].(string)
+	body, _ = json.Marshal(map[string]any{"ids": []string{a, b, a}})
+	rec = apitest.Do(t, e, http.MethodPost, batchDeleteLessonsURL, hdr, string(body))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []string{a, b} {
+		rec = apitest.Do(t, e, http.MethodGet, "/api/v1/lessons/"+id, nil, "")
+		contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusNotFound, "not_found")
+	}
+}
+
+func TestBatchDeleteLessonsRollback(t *testing.T) {
+	pool := databasetest.New(t)
+	e := newEngine(t, pool)
+	contract := apitest.Load(t)
+	ctx := context.Background()
+	courseID := seedCourse(t, pool)
+	hdr := map[string]string{"Content-Type": "application/json"}
+
+	// 含不存在 id → 404 且整体回滚（其余课时仍在）
+	keep := createLesson(t, e, courseID, uuid.NewString(), `{"ordinal":1,"title":"保留"}`)["id"].(string)
+	body, _ := json.Marshal(map[string]any{"ids": []string{keep, uuid.NewString()}})
+	rec := apitest.Do(t, e, http.MethodPost, batchDeleteLessonsURL, hdr, string(body))
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusNotFound, "not_found")
+	rec = apitest.Do(t, e, http.MethodGet, "/api/v1/lessons/"+keep, nil, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("404 回滚后课时应保留：status=%d", rec.Code)
+	}
+
+	// 含活动 lesson_generation 任务的课时 → 409 resource_busy 且整体回滚
+	busy := createLesson(t, e, courseID, uuid.NewString(), `{"ordinal":2,"title":"繁忙"}`)["id"].(string)
+	busyID, _ := uuid.Parse(busy)
+	fam := job.GenerationFamilyLessonGeneration
+	j := &job.Job{
+		Kind:             job.KindLessonImport,
+		AggregateType:    "lesson",
+		AggregateID:      busyID,
+		GenerationFamily: &fam,
+		Payload:          []byte(`{}`),
+	}
+	if err := (&job.Repository{}).Create(ctx, pool, j); err != nil {
+		t.Fatal(err)
+	}
+	keep2 := createLesson(t, e, courseID, uuid.NewString(), `{"ordinal":3,"title":"保留二"}`)["id"].(string)
+	body, _ = json.Marshal(map[string]any{"ids": []string{keep2, busy}})
+	rec = apitest.Do(t, e, http.MethodPost, batchDeleteLessonsURL, hdr, string(body))
 	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusConflict, "resource_busy")
+	for _, id := range []string{keep2, busy} {
+		rec = apitest.Do(t, e, http.MethodGet, "/api/v1/lessons/"+id, nil, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("409 回滚后课时应保留：id=%s status=%d", id, rec.Code)
+		}
+	}
 }

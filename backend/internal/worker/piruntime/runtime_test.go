@@ -1,4 +1,4 @@
-package claudecli
+package piruntime
 
 import (
 	"encoding/json"
@@ -315,13 +315,10 @@ func TestRuntimeEnvIsFreshMinimalAndMatchesSelection(t *testing.T) {
 	env := runtime.Env(selection)
 	got := envMap(t, env)
 	wantNames := map[string]bool{
-		"HOME": true, "PATH": true, "SHELL": true, "CI": true, "NO_COLOR": true,
+		"AI_STUDY_TUTOR_AI_PROTOCOL": true,
+		"HOME":                       true, "PATH": true, "SHELL": true, "CI": true, "NO_COLOR": true,
 		"ANTHROPIC_AUTH_TOKEN": true, "ANTHROPIC_BASE_URL": true, "ANTHROPIC_MODEL": true,
-		"ANTHROPIC_DEFAULT_OPUS_MODEL": true, "ANTHROPIC_DEFAULT_SONNET_MODEL": true,
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL": true, "CLAUDE_CODE_SUBAGENT_MODEL": true,
-		"AI_STUDY_TUTOR_CLAUDE_KEY_ID":             true,
-		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": true,
-		"CLAUDE_CODE_ATTRIBUTION_HEADER":           true,
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID": true,
 	}
 	if len(got) != len(wantNames) {
 		t.Fatal("Env returned the wrong number of allowlisted variables")
@@ -337,16 +334,10 @@ func TestRuntimeEnvIsFreshMinimalAndMatchesSelection(t *testing.T) {
 	if got["ANTHROPIC_AUTH_TOKEN"] != selection.Key.APIKey || got["ANTHROPIC_BASE_URL"] != selection.BaseURL || got["AI_STUDY_TUTOR_CLAUDE_KEY_ID"] != selection.Key.ID {
 		t.Fatal("Env did not match the selected Key")
 	}
-	for _, name := range []string{
-		"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
-	} {
+	for _, name := range []string{"ANTHROPIC_MODEL"} {
 		if got[name] != selection.Key.Model {
 			t.Fatalf("Env model variable %q did not match the Selection", name)
 		}
-	}
-	if got["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] != "1" || got["CLAUDE_CODE_ATTRIBUTION_HEADER"] != "0" {
-		t.Fatal("Env did not provide the expected Claude Code traffic controls")
 	}
 	if _, exists := got["PARENT_SECRET_SENTINEL"]; exists {
 		t.Fatal("Env inherited a non-allowlisted parent variable")
@@ -403,16 +394,10 @@ func mustWriteRaw(t *testing.T, path string, raw []byte) {
 
 func settingsEnv(key claudegateway.Key, defaultBaseURL string) map[string]string {
 	return map[string]string{
-		"ANTHROPIC_AUTH_TOKEN":                     key.APIKey,
-		"ANTHROPIC_BASE_URL":                       claudegateway.EffectiveBaseURL(key.BaseURL, defaultBaseURL),
-		"ANTHROPIC_MODEL":                          key.Model,
-		"AI_STUDY_TUTOR_CLAUDE_KEY_ID":             key.ID,
-		"CLAUDE_CODE_SUBAGENT_MODEL":               key.Model,
-		"ANTHROPIC_DEFAULT_OPUS_MODEL":             key.Model,
-		"ANTHROPIC_DEFAULT_SONNET_MODEL":           key.Model,
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL":            key.Model,
-		"CLAUDE_CODE_ATTRIBUTION_HEADER":           "0",
-		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		"ANTHROPIC_AUTH_TOKEN":         key.APIKey,
+		"ANTHROPIC_BASE_URL":           claudegateway.EffectiveBaseURL(key.BaseURL, defaultBaseURL),
+		"ANTHROPIC_MODEL":              key.Model,
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID": key.ID,
 	}
 }
 
@@ -455,4 +440,30 @@ func envMap(t *testing.T, env []string) map[string]string {
 		result[name] = value
 	}
 	return result
+}
+
+func TestOpenAISelectionPropagatesProtocolAndRejectsStaleApplication(t *testing.T) {
+	dir := t.TempDir()
+	keys := filepath.Join(dir, "keys.json")
+	settings := filepath.Join(dir, "settings.json")
+	key := claudegateway.Key{ID: "openai-key", APIKey: "private-token", Model: "custom-model", Protocol: claudegateway.ProtocolOpenAI, Enabled: true}
+	mustWriteKeys(t, keys, []claudegateway.Key{key})
+	runtime := Runtime{KeysFile: keys, SettingsFile: settings, DefaultBaseURL: "https://anthropic.example", Home: dir}
+	selected, err := runtime.Resolve()
+	if err != nil || selected.BaseURL != "https://api.openai.com/v1" {
+		t.Fatal("OpenAI fallback inherited Anthropic endpoint")
+	}
+	env := envMap(t, runtime.Env(selected))
+	if env["AI_STUDY_TUTOR_AI_PROTOCOL"] != "openai" || env["ANTHROPIC_AUTH_TOKEN"] != key.APIKey {
+		t.Fatal("protocol or credentials were not passed to Pi")
+	}
+	mustWriteSettings(t, settings, env)
+	if _, err = runtime.Resolve(); err != nil {
+		t.Fatal("matching application rejected")
+	}
+	delete(env, "AI_STUDY_TUTOR_AI_PROTOCOL")
+	mustWriteSettings(t, settings, env)
+	if _, err = runtime.Resolve(); err == nil || aipkg.AsProviderError(err).Code != aipkg.ErrNotConfigured {
+		t.Fatal("stale Anthropic application must be reapplied after a protocol switch")
+	}
 }

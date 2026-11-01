@@ -74,7 +74,7 @@ export const queryKeys = {
   attempt: (attemptId: string) => ['attempt', attemptId] as const,
   /** 课时作答历史列表（游标分页，infinite query；started_at 倒序）。 */
   lessonAttempts: (lessonId: string) => ['lesson-attempts', lessonId] as const,
-  /** 单次学习总结评估（无列表 API，按 id 跟踪最近一次提交）。 */
+  /** 单次学习总结评估。 */
   summaryEvaluation: (evaluationId: string) => ['summary-evaluation', evaluationId] as const,
   jobs: (filters?: Record<string, unknown>) => ['jobs', filters ?? {}] as const,
   job: (jobId: string) => ['job', jobId] as const,

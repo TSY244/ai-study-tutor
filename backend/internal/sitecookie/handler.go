@@ -17,8 +17,9 @@ import (
 // Handler 暴露 /api/v1/system/bilibili-cookie 管理端点。
 // 所有响应只含安全视图（masked_sessdata/过期时间），绝不含完整 Cookie。
 type Handler struct {
-	Store *Store
-	Jobs  *job.Service
+	Store    *Store
+	Jobs     *job.Service
+	Sessions *LoginSessions
 
 	idem *httpx.IdemExecutor
 }
@@ -30,6 +31,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, jsonLimit gin.HandlerFunc,
 	rg.PUT("/system/bilibili-cookie", jsonLimit, h.saveCookie)
 	rg.DELETE("/system/bilibili-cookie", h.deleteCookie)
 	rg.POST("/system/bilibili-cookie/tests", jsonLimit, h.createCookieTest)
+	if h.Sessions != nil {
+		rg.POST("/system/bilibili-cookie/logins", jsonLimit, h.createLogin)
+		rg.POST("/system/bilibili-cookie/logins/:login_id/poll", jsonLimit, h.pollLogin)
+	}
 }
 
 func (h *Handler) getStatus(c *gin.Context) {

@@ -3,10 +3,12 @@
  * Source: api/openapi.yaml (发布契约)
  * Regenerate: npm run api:gen
  */
+import type { GatewayProtocol } from './gatewayProtocol';
 
 export interface ClaudeKeyCreate {
+  protocol?: GatewayProtocol;
   /**
-     * 完整 Anthropic API Key；仅用于写入，任何响应都不会回读。
+     * 完整模型 API Key；仅用于写入，任何响应都不会回读。
      * @minLength 1
      */
   api_key: string;

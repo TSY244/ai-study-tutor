@@ -1,0 +1,11 @@
+{
+  "name": "ai-study-tutor-pi-runtime",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0"
+  },
+  "engines": { "node": ">=22.19.0" }
+}

@@ -4,6 +4,7 @@
  * Regenerate: npm run api:gen
  */
 import type {
+  BatchDelete,
   Lesson,
   LessonCreate,
   LessonList,
@@ -125,7 +126,8 @@ export const getDeleteLessonUrl = (lessonId: string,) => {
 }
 
 /**
- * @summary 删除课时
+ * 级联删除素材、文档、知识点、测验、作答、总结及课时薄弱点，并重新计算课程进度；仅有进行中任务时拒绝。
+ * @summary 删除课时及全部关联内容
  */
 export const deleteLesson = async (lessonId: string, options?: RequestInit): Promise<void> => {
 
@@ -135,6 +137,29 @@ export const deleteLesson = async (lessonId: string, options?: RequestInit): Pro
     method: 'DELETE'
 
 
+  }
+);}
+
+
+export const getBatchDeleteLessonsUrl = () => {
+
+
+
+
+  return `/api/v1/lessons:batch-delete`
+}
+
+/**
+ * @summary 批量级联删除课时（原子：任一课时不存在或有进行中任务则整体回滚）
+ */
+export const batchDeleteLessons = async (batchDelete: BatchDelete, options?: RequestInit): Promise<void> => {
+
+  return apiFetch<void>(getBatchDeleteLessonsUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(batchDelete)
   }
 );}
 

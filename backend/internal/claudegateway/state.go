@@ -13,18 +13,20 @@ import (
 	"sync"
 	"time"
 
+	aipkg "github.com/TSY244/ai-study-tutor/backend/internal/ai"
 	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
 )
 
 // Key 运行态词汇（契约 ClaudeKey.status 枚举）。
 const (
-	StatusUnknown     = "unknown"
-	StatusHealthy     = "healthy"
-	StatusCoolingDown = "cooling_down"
-	StatusAuthFailed  = "auth_failed"
-	StatusDisabled    = "disabled"
-	StatusTesting     = "testing"
+	StatusUnknown        = "unknown"
+	StatusHealthy        = "healthy"
+	StatusCoolingDown    = "cooling_down"
+	StatusAuthFailed     = "auth_failed"
+	StatusQuotaExhausted = "quota_exhausted"
+	StatusDisabled       = "disabled"
+	StatusTesting        = "testing"
 
 	keyStateFingerprintPrefix = "config-sha256:v2:"
 )
@@ -295,7 +297,7 @@ func (t *StateTracker) Eligible(k Key, now time.Time) bool {
 	t.migrateStateGenerationLocked(k)
 	st := t.effectiveLocked(k, now)
 	switch st.Status {
-	case StatusAuthFailed, StatusCoolingDown, StatusDisabled:
+	case StatusAuthFailed, StatusQuotaExhausted, StatusCoolingDown, StatusDisabled:
 		return false
 	default:
 		return true
@@ -510,6 +512,9 @@ func successState(generation keyStateGeneration, now time.Time, latencyMs int64)
 func authFailedState(st KeyState, generation keyStateGeneration, code string, now time.Time, latencyMs int64) KeyState {
 	st = stateForGeneration(st, generation)
 	st.Status = StatusAuthFailed
+	if code == aipkg.ErrQuotaExhausted {
+		st.Status = StatusQuotaExhausted
+	}
 	st.LastFailureAt = &now
 	st.LastErrorCode = &code
 	st.LastLatencyMs = &latencyMs
@@ -585,7 +590,7 @@ func keyStateFingerprint(k Key) string {
 }
 
 func keyStateGenerationFor(k Key, configuredDefaultBaseURL string) keyStateGeneration {
-	endpoint := messagesEndpoint(EffectiveBaseURL(k.BaseURL, configuredDefaultBaseURL))
+	endpoint := keyEndpoint(k, configuredDefaultBaseURL)
 	return keyStateGenerationForEndpoint(k, endpoint)
 }
 
@@ -594,17 +599,27 @@ func keyStateGenerationForEndpoint(k Key, endpoint string) keyStateGeneration {
 	if apiKey == "" {
 		return keyStateGeneration{}
 	}
-	endpoint = messagesEndpoint(EffectiveBaseURL(endpoint, ""))
+	if EffectiveProtocol(k.Protocol) == ProtocolOpenAI {
+		endpoint = aipkg.OpenAIChatEndpoint(endpoint)
+	} else {
+		endpoint = messagesEndpoint(EffectiveBaseURL(endpoint, ""))
+	}
+	protocol := ""
+	if EffectiveProtocol(k.Protocol) == ProtocolOpenAI {
+		protocol = ProtocolOpenAI
+	}
 	material, _ := json.Marshal(struct {
 		APIKey   string `json:"api_key"`
 		Model    string `json:"model"`
 		Endpoint string `json:"endpoint"`
 		Enabled  bool   `json:"enabled"`
+		Protocol string `json:"protocol,omitempty"`
 	}{
 		APIKey:   apiKey,
 		Model:    strings.TrimSpace(k.Model),
 		Endpoint: endpoint,
 		Enabled:  k.Enabled,
+		Protocol: protocol,
 	})
 	sum := sha256.Sum256(material)
 	return keyStateGeneration{

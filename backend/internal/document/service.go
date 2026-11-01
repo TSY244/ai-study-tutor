@@ -135,7 +135,7 @@ func (s *Service) createGenerationJob(ctx context.Context, rec *idempotency.Reco
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 		return 0, nil, err
 	}
-	if _, err := s.lessons.GetByID(ctx, tx, lessonID); err != nil {
+	if err := s.lessons.LockForGeneration(ctx, tx, lessonID); err != nil {
 		if errors.Is(err, lesson.ErrNotFound) {
 			// httpx 不能反向依赖 lesson 包，404 映射在本模块完成。
 			return 0, nil, httpx.NewProblemError(http.StatusNotFound, "not_found",

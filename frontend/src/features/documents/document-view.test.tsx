@@ -206,10 +206,14 @@ describe('文档阅读视图', () => {
     expect(screen.getByText(/导入素材并等待生成任务完成后/)).toBeInTheDocument()
   })
 
-  it('其他类型已就绪时，空状态提示可切换查看', async () => {
+  it('导入进行中时，在笔记下显示任务进度而非尚未生成', async () => {
     renderWithRouter(`/courses/${COURSE_STATS_ID}/lessons/${LESSON_BAYES_ID}/notes`)
-    expect(await screen.findByText('笔记尚未生成')).toBeInTheDocument()
-    // 集合查询随后到达，提示哪些类型已就绪
-    expect(await screen.findByText(/原文已就绪/)).toBeInTheDocument()
+    const jobs = await screen.findByRole('region', { name: '后台生成任务' })
+    expect(within(jobs).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '45')
+    expect(within(jobs).getByRole('link', { name: '查看任务详情' })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: '查看任务详情' })).toHaveLength(1)
+    const tabs = screen.getByRole('navigation', { name: '课时子视图' })
+    expect(tabs.compareDocumentPosition(jobs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByText('笔记尚未生成')).not.toBeInTheDocument()
   })
 })

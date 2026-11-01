@@ -336,29 +336,7 @@ func (Repository) RestartGrading(ctx context.Context, q database.Querier, id, jo
 // 按 graded_at ASC, id ASC 稳定排序；掌握度公式内部再按时间戳加权。
 func (Repository) ListGradedScores(ctx context.Context, q database.Querier,
 	courseID uuid.UUID, lessonID *uuid.UUID) ([]mastery.GradedScore, error) {
-	rows, err := q.Query(ctx, `
-		SELECT a.final_score, a.max_score, a.graded_at
-		FROM attempts a
-		JOIN quizzes z ON z.id = a.quiz_id
-		JOIN lessons l ON l.id = z.lesson_id
-		WHERE l.course_id = $1
-		  AND ($2::uuid IS NULL OR z.lesson_id = $2)
-		  AND a.status = 'graded'
-		  AND a.max_score IS NOT NULL AND a.max_score > 0
-		ORDER BY a.graded_at ASC, a.id ASC`, courseID, lessonID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []mastery.GradedScore{}
-	for rows.Next() {
-		var s mastery.GradedScore
-		if err := rows.Scan(&s.Score, &s.Total, &s.GradedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return (mastery.Repository{}).ListGradedScores(ctx, q, courseID, lessonID)
 }
 
 // CountGraded 返回范围内已批阅作答数。
@@ -459,4 +437,23 @@ func (Repository) ListByLesson(ctx context.Context, q database.Querier, lessonID
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// LockSubmissionParents keeps deletion from taking the parent locks while a
+// submission holds the attempt and is about to write progress or create a job.
+// Parent-first ordering matches course/lesson/quiz cascade deletion.
+func (Repository) LockSubmissionParents(ctx context.Context, q database.Querier, attemptID uuid.UUID) error {
+	var locked uuid.UUID
+	for _, stmt := range []string{
+		`SELECT c.id FROM courses c JOIN lessons l ON l.course_id=c.id JOIN quizzes z ON z.lesson_id=l.id JOIN attempts a ON a.quiz_id=z.id WHERE a.id=$1 FOR KEY SHARE OF c`,
+		`SELECT l.id FROM lessons l JOIN quizzes z ON z.lesson_id=l.id JOIN attempts a ON a.quiz_id=z.id WHERE a.id=$1 FOR KEY SHARE OF l`,
+	} {
+		if err := q.QueryRow(ctx, stmt, attemptID).Scan(&locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+	}
+	return nil
 }

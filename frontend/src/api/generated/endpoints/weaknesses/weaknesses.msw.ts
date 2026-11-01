@@ -38,6 +38,18 @@ export const getGetWeaknessResponseMock200 = (overrideResponse: Partial<Extract<
 
 export const getGetWeaknessResponseMockDefault = (overrideResponse: Partial<Extract<ProblemResponse, object>> = {}): ProblemResponse => ({type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.number.int({min: 400, max: 599}), detail: faker.string.alpha({length: {min: 10, max: 20}}), instance: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), code: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), errors: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({field: faker.string.alpha({length: {min: 10, max: 20}}), code: faker.string.alpha({length: {min: 10, max: 20}}), message: faker.string.alpha({length: {min: 10, max: 20}})})), undefined]), ...overrideResponse})
 
+export const getUpdateWeaknessResponseMock = (overrideResponse: Partial<Extract<Weakness, object>> = {}): Weakness => ({id: faker.string.uuid(), course_id: faker.string.uuid(), lesson_id: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.string.uuid(), null]), undefined]), concept_key: faker.string.alpha({length: {min: 10, max: 20}}), concept_label: faker.string.alpha({length: {min: 10, max: 20}}), description: faker.string.alpha({length: {min: 10, max: 20}}), evidence: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({})), severity: faker.number.int({min: 1, max: 5}), review_count: faker.number.int({min: 0}), mastered: faker.datatype.boolean(), version: faker.number.int(), first_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', last_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
+
+
+export const getUpdateWeaknessResponseMock200 = (overrideResponse: Partial<Extract<Weakness, object>> = {}): Weakness => ({id: faker.string.uuid(), course_id: faker.string.uuid(), lesson_id: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.string.uuid(), null]), undefined]), concept_key: faker.string.alpha({length: {min: 10, max: 20}}), concept_label: faker.string.alpha({length: {min: 10, max: 20}}), description: faker.string.alpha({length: {min: 10, max: 20}}), evidence: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({})), severity: faker.number.int({min: 1, max: 5}), review_count: faker.number.int({min: 0}), mastered: faker.datatype.boolean(), version: faker.number.int(), first_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', last_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
+
+
+export const getUpdateWeaknessResponseMockDefault = (overrideResponse: Partial<Extract<ProblemResponse, object>> = {}): ProblemResponse => ({type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.number.int({min: 400, max: 599}), detail: faker.string.alpha({length: {min: 10, max: 20}}), instance: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), code: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), errors: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({field: faker.string.alpha({length: {min: 10, max: 20}}), code: faker.string.alpha({length: {min: 10, max: 20}}), message: faker.string.alpha({length: {min: 10, max: 20}})})), undefined]), ...overrideResponse})
+
+
+
+export const getDeleteWeaknessResponseMockDefault = (overrideResponse: Partial<Extract<ProblemResponse, object>> = {}): ProblemResponse => ({type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.number.int({min: 400, max: 599}), detail: faker.string.alpha({length: {min: 10, max: 20}}), instance: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), code: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), errors: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({field: faker.string.alpha({length: {min: 10, max: 20}}), code: faker.string.alpha({length: {min: 10, max: 20}}), message: faker.string.alpha({length: {min: 10, max: 20}})})), undefined]), ...overrideResponse})
+
 export const getResolveWeaknessResponseMock = (overrideResponse: Partial<Extract<Weakness, object>> = {}): Weakness => ({id: faker.string.uuid(), course_id: faker.string.uuid(), lesson_id: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.string.uuid(), null]), undefined]), concept_key: faker.string.alpha({length: {min: 10, max: 20}}), concept_label: faker.string.alpha({length: {min: 10, max: 20}}), description: faker.string.alpha({length: {min: 10, max: 20}}), evidence: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({})), severity: faker.number.int({min: 1, max: 5}), review_count: faker.number.int({min: 0}), mastered: faker.datatype.boolean(), version: faker.number.int(), first_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', last_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
 
@@ -53,6 +65,14 @@ export const getReopenWeaknessResponseMock200 = (overrideResponse: Partial<Extra
 
 
 export const getReopenWeaknessResponseMockDefault = (overrideResponse: Partial<Extract<ProblemResponse, object>> = {}): ProblemResponse => ({type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.number.int({min: 400, max: 599}), detail: faker.string.alpha({length: {min: 10, max: 20}}), instance: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), code: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), errors: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({field: faker.string.alpha({length: {min: 10, max: 20}}), code: faker.string.alpha({length: {min: 10, max: 20}}), message: faker.string.alpha({length: {min: 10, max: 20}})})), undefined]), ...overrideResponse})
+
+export const getCreateWeaknessResponseMock = (overrideResponse: Partial<Extract<Weakness, object>> = {}): Weakness => ({id: faker.string.uuid(), course_id: faker.string.uuid(), lesson_id: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.string.uuid(), null]), undefined]), concept_key: faker.string.alpha({length: {min: 10, max: 20}}), concept_label: faker.string.alpha({length: {min: 10, max: 20}}), description: faker.string.alpha({length: {min: 10, max: 20}}), evidence: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({})), severity: faker.number.int({min: 1, max: 5}), review_count: faker.number.int({min: 0}), mastered: faker.datatype.boolean(), version: faker.number.int(), first_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', last_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
+
+
+export const getCreateWeaknessResponseMock201 = (overrideResponse: Partial<Extract<Weakness, object>> = {}): Weakness => ({id: faker.string.uuid(), course_id: faker.string.uuid(), lesson_id: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.string.uuid(), null]), undefined]), concept_key: faker.string.alpha({length: {min: 10, max: 20}}), concept_label: faker.string.alpha({length: {min: 10, max: 20}}), description: faker.string.alpha({length: {min: 10, max: 20}}), evidence: Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({})), severity: faker.number.int({min: 1, max: 5}), review_count: faker.number.int({min: 0}), mastered: faker.datatype.boolean(), version: faker.number.int(), first_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', last_seen_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
+
+
+export const getCreateWeaknessResponseMockDefault = (overrideResponse: Partial<Extract<ProblemResponse, object>> = {}): ProblemResponse => ({type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.number.int({min: 400, max: 599}), detail: faker.string.alpha({length: {min: 10, max: 20}}), instance: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), code: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), errors: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({field: faker.string.alpha({length: {min: 10, max: 20}}), code: faker.string.alpha({length: {min: 10, max: 20}}), message: faker.string.alpha({length: {min: 10, max: 20}})})), undefined]), ...overrideResponse})
 
 
 export const getListWeaknessesMockHandler = (overrideResponse?: WeaknessList | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<WeaknessList> | WeaknessList), options?: RequestHandlerOptions) => {
@@ -126,6 +146,78 @@ export const getGetWeaknessMockHandlerDefault = (overrideResponse?: ProblemRespo
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getGetWeaknessResponseMockDefault(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getUpdateWeaknessMockHandler = (overrideResponse?: Weakness | ((info: Parameters<Parameters<typeof http.patch>[1]>[0]) => Promise<Weakness> | Weakness), options?: RequestHandlerOptions) => {
+  return http.patch('*/api/v1/weaknesses/:weaknessId', async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getUpdateWeaknessResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+
+export const getUpdateWeaknessMockHandler200 = (overrideResponse?: Weakness | ((info: Parameters<Parameters<typeof http.patch>[1]>[0]) => Promise<Weakness> | Weakness), options?: RequestHandlerOptions) => {
+  return http.patch('*/api/v1/weaknesses/:weaknessId', async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getUpdateWeaknessResponseMock200(),
+      { status: 200
+      })
+  }, options)
+}
+
+
+export const getUpdateWeaknessMockHandlerDefault = (overrideResponse?: ProblemResponse | ((info: Parameters<Parameters<typeof http.patch>[1]>[0]) => Promise<ProblemResponse> | ProblemResponse), options?: RequestHandlerOptions) => {
+  return http.patch('*/api/v1/weaknesses/:weaknessId', async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getUpdateWeaknessResponseMockDefault(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getDeleteWeaknessMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.delete('*/api/v1/weaknesses/:weaknessId', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
+
+export const getDeleteWeaknessMockHandler204 = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.delete('*/api/v1/weaknesses/:weaknessId', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
+
+export const getDeleteWeaknessMockHandlerDefault = (overrideResponse?: ProblemResponse | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<ProblemResponse> | ProblemResponse), options?: RequestHandlerOptions) => {
+  return http.delete('*/api/v1/weaknesses/:weaknessId', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getDeleteWeaknessResponseMockDefault(),
       { status: 200
       })
   }, options)
@@ -206,9 +298,50 @@ export const getReopenWeaknessMockHandlerDefault = (overrideResponse?: ProblemRe
       })
   }, options)
 }
+
+export const getCreateWeaknessMockHandler = (overrideResponse?: Weakness | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Weakness> | Weakness), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/courses/:courseId/weaknesses', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getCreateWeaknessResponseMock(),
+      { status: 201
+      })
+  }, options)
+}
+
+
+export const getCreateWeaknessMockHandler201 = (overrideResponse?: Weakness | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Weakness> | Weakness), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/courses/:courseId/weaknesses', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getCreateWeaknessResponseMock201(),
+      { status: 201
+      })
+  }, options)
+}
+
+
+export const getCreateWeaknessMockHandlerDefault = (overrideResponse?: ProblemResponse | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<ProblemResponse> | ProblemResponse), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/courses/:courseId/weaknesses', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getCreateWeaknessResponseMockDefault(),
+      { status: 200
+      })
+  }, options)
+}
 export const getWeaknessesMock = () => [
   getListWeaknessesMockHandler(),
   getGetWeaknessMockHandler(),
+  getUpdateWeaknessMockHandler(),
+  getDeleteWeaknessMockHandler(),
   getResolveWeaknessMockHandler(),
-  getReopenWeaknessMockHandler()
+  getReopenWeaknessMockHandler(),
+  getCreateWeaknessMockHandler()
 ]

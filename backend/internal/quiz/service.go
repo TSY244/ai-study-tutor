@@ -50,6 +50,9 @@ func (s *QueryService) GetQuiz(ctx context.Context, id uuid.UUID) (*Quiz, []Quiz
 		}
 		return nil, nil, err
 	}
+	if z.DeletedAt != nil {
+		return nil, nil, httpx.NewProblemError(404, "not_found", "资源不存在", "试卷已删除。")
+	}
 	return z, questions, nil
 }
 

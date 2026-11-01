@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -35,6 +36,9 @@ type Cmd struct {
 	Args []string
 	Dir  string
 	Env  []string
+	// OnStderrLine receives complete newline-delimited records during execution.
+	// Oversized records are discarded; bounded stderr capture remains unchanged.
+	OnStderrLine func([]byte)
 }
 
 // Result 是有界采集的子进程输出。
@@ -115,6 +119,9 @@ func (ExecRunner) Run(ctx context.Context, cmd Cmd) (*Result, error) {
 	stderr := &boundedWriter{max: maxStderrBytes}
 	c.Stdout = stdout
 	c.Stderr = stderr
+	if cmd.OnStderrLine != nil {
+		c.Stderr = io.MultiWriter(stderr, &lineWriter{onLine: cmd.OnStderrLine})
+	}
 	// 取消传播：CommandContext 在 ctx 结束时 Kill 子进程。
 	if err := c.Run(); err != nil {
 		if ctx.Err() != nil {

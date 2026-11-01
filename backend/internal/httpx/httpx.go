@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/TSY244/ai-study-tutor/backend/internal/filestore"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/gate"
@@ -75,6 +76,25 @@ func ParseLimit(c *gin.Context) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// ParseBatchUUIDs 解析批量操作的 id 列表：逐条解析 UUID 并按序去重；
+// 含非法 UUID 返回 false（由调用方映射 400 bad_request）。
+func ParseBatchUUIDs(raw []string) ([]uuid.UUID, bool) {
+	seen := make(map[uuid.UUID]struct{}, len(raw))
+	ids := make([]uuid.UUID, 0, len(raw))
+	for _, s := range raw {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			return nil, false
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, true
 }
 
 // BindJSON 解析 JSON 请求体：未知字段（additionalProperties:false 对齐）、

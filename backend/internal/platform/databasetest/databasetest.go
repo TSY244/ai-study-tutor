@@ -80,6 +80,31 @@ func New(t *testing.T) *pgxpool.Pool {
 	return shared.pool
 }
 
+// WaitForBlocked 等待数据库确认另一个事务正在等待指定连接的锁，
+// 让并发回归测试依赖实际锁状态，而不是固定延时。
+func WaitForBlocked(t *testing.T, pool *pgxpool.Pool, blockerPID uint32) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for {
+		var blocked bool
+		err := pool.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_stat_activity
+			WHERE $1::integer = ANY(pg_blocking_pids(pid)))`, int32(blockerPID)).Scan(&blocked)
+		if err != nil {
+			t.Fatalf("等待数据库锁失败: %v", err)
+		}
+		if blocked {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("未观察到等待数据库锁的事务")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func ensureStarted() {
 	shared.Do(func() {
 		port := freePort()

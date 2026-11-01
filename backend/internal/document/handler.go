@@ -86,6 +86,9 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, jsonLimit gin.HandlerFunc)
 	rg.GET("/lessons/:lesson_id/documents/:kind", h.getCurrent)
 	rg.GET("/lessons/:lesson_id/documents/:kind/versions", h.listVersions)
 	rg.GET("/documents/:document_id", h.getVersion)
+	rg.POST("/lessons/:lesson_id/documents/:kind", jsonLimit, h.manualWrite)
+	rg.PUT("/lessons/:lesson_id/documents/:kind", jsonLimit, h.manualWrite)
+	rg.DELETE("/documents/:document_id", h.manualDelete)
 	rg.POST("/lessons/:lesson_id/regenerations", jsonLimit, h.createRegeneration)
 }
 

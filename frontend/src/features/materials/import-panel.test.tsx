@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
@@ -43,10 +43,11 @@ describe('ImportPanel', () => {
     expect(
       await screen.findByLabelText('生成任务进度', undefined, { timeout: 3000 }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '查看任务详情' })).toHaveAttribute(
-      'href',
-      `/jobs/${JOB_RUNNING_ID}`,
-    )
+    expect(
+      within(screen.getByRole('region', { name: '后台生成任务' })).getByRole('link', {
+        name: '查看任务详情',
+      }),
+    ).toHaveAttribute('href', `/jobs/${JOB_RUNNING_ID}`)
     expect(screen.queryByRole('tab', { name: '文本' })).not.toBeInTheDocument()
   })
 
@@ -62,7 +63,11 @@ describe('ImportPanel', () => {
     expect(
       await screen.findByLabelText('生成任务进度', undefined, { timeout: 3000 }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '查看任务详情' })).toBeInTheDocument()
+    expect(
+      within(screen.getByRole('region', { name: '后台生成任务' })).getByRole('link', {
+        name: '查看任务详情',
+      }),
+    ).toBeInTheDocument()
 
     // 请求带幂等 Key；任务中心（活动观察者）刷新后计数 +1（演示数据已有 1 个进行中）
     expect(requests).toHaveLength(1)

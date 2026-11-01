@@ -1,3 +1,4 @@
+import { DeleteContentButton } from '@/features/content/delete-content-button'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { Target } from 'lucide-react'
@@ -122,6 +123,13 @@ function WeaknessesPage() {
                     )}
                     <span className="text-xs text-text-subtle">
                       严重度 {weakness.severity}/5 · 已复习 {weakness.review_count} 次
+                    </span>
+                    <span className="ml-auto">
+                      <DeleteContentButton
+                        kind="weakness"
+                        id={weakness.id}
+                        name={weakness.concept_label}
+                      />
                     </span>
                   </div>
                   <p className="mt-1 text-sm text-text-muted">{weakness.description}</p>

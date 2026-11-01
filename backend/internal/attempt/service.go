@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/TSY244/ai-study-tutor/backend/internal/httpx"
@@ -74,6 +75,13 @@ func (s *Service) CreateAttempt(ctx context.Context, rec *idempotency.Record, qu
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
+		return 0, nil, err
+	}
+	var lockedQuiz uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM quizzes WHERE id=$1 AND deleted_at IS NULL FOR KEY SHARE`, quizID).Scan(&lockedQuiz); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil, notFound("试卷不存在或已删除。")
+		}
 		return 0, nil, err
 	}
 	z, questions, err := s.quizzes.GetWithQuestions(ctx, tx, quizID)
@@ -237,6 +245,12 @@ func (s *Service) Submit(ctx context.Context, rec *idempotency.Record,
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 		return 0, nil, err
 	}
+	if err := s.repo.LockSubmissionParents(ctx, tx, attemptID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return 0, nil, notFound("请求的资源不存在或已删除。")
+		}
+		return 0, nil, err
+	}
 	a, err := s.repo.LockForUpdate(ctx, tx, attemptID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -394,6 +408,12 @@ func (s *Service) CreateGradingJob(ctx context.Context, rec *idempotency.Record,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
+		return 0, nil, err
+	}
+	if err := s.repo.LockSubmissionParents(ctx, tx, attemptID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return 0, nil, notFound("请求的资源不存在或已删除。")
+		}
 		return 0, nil, err
 	}
 	a, err := s.repo.LockForUpdate(ctx, tx, attemptID)

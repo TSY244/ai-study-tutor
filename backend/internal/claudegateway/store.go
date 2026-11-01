@@ -30,6 +30,7 @@ type Key struct {
 	Name                   string    `json:"name"`
 	APIKey                 string    `json:"api_key"`
 	Model                  string    `json:"model"`
+	Protocol               string    `json:"protocol"`
 	BaseURL                string    `json:"base_url,omitempty"`
 	Enabled                bool      `json:"enabled"`
 	Priority               int       `json:"priority"`
@@ -119,6 +120,12 @@ func (s *Store) loadLocked() ([]Key, error) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("解析 Claude 网关配置失败")
 	}
+	for i := range cfg.Keys {
+		if !validProtocol(cfg.Keys[i].Protocol) {
+			return nil, ErrInvalidKey
+		}
+		cfg.Keys[i].Protocol = EffectiveProtocol(cfg.Keys[i].Protocol)
+	}
 	s.cached = &cfg
 	s.modTime = info.ModTime()
 	s.size = info.Size()
@@ -152,6 +159,10 @@ func (s *Store) Create(k Key) (Key, error) {
 	k.Name = strings.TrimSpace(k.Name)
 	k.Model = strings.TrimSpace(k.Model)
 	k.BaseURL = strings.TrimSpace(k.BaseURL)
+	if !validProtocol(k.Protocol) {
+		return Key{}, ErrInvalidKey
+	}
+	k.Protocol = EffectiveProtocol(k.Protocol)
 	if k.APIKey == "" || k.Name == "" || k.Model == "" {
 		return Key{}, fmt.Errorf("%w: api_key/name/model 不能为空", ErrInvalidKey)
 	}
@@ -186,6 +197,7 @@ func (s *Store) Create(k Key) (Key, error) {
 // KeyPatch 描述一次部分更新；nil 指针表示保持不变。
 // APIKey 为 nil 时保留原 Key（PATCH 省略 api_key 的语义）。
 type KeyPatch struct {
+	Protocol               *string
 	APIKey                 *string
 	Name                   *string
 	Model                  *string
@@ -202,6 +214,9 @@ type KeyPatch struct {
 // 补丁值先 TrimSpace 校验，空/全空白的 api_key/name/model 直接拒绝，
 // 不会污染内存缓存。
 func (s *Store) Update(id string, patch KeyPatch) (Key, error) {
+	if patch.Protocol != nil && !validProtocol(*patch.Protocol) {
+		return Key{}, ErrInvalidKey
+	}
 	if patch.APIKey != nil && strings.TrimSpace(*patch.APIKey) == "" {
 		return Key{}, fmt.Errorf("%w: api_key 不能为空", ErrInvalidKey)
 	}
@@ -230,6 +245,9 @@ func (s *Store) Update(id string, patch KeyPatch) (Key, error) {
 		}
 		if patch.Model != nil {
 			k.Model = strings.TrimSpace(*patch.Model)
+		}
+		if patch.Protocol != nil {
+			k.Protocol = EffectiveProtocol(*patch.Protocol)
 		}
 		if patch.BaseURL != nil {
 			k.BaseURL = strings.TrimSpace(*patch.BaseURL)
@@ -405,6 +423,7 @@ func Fingerprint(key string) string {
 
 // SafeKey 是 API 响应的安全视图，绝不包含 APIKey。
 type SafeKey struct {
+	Protocol               string  `json:"protocol"`
 	ID                     string  `json:"id"`
 	Name                   string  `json:"name"`
 	MaskedKey              string  `json:"masked_key"`
@@ -431,6 +450,7 @@ type SafeKey struct {
 // safeView 由持久化 Key 与运行态构造安全视图。
 func safeView(k Key, st KeyState) SafeKey {
 	return SafeKey{
+		Protocol:               EffectiveProtocol(k.Protocol),
 		ID:                     k.ID,
 		Name:                   k.Name,
 		MaskedKey:              MaskKey(k.APIKey),

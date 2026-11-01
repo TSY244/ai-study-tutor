@@ -93,6 +93,7 @@ func RegisterRoutes(engine *gin.Engine, d Deps) {
 	}).Needed
 	quiz.NewGenerationHandler(genSvc, idem).RegisterRoutes(rg, jsonLimit)
 	quiz.NewQueryHandler(quiz.NewQueryService(d.Pool)).RegisterRoutes(rg)
+	quiz.NewMutationHandler(d.Pool, idem).RegisterRoutes(rg, jsonLimit)
 
 	summary.NewHandler(summary.NewService(d.Pool), idem).RegisterRoutes(rg, jsonLimit)
 

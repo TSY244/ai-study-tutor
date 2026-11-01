@@ -275,6 +275,44 @@ paths:
           $ref: '#/components/responses/AsyncAccepted'
         default:
           $ref: '#/components/responses/Problem'
+  /api/v1/system/bilibili-cookie/logins:
+    post:
+      tags:
+      - System
+      operationId: createBilibiliLogin
+      summary: 创建 B 站扫码登录会话（Worker 执行）
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          $ref: '#/components/responses/AsyncAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/system/bilibili-cookie/logins/{login_id}/poll:
+    post:
+      tags:
+      - System
+      operationId: pollBilibiliLogin
+      summary: 查询扫码状态并在确认后自动保存 Cookie
+      parameters:
+      - name: login_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 扫码登录安全视图，响应不缓存，不包含完整 Cookie
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BilibiliLoginStatus'
+        default:
+          $ref: '#/components/responses/Problem'
   /api/v1/courses:
     get:
       tags:
@@ -331,6 +369,26 @@ paths:
                 $ref: '#/components/schemas/Course'
         default:
           $ref: '#/components/responses/Problem'
+  /api/v1/courses:batch-delete:
+    post:
+      tags:
+      - Courses
+      operationId: batchDeleteCourses
+      summary: 批量删除课程（原子：任一课程不存在或有进行中任务则整体回滚）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchDelete'
+      responses:
+        '204':
+          description: 已全部删除
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+        default:
+          $ref: '#/components/responses/Problem'
   /api/v1/courses/{course_id}:
     parameters:
     - $ref: '#/components/parameters/CourseId'
@@ -382,6 +440,31 @@ paths:
           description: 已删除
           headers:
             X-Request-ID: *id001
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/courses/{course_id}/knowledge-points:
+    get:
+      tags:
+      - Courses
+      operationId: listCourseKnowledgePoints
+      summary: 查看课程知识点及原文依据
+      parameters:
+      - $ref: '#/components/parameters/CourseId'
+      - name: lesson_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 最新成功分析的课程知识点，可按课时过滤
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgePointCollection'
         default:
           $ref: '#/components/responses/Problem'
   /api/v1/courses/{course_id}/lessons:
@@ -445,7 +528,8 @@ paths:
         '200':
           description: 课时详情
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -467,7 +551,8 @@ paths:
         '200':
           description: 课时已更新
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
@@ -478,12 +563,34 @@ paths:
       tags:
       - Lessons
       operationId: deleteLesson
-      summary: 删除课时
+      summary: 删除课时及全部关联内容
+      description: 级联删除素材、文档、知识点、测验、作答、总结及课时薄弱点，并重新计算课程进度；仅有进行中任务时拒绝。
       responses:
         '204':
           description: 已删除
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+        default:
+          $ref: '#/components/responses/Problem'
+  /api/v1/lessons:batch-delete:
+    post:
+      tags:
+      - Lessons
+      operationId: batchDeleteLessons
+      summary: 批量级联删除课时（原子：任一课时不存在或有进行中任务则整体回滚）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchDelete'
+      responses:
+        '204':
+          description: 已全部删除
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
         default:
           $ref: '#/components/responses/Problem'
   /api/v1/lessons/{lesson_id}/materials/url:
@@ -616,13 +723,85 @@ paths:
         '200':
           description: 当前文档
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Document'
         default:
           $ref: '#/components/responses/Problem'
+    post:
+      tags:
+      - Documents
+      operationId: createManualDocument
+      summary: 手工新增课时文档
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - name: kind
+        in: path
+        required: true
+        schema:
+          type: string
+          enum:
+          - raw_text
+          - student_notes
+          - teacher_outline
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: 手工新增课时文档
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 该类型已有当前文档时返回 409；支持原文、学生笔记和教师大纲。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentCreate'
+    put:
+      tags:
+      - Documents
+      operationId: updateManualDocument
+      summary: 编辑文档并发布新版本
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - name: kind
+        in: path
+        required: true
+        schema:
+          type: string
+          enum:
+          - raw_text
+          - student_notes
+          - teacher_outline
+      responses:
+        '200':
+          description: 编辑文档并发布新版本
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: expected_revision 必须等于当前版本。旧版本保留；修改原文会停用旧知识点。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentUpdate'
   /api/v1/lessons/{lesson_id}/regenerations:
     post:
       tags:
@@ -697,13 +876,40 @@ paths:
         '200':
           description: 试卷列表
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/QuizList'
         default:
           $ref: '#/components/responses/Problem'
+    post:
+      tags:
+      - Quizzes
+      operationId: createManualQuiz
+      summary: 手工创建测验与题目
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: 手工创建测验与题目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuizEditor'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualQuizCreate'
   /api/v1/lessons/{lesson_id}/attempts:
     get:
       tags:
@@ -738,13 +944,56 @@ paths:
         '200':
           description: 试卷详情
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Quiz'
         default:
           $ref: '#/components/responses/Problem'
+    patch:
+      tags:
+      - Quizzes
+      operationId: updateQuiz
+      summary: 编辑测验及题目
+      parameters:
+      - $ref: '#/components/parameters/QuizId'
+      responses:
+        '200':
+          description: 编辑测验及题目
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuizEditor'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 携带当前 version。只修改标题/备注时保留 ID；提供完整 questions 数组时创建新的试卷 ID，旧试卷归档并从测验列表移除，历史作答继续引用原题目。调用方必须采用响应中的新 ID 和 version。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualQuizUpdate'
+    delete:
+      tags:
+      - Quizzes
+      operationId: deleteQuiz
+      summary: 删除测验
+      parameters:
+      - $ref: '#/components/parameters/QuizId'
+      responses:
+        '204':
+          description: 删除测验
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 级联删除测验、作答、答案和相关进度快照，清理薄弱点证据并重新计算进度；有进行中任务时返回 409 resource_busy。历史修改前试卷 ID 也可用此接口清理。
   /api/v1/quizzes/{quiz_id}/attempts:
     post:
       tags:
@@ -780,13 +1029,30 @@ paths:
         '200':
           description: Attempt 详情
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Attempt'
         default:
           $ref: '#/components/responses/Problem'
+    delete:
+      tags:
+      - Attempts
+      operationId: deleteAttempt
+      summary: 删除作答记录
+      parameters:
+      - $ref: '#/components/parameters/AttemptId'
+      responses:
+        '204':
+          description: 删除作答记录
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 删除答案和该作答产生的掌握度快照，清理薄弱点中的该作答证据，并根据剩余成绩重新计算当前进度；人工维护的薄弱点状态保留。有活动批阅/生成任务时返回 409。
   /api/v1/attempts/{attempt_id}/answers/{question_id}:
     patch:
       tags:
@@ -1054,11 +1320,33 @@ paths:
         '202':
           description: 评估占位资源和任务已创建
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SummaryEvaluationAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+    get:
+      tags:
+      - Summaries
+      operationId: listSummaryEvaluations
+      summary: 查询课时学习总结历史
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 查询课时学习总结历史
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummaryEvaluationList'
         default:
           $ref: '#/components/responses/Problem'
   /api/v1/lessons/{lesson_id}/materials:
@@ -1099,9 +1387,66 @@ paths:
         '204':
           description: 素材已删除
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
         default:
           $ref: '#/components/responses/Problem'
+    get:
+      tags:
+      - Materials
+      operationId: getMaterial
+      summary: 读取素材编辑内容
+      parameters:
+      - name: material_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 读取素材编辑内容
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialDetail'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      tags:
+      - Materials
+      operationId: updateMaterial
+      summary: 修改素材并重新导入
+      parameters:
+      - name: material_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: 修改素材并重新导入
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialJobAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 至少提供一个修改字段，携带 version。素材 kind 不可变；文本可改 text，链接可改 source_url。上传文件替换使用原上传接口，不能伪造 file_object_id。返回重新导入任务，旧文档保留直到新结果发布。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaterialUpdate'
   /api/v1/lessons/{lesson_id}/documents/{kind}/versions:
     get:
       tags:
@@ -1145,13 +1490,35 @@ paths:
         '200':
           description: 文档版本
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Document'
         default:
           $ref: '#/components/responses/Problem'
+    delete:
+      tags:
+      - Documents
+      operationId: deleteDocument
+      summary: 删除指定文档版本
+      parameters:
+      - name: document_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: 删除指定文档版本
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 删除当前版本后该类型暂无当前文档，不自动回退历史版本。
   /api/v1/jobs/{job_id}/events:
     get:
       tags:
@@ -1190,11 +1557,63 @@ paths:
         '200':
           description: 薄弱点详情
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Weakness'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      tags:
+      - Weaknesses
+      operationId: updateWeakness
+      summary: 编辑薄弱点
+      parameters:
+      - name: weakness_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 编辑薄弱点
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Weakness'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 携带当前 version，修改后重新计算课时/课程掌握度。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WeaknessUpdate'
+    delete:
+      tags:
+      - Weaknesses
+      operationId: deleteWeakness
+      summary: 删除薄弱点
+      parameters:
+      - name: weakness_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: 删除薄弱点
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
         default:
           $ref: '#/components/responses/Problem'
   /api/v1/weaknesses/{weakness_id}/resolve:
@@ -1314,11 +1733,64 @@ paths:
         '200':
           description: 总结评估
           headers:
-            X-Request-ID: *id001
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SummaryEvaluation'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      tags:
+      - Summaries
+      operationId: updateSummaryEvaluation
+      summary: 修改总结并创建新版评估
+      parameters:
+      - name: evaluation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: 修改总结并创建新版评估
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SummaryEvaluationAccepted'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 保留旧总结及其评估结果，返回新 evaluation.id 和评估任务；有活动任务时返回 409。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SummaryEvaluationCreate'
+    delete:
+      tags:
+      - Summaries
+      operationId: deleteSummaryEvaluation
+      summary: 删除学习总结评估
+      parameters:
+      - name: evaluation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: 删除学习总结评估
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
         default:
           $ref: '#/components/responses/Problem'
   /api/v1/lessons/{lesson_id}/exports:
@@ -1397,6 +1869,157 @@ paths:
                 $ref: '#/components/schemas/BackupList'
         default:
           $ref: '#/components/responses/Problem'
+  /api/v1/lessons/{lesson_id}/knowledge-points:
+    post:
+      tags:
+      - Courses
+      operationId: createKnowledgePoint
+      summary: 新增课时知识点
+      parameters:
+      - $ref: '#/components/parameters/LessonId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: 新增课时知识点
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgePoint'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KnowledgePointCreate'
+  /api/v1/knowledge-points/{knowledge_point_id}:
+    get:
+      tags:
+      - Courses
+      operationId: getKnowledgePoint
+      summary: 查询单个知识点
+      parameters:
+      - name: knowledge_point_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 查询单个知识点
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgePoint'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      tags:
+      - Courses
+      operationId: updateKnowledgePoint
+      summary: 修改知识点
+      parameters:
+      - name: knowledge_point_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 修改知识点
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgePoint'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KnowledgePointUpdate'
+    delete:
+      tags:
+      - Courses
+      operationId: deleteKnowledgePoint
+      summary: 删除知识点
+      parameters:
+      - name: knowledge_point_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: 删除知识点
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 历史试卷中的知识点快照保留。
+  /api/v1/quizzes/{quiz_id}/editor:
+    get:
+      tags:
+      - Quizzes
+      operationId: getQuizEditor
+      summary: 读取测验编辑内容（含参考答案）
+      parameters:
+      - $ref: '#/components/parameters/QuizId'
+      responses:
+        '200':
+          description: 读取测验编辑内容（含参考答案）
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuizEditor'
+        default:
+          $ref: '#/components/responses/Problem'
+      description: 内容管理专用表示，含标准答案与解析。学生 GET /quizzes/{quiz_id} 的答案隐藏规则不变。
+  /api/v1/courses/{course_id}/weaknesses:
+    post:
+      tags:
+      - Weaknesses
+      operationId: createWeakness
+      summary: 手工新增薄弱点
+      parameters:
+      - $ref: '#/components/parameters/CourseId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: 手工新增薄弱点
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Weakness'
+        default:
+          $ref: '#/components/responses/Problem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WeaknessCreate'
 components:
   parameters:
     IdempotencyKey:
@@ -1640,6 +2263,12 @@ components:
           type:
           - string
           - 'null'
+    GatewayProtocol:
+      type: string
+      enum:
+      - anthropic
+      - openai
+      description: Anthropic Messages 或 OpenAI Chat Completions 兼容协议；旧配置默认为 Anthropic。
     ClaudeKey:
       description: Claude 网关密钥的安全视图；绝不包含完整 api_key。
       type: object
@@ -1650,6 +2279,7 @@ components:
       - masked_key
       - fingerprint
       - model
+      - protocol
       - enabled
       - priority
       - weight
@@ -1666,6 +2296,8 @@ components:
       - created_at
       - updated_at
       properties:
+        protocol:
+          $ref: '#/components/schemas/GatewayProtocol'
         id:
           type: string
         name:
@@ -1680,7 +2312,7 @@ components:
           type: string
         base_url:
           type: string
-          description: 该 Key 专属的 Anthropic base URL；空字符串表示未设置，使用部署侧 ANTHROPIC_BASE_URL。
+          description: 该 Key 专属的 API base URL；留空时 Anthropic 使用部署默认值，OpenAI 使用 https://api.openai.com/v1。
         enabled:
           type: boolean
         priority:
@@ -1708,6 +2340,7 @@ components:
           - healthy
           - cooling_down
           - auth_failed
+          - quota_exhausted
           - disabled
           - testing
         consecutive_failures:
@@ -1773,11 +2406,14 @@ components:
       - name
       - model
       properties:
+        protocol:
+          $ref: '#/components/schemas/GatewayProtocol'
+          default: anthropic
         api_key:
           type: string
           minLength: 1
           writeOnly: true
-          description: 完整 Anthropic API Key；仅用于写入，任何响应都不会回读。
+          description: 完整模型 API Key；仅用于写入，任何响应都不会回读。
         name:
           type: string
           minLength: 1
@@ -1821,6 +2457,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        protocol:
+          $ref: '#/components/schemas/GatewayProtocol'
         api_key:
           type: string
           minLength: 1
@@ -1836,7 +2474,7 @@ components:
           maxLength: 100
         base_url:
           type: string
-          description: 可选；省略保持不变，空字符串表示清除（回退部署侧 ANTHROPIC_BASE_URL）。
+          description: 可选；省略保持不变，空字符串表示清除（回退所选协议的默认地址）。
         enabled:
           type: boolean
         priority:
@@ -1886,6 +2524,34 @@ components:
           maxLength: 65536
           writeOnly: true
           description: Netscape Cookie 导出内容、Cookie 头串（SESSDATA=xxx; ...）或单个 SESSDATA 值；仅用于写入，任何响应都不会回读。
+    BilibiliLoginStatus:
+      type: object
+      additionalProperties: false
+      required:
+      - state
+      - message
+      properties:
+        state:
+          type: string
+          enum:
+          - generating
+          - waiting_scan
+          - scanned
+          - confirmed
+          - logged_in
+          - expired
+          - failed
+          - cancelled
+        message:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        qr_image_data_url:
+          type: string
+          description: 登录二维码 PNG 的 data URL；不包含登录凭证
+        cookie:
+          $ref: '#/components/schemas/BilibiliCookieStatus'
     BilibiliCookieStatus:
       description: B 站 Cookie 的安全视图；绝不包含完整 Cookie。
       type: object
@@ -1922,16 +2588,70 @@ components:
           type: integer
           minimum: 0
           description: 保存的 bilibili.com 域名 Cookie 条目数。
-    CourseCreate:
+    KnowledgePoint:
       type: object
       additionalProperties: false
       required:
-      - title
+      - id
+      - course_id
+      - lesson_id
+      - lesson_title
+      - label
+      - explanation
+      - learning_objective
+      - source_excerpt
+      - importance
+      - updated_at
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        id:
+          type: string
+          format: uuid
+        course_id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        lesson_title:
+          type: string
+        label:
+          type: string
+        explanation:
+          type: string
+        learning_objective:
+          type: string
+        source_excerpt:
+          type: string
+        importance:
+          type: string
+          enum:
+          - core
+          - supporting
+        updated_at:
+          type: string
+          format: date-time
+    KnowledgePointCollection:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/KnowledgePoint'
+    CourseCreate:
+      type: object
+      additionalProperties: false
       properties:
         title:
           type: string
-          minLength: 1
           maxLength: 200
+          description: 可选；省略或空白时先显示待 AI 命名，首次成功生成学习总结后自动命名。
         description:
           type: string
           maxLength: 5000
@@ -2001,6 +2721,19 @@ components:
             $ref: '#/components/schemas/Course'
         page_info:
           $ref: '#/components/schemas/PageInfo'
+    BatchDelete:
+      type: object
+      additionalProperties: false
+      required:
+      - ids
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            format: uuid
     LessonStatus:
       type: string
       enum:
@@ -2140,6 +2873,10 @@ components:
       - status
       - created_at
       properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
         id:
           type: string
           format: uuid
@@ -2267,6 +3004,10 @@ components:
       type: object
       additionalProperties: false
       properties:
+        generation_notes:
+          type: string
+          maxLength: 3000
+          description: 本次出题重点、题型比例、难度及覆盖范围偏好。
         question_count:
           type:
           - integer
@@ -2282,6 +3023,10 @@ components:
       type: object
       additionalProperties: false
       properties:
+        generation_notes:
+          type: string
+          maxLength: 3000
+          description: 本次出题重点、题型比例、难度及覆盖范围偏好。
         question_count:
           type:
           - integer
@@ -2369,6 +3114,13 @@ components:
       - questions
       - created_at
       properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        generation_notes:
+          type: string
+          description: 本次生成使用的出题备注；旧试卷为空字符串。
         id:
           type: string
           format: uuid
@@ -2407,6 +3159,13 @@ components:
       - question_count
       - created_at
       properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        generation_notes:
+          type: string
+          description: 本次生成使用的出题备注；旧试卷为空字符串。
         id:
           type: string
           format: uuid
@@ -2748,6 +3507,7 @@ components:
       - summary_evaluate
       - lesson_export
       - bilibili_cookie_test
+      - bilibili_login
     JobError:
       type: object
       additionalProperties: false
@@ -3290,6 +4050,9 @@ components:
       - suggestions
       - created_at
       properties:
+        summary_text:
+          type: string
+          maxLength: 50000
         id:
           type: string
           format: uuid
@@ -3432,3 +4195,374 @@ components:
             $ref: '#/components/schemas/Backup'
         page_info:
           $ref: '#/components/schemas/PageInfo'
+    SummaryEvaluationCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - summary
+      properties:
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 50000
+    DocumentCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - content_md
+      properties:
+        content_md:
+          type: string
+          minLength: 1
+          maxLength: 200000
+    DocumentUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - content_md
+      - expected_revision
+      properties:
+        content_md:
+          type: string
+          minLength: 1
+          maxLength: 200000
+        expected_revision:
+          type: integer
+          minimum: 1
+    KnowledgePointCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - label
+      - explanation
+      - learning_objective
+      - source_excerpt
+      - importance
+      properties:
+        label:
+          type: string
+          minLength: 1
+        explanation:
+          type: string
+          maxLength: 2000
+          minLength: 1
+        learning_objective:
+          type: string
+          maxLength: 1000
+          minLength: 1
+        source_excerpt:
+          type: string
+          maxLength: 1000
+          minLength: 1
+        importance:
+          type: string
+          enum:
+          - core
+          - supporting
+          minLength: 1
+    KnowledgePointUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        label:
+          type: string
+          minLength: 1
+        explanation:
+          type: string
+          maxLength: 2000
+          minLength: 1
+        learning_objective:
+          type: string
+          maxLength: 1000
+          minLength: 1
+        source_excerpt:
+          type: string
+          maxLength: 1000
+          minLength: 1
+        importance:
+          type: string
+          enum:
+          - core
+          - supporting
+          minLength: 1
+    QuestionInput:
+      type: object
+      additionalProperties: false
+      required:
+      - type
+      - stem
+      - correct_answer
+      - difficulty
+      - cognitive_level
+      - score
+      properties:
+        type:
+          type: string
+          enum:
+          - single_choice
+          - multiple_choice
+          - true_false
+          - short_answer
+          - case_analysis
+        stem:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        options:
+          type:
+          - object
+          - 'null'
+          additionalProperties:
+            type: string
+        correct_answer: {}
+        explanation:
+          type:
+          - string
+          - 'null'
+        tested_concepts:
+          type: array
+          items:
+            type: string
+        difficulty:
+          type: string
+          enum:
+          - easy
+          - medium
+          - hard
+          - challenge
+        cognitive_level:
+          type: string
+          enum:
+          - recall
+          - explain
+          - apply
+          - transfer
+          - reflect
+        score:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 999999.99
+    ManualQuizCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - title
+      - questions
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+        generation_notes:
+          type: string
+          maxLength: 3000
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/QuestionInput'
+    ManualQuizUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+        generation_notes:
+          type: string
+          maxLength: 3000
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/QuestionInput'
+    QuizEditor:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - lesson_id
+      - version
+      - title
+      - generation_notes
+      - questions
+      properties:
+        id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+        generation_notes:
+          type: string
+          maxLength: 3000
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/QuestionInput'
+    MaterialDetail:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - lesson_id
+      - kind
+      - status
+      - created_at
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        id:
+          type: string
+          format: uuid
+        lesson_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/MaterialKind'
+        status:
+          type: string
+          enum:
+          - pending
+          - ready
+          - failed
+        source_url:
+          type:
+          - string
+          - 'null'
+          format: uri
+        original_name:
+          type:
+          - string
+          - 'null'
+        created_at:
+          type: string
+          format: date-time
+        text:
+          type:
+          - string
+          - 'null'
+        title:
+          type:
+          - string
+          - 'null'
+        preferred_language:
+          type:
+          - string
+          - 'null'
+    MaterialUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          maxLength: 300
+        text:
+          type: string
+          minLength: 1
+          maxLength: 500000
+        source_url:
+          type: string
+          format: uri
+        preferred_language:
+          type: string
+          maxLength: 30
+    SummaryEvaluationList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - page_info
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SummaryEvaluation'
+        page_info:
+          $ref: '#/components/schemas/PageInfo'
+    WeaknessCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - concept_label
+      - severity
+      properties:
+        lesson_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        concept_key:
+          type: string
+          maxLength: 300
+        concept_label:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: string
+          maxLength: 10000
+        severity:
+          type: integer
+          minimum: 1
+          maximum: 5
+    WeaknessUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        concept_key:
+          type: string
+          minLength: 1
+          maxLength: 300
+        concept_label:
+          type: string
+          minLength: 1
+          maxLength: 300
+        description:
+          type: string
+          maxLength: 10000
+        severity:
+          type: integer
+          minimum: 1
+          maximum: 5
+        mastered:
+          type: boolean

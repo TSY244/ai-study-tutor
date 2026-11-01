@@ -15,9 +15,12 @@ func TestLessonImportWithAIProviderPublishesAllDocuments(t *testing.T) {
 	fakeAI := ai.NewFakeProvider()
 	e.handler.AI = fakeAI
 	lessonID := e.newLesson(t)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE courses SET title='待 AI 命名', title_pending=true WHERE id=(SELECT course_id FROM lessons WHERE id=$1)`, lessonID); err != nil {
+		t.Fatal(err)
+	}
 	materialID, jobID := e.newTextImport(t, lessonID, "极限描述函数在某一点附近的趋势。")
-	fakeAI.Enqueue(ai.Response{JSON: json.RawMessage(`{"markdown":"# 教师教纲\n围绕极限概念授课。"}`), Model: "fake-claude", ProviderRequestID: "req_teacher"})
-	fakeAI.Enqueue(ai.Response{JSON: json.RawMessage(`{"markdown":"# 学生笔记\n极限描述趋势。"}`), Model: "fake-claude", ProviderRequestID: "req_student"})
+	fakeAI.Enqueue(ai.Response{JSON: json.RawMessage(`{"markdown":"# 极限入门\n围绕极限概念授课。\n\n## 综合总结\n\n### 内容概览\n围绕极限展开学习。\n\n### 核心知识点\n极限描述趋近关系。\n\n### 知识结构\n从直观图像到概念。\n\n### 示例与应用\n资料未提供示例。\n\n### 结论与复习\n复习：什么是极限？\n\n### 来源与局限\n依据给定资料，无其他来源。"}`), Model: "fake-claude", ProviderRequestID: "req_teacher"})
+	fakeAI.Enqueue(ai.Response{JSON: json.RawMessage(`{"markdown":"# 学生笔记\n极限描述趋势。\n\n## 综合总结\n\n### 内容概览\n围绕极限展开学习。\n\n### 核心知识点\n极限描述趋近关系。\n\n### 知识结构\n从直观图像到概念。\n\n### 示例与应用\n资料未提供示例。\n\n### 结论与复习\n复习：什么是极限？\n\n### 来源与局限\n依据给定资料，无其他来源。"}`), Model: "fake-claude", ProviderRequestID: "req_student"})
 
 	e.runOnce(t)
 
@@ -32,6 +35,14 @@ func TestLessonImportWithAIProviderPublishesAllDocuments(t *testing.T) {
 		if d.SourceJobID == nil || *d.SourceJobID != jobID {
 			t.Fatalf("%s source_job_id 错误: %+v", kind, d)
 		}
+	}
+	var courseTitle string
+	var titlePending bool
+	if err := e.pool.QueryRow(context.Background(), `SELECT title,title_pending FROM courses WHERE id=(SELECT course_id FROM lessons WHERE id=$1)`, lessonID).Scan(&courseTitle, &titlePending); err != nil {
+		t.Fatal(err)
+	}
+	if courseTitle != "极限入门" || titlePending {
+		t.Fatalf("AI title not published: %q pending=%v", courseTitle, titlePending)
 	}
 	m := getMaterial(t, e.pool, materialID)
 	if m.Status != "ready" {

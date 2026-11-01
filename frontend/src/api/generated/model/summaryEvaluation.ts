@@ -7,6 +7,8 @@ import type { JobError } from './jobError';
 import type { SummaryEvaluationStatus } from './summaryEvaluationStatus';
 
 export interface SummaryEvaluation {
+  /** @maxLength 50000 */
+  summary_text?: string;
   id: string;
   lesson_id: string;
   status: SummaryEvaluationStatus;

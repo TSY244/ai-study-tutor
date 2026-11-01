@@ -1,13 +1,20 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
-import { createLesson, deleteLesson, updateLesson } from '@/api/generated/endpoints/lessons/lessons'
+import {
+  batchDeleteLessons,
+  createLesson,
+  deleteLesson,
+  updateLesson,
+} from '@/api/generated/endpoints/lessons/lessons'
 import type { LessonCreate, LessonUpdate } from '@/api/generated/model'
 import {
   invalidateLessonChanged,
   invalidateLessonCreated,
   invalidateLessonRemoved,
+  invalidateLessonsRemoved,
 } from '@/api/invalidation'
 import { isApiProblemError } from '@/api/problem'
+import { removeRecentLearningEntries } from '@/features/learning/recent-learning'
 import {
   beginIdempotencyIntent,
   resolveIdempotencyIntent,
@@ -60,6 +67,21 @@ export function useDeleteLesson(lessonId: string, courseId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => deleteLesson(lessonId),
-    onSuccess: () => invalidateLessonRemoved(queryClient, lessonId, courseId),
+    onSuccess: () => {
+      removeRecentLearningEntries({ lessonId })
+      return invalidateLessonRemoved(queryClient, lessonId, courseId)
+    },
+  })
+}
+
+/** 批量删除课时：原子接口（任一失败整体回滚）；成功后合并刷新共享查询。 */
+export function useBatchDeleteLessons(courseId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: string[]) => batchDeleteLessons({ ids }),
+    onSuccess: (_data, ids) => {
+      ids.forEach((lessonId) => removeRecentLearningEntries({ lessonId }))
+      return invalidateLessonsRemoved(queryClient, ids, courseId)
+    },
   })
 }

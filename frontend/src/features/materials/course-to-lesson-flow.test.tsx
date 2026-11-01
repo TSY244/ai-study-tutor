@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 
@@ -41,7 +41,9 @@ describe('课程到课时导入全流程', () => {
     expect(
       await screen.findByLabelText('生成任务进度', undefined, { timeout: 3000 }),
     ).toBeInTheDocument()
-    const jobDetailHref = screen.getByRole('link', { name: '查看任务详情' }).getAttribute('href')
+    const jobDetailHref = within(screen.getByRole('region', { name: '后台生成任务' }))
+      .getByRole('link', { name: '查看任务详情' })
+      .getAttribute('href')
     expect(jobDetailHref).toMatch(/^\/jobs\/[0-9a-f-]{36}$/)
 
     // 5. 离开页面：任务中心角标与 /jobs 列表仍可见任务

@@ -53,13 +53,13 @@ func (e *env) useClaudeURLImport(t *testing.T) (*ai.FakeProvider, *proc.Fake) {
 		t.Fatal(err)
 	}
 	cliFake := proc.NewFake()
-	e.handler.URLExtractor = &lessonimport.ClaudeURLCLIExtractor{
-		Proc:      cliFake,
-		KeysFile:  keysFile,
-		BaseURL:   "https://gateway.example",
-		Home:      t.TempDir(),
-		ClaudeBin: "claude",
-		Timeout:   time.Minute,
+	e.handler.URLExtractor = &lessonimport.PiURLExtractor{
+		Proc:     cliFake,
+		KeysFile: keysFile,
+		BaseURL:  "https://gateway.example",
+		Home:     t.TempDir(),
+		NodeBin:  "node",
+		Timeout:  time.Minute,
 	}
 	return fakeAI, cliFake
 }
@@ -351,7 +351,7 @@ func TestImportCancelRequested(t *testing.T) {
 
 // TestClaudeURLImportSuccess：URL 素材全链路成功——worker 容器内 Claude
 // Code CLI（WebFetch 客户端抓取）提取、恰好发布
-// raw_text+teacher_outline+student_notes、来源元数据标记 claude_web_fetch、
+// raw_text+teacher_outline+student_notes、来源元数据标记 pi_sdk_fetch、
 // ai_runs 恰好一条 lesson_url_extract，全程不触碰本地 DNS/HTTP/本地工具，
 // 哨兵不落入 ai_runs 与 Job result。
 func TestClaudeURLImportSuccess(t *testing.T) {
@@ -371,12 +371,12 @@ func TestClaudeURLImportSuccess(t *testing.T) {
 	cliFake.Enqueue(proc.Static(claudeCLISuccessEnvelope(t,
 		`{"title":"极限入门","raw_text_markdown":"`+rawSourceSentinel+` 大家好，今天讲极限","extraction_note":"含字幕原文"}`), nil))
 	fakeAI.Enqueue(ai.Response{
-		JSON:              json.RawMessage(`{"markdown":"# 教师教纲\n围绕极限概念授课。"}`),
+		JSON:              json.RawMessage(`{"markdown":"# 教师教纲\n围绕极限概念授课。\n\n## 综合总结\n\n### 内容概览\n围绕极限展开学习。\n\n### 核心知识点\n极限描述趋近关系。\n\n### 知识结构\n从直观图像到概念。\n\n### 示例与应用\n资料未提供示例。\n\n### 结论与复习\n复习：什么是极限？\n\n### 来源与局限\n依据给定资料，无其他来源。"}`),
 		Model:             "claude-test",
 		ProviderRequestID: "req_teacher",
 	})
 	fakeAI.Enqueue(ai.Response{
-		JSON:              json.RawMessage(`{"markdown":"# 学生笔记\n极限描述趋势。"}`),
+		JSON:              json.RawMessage(`{"markdown":"# 学生笔记\n极限描述趋势。\n\n## 综合总结\n\n### 内容概览\n围绕极限展开学习。\n\n### 核心知识点\n极限描述趋近关系。\n\n### 知识结构\n从直观图像到概念。\n\n### 示例与应用\n资料未提供示例。\n\n### 结论与复习\n复习：什么是极限？\n\n### 来源与局限\n依据给定资料，无其他来源。"}`),
 		Model:             "claude-test",
 		ProviderRequestID: "req_student",
 	})
@@ -418,7 +418,7 @@ func TestClaudeURLImportSuccess(t *testing.T) {
 	if strings.Contains(cliArgs, urlQuerySentinel) {
 		t.Fatalf("CLI prompt 不应携带追踪参数哨兵: %q", cliArgs)
 	}
-	if !strings.Contains(cliArgs, "Bash Read Write WebFetch") {
+	if !strings.Contains(cliArgs, "bash,read,write") {
 		t.Fatalf("CLI 工具白名单错误: %q", cliArgs)
 	}
 
@@ -450,11 +450,11 @@ func TestClaudeURLImportSuccess(t *testing.T) {
 	if err := json.Unmarshal(m.Metadata, &meta); err != nil {
 		t.Fatal(err)
 	}
-	if meta.Source.Extractor != "claude_web_fetch" {
-		t.Fatalf("extractor 应 claude_web_fetch: %q", meta.Source.Extractor)
+	if meta.Source.Extractor != "pi_sdk_fetch" {
+		t.Fatalf("extractor 应 pi_sdk_fetch: %q", meta.Source.Extractor)
 	}
-	if meta.ParserVersion != "claude-web-fetch/v1" {
-		t.Fatalf("parser_version 应 claude-web-fetch/v1: %q", meta.ParserVersion)
+	if meta.ParserVersion != "pi-sdk-fetch/v1" {
+		t.Fatalf("parser_version 应 pi-sdk-fetch/v1: %q", meta.ParserVersion)
 	}
 	if meta.Source.Title != "极限入门" || meta.Source.ExtractionNote != "含字幕原文" {
 		t.Fatalf("来源摘要错误: %+v", meta.Source)

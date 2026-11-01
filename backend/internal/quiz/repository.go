@@ -47,6 +47,8 @@ type Item struct {
 
 // Quiz 是 quizzes 表的领域表示。
 type Quiz struct {
+	Version        int64
+	DeletedAt      *time.Time
 	ID             uuid.UUID
 	LessonID       uuid.UUID
 	Title          string
@@ -93,9 +95,9 @@ func (Repository) Create(ctx context.Context, q database.Querier, quiz *Quiz) er
 	err := q.QueryRow(ctx, `
 		INSERT INTO quizzes (id, lesson_id, title, source, policy_snapshot, status)
 		VALUES ($1,$2,$3,$4,$5,$6)
-		RETURNING created_at`,
+		RETURNING created_at, version`,
 		quiz.ID, quiz.LessonID, quiz.Title, quiz.Source, quiz.PolicySnapshot, quiz.Status).
-		Scan(&quiz.CreatedAt)
+		Scan(&quiz.CreatedAt, &quiz.Version)
 	if err != nil {
 		return err
 	}
@@ -115,10 +117,10 @@ func (Repository) Create(ctx context.Context, q database.Querier, quiz *Quiz) er
 func (Repository) GetByID(ctx context.Context, q database.Querier, id uuid.UUID) (*Quiz, error) {
 	var quiz Quiz
 	err := q.QueryRow(ctx, `
-		SELECT id, lesson_id, title, source, policy_snapshot, status, created_at
+		SELECT id, lesson_id, title, source, policy_snapshot, status, created_at,version,deleted_at
 		FROM quizzes WHERE id = $1`, id).Scan(
 		&quiz.ID, &quiz.LessonID, &quiz.Title, &quiz.Source, &quiz.PolicySnapshot,
-		&quiz.Status, &quiz.CreatedAt)
+		&quiz.Status, &quiz.CreatedAt, &quiz.Version, &quiz.DeletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -217,10 +219,10 @@ type SummaryRow struct {
 func (Repository) ListByLesson(ctx context.Context, q database.Querier, lessonID uuid.UUID,
 	afterCreatedAt *time.Time, afterID *uuid.UUID, limit int) ([]SummaryRow, error) {
 	rows, err := q.Query(ctx, `
-		SELECT z.id, z.lesson_id, z.title, z.source, z.policy_snapshot, z.status, z.created_at,
+		SELECT z.id, z.lesson_id, z.title, z.source, z.policy_snapshot, z.status, z.created_at,z.version,
 		       (SELECT count(*) FROM quiz_items qi WHERE qi.quiz_id = z.id) AS question_count
 		FROM quizzes z
-		WHERE z.lesson_id = $1
+		WHERE z.lesson_id = $1 AND z.deleted_at IS NULL
 		  AND ($2::timestamptz IS NULL OR (z.created_at, z.id) > ($2, $3::uuid))
 		ORDER BY z.created_at ASC, z.id ASC
 		LIMIT $4`, lessonID, afterCreatedAt, afterID, limit)
@@ -232,7 +234,7 @@ func (Repository) ListByLesson(ctx context.Context, q database.Querier, lessonID
 	for rows.Next() {
 		var r SummaryRow
 		if err := rows.Scan(&r.ID, &r.LessonID, &r.Title, &r.Source, &r.PolicySnapshot,
-			&r.Status, &r.CreatedAt, &r.QuestionCount); err != nil {
+			&r.Status, &r.CreatedAt, &r.Version, &r.QuestionCount); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

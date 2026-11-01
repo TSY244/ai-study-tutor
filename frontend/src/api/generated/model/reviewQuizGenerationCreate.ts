@@ -6,6 +6,11 @@
 
 export interface ReviewQuizGenerationCreate {
   /**
+     * 本次出题重点、题型比例、难度及覆盖范围偏好。
+     * @maxLength 3000
+     */
+  generation_notes?: string;
+  /**
      * @minimum 5
      * @maximum 15
      * @nullable

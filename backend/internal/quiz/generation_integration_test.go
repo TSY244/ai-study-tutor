@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -60,6 +61,48 @@ func seedLesson(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 		t.Fatal(err)
 	}
 	return lessonID
+}
+
+func TestGenerationConcurrentLessonDeletion(t *testing.T) {
+	pool := databasetest.New(t)
+	engine := newEngine(t, pool)
+	lessonID := seedLesson(t, pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, `SELECT id FROM lessons WHERE id = $1 FOR UPDATE`, lessonID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost,
+			"/api/v1/lessons/"+lessonID.String()+"/quiz-generations", strings.NewReader(`{}`)).WithContext(ctx)
+		req.Host = "localhost"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", uuid.NewString())
+		engine.ServeHTTP(rec, req)
+		done <- rec
+	}()
+	databasetest.WaitForBlocked(t, pool, tx.Conn().PgConn().PID())
+	if _, err := tx.Exec(ctx, `DELETE FROM lessons WHERE id = $1`, lessonID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rec := <-done
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("并发删除后不能接受生成任务: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM jobs`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("不得产生孤立任务: count=%d err=%v", count, err)
+	}
 }
 
 func jsonBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
@@ -361,5 +404,30 @@ func TestQuizGenerationMaintenance(t *testing.T) {
 	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusServiceUnavailable, "maintenance_mode")
 	if got := jobCount(t, pool); got != 0 {
 		t.Fatalf("维护模式不得创建任务，jobs = %d", got)
+	}
+}
+
+func TestGenerationNotesStoredAndLimited(t *testing.T) {
+	for _, route := range []string{"quiz-generations", "review-quiz-generations"} {
+		t.Run(route, func(t *testing.T) {
+			pool := databasetest.New(t)
+			engine := newEngine(t, pool)
+			lessonID := seedLesson(t, pool)
+			path := "/api/v1/lessons/" + lessonID.String() + "/" + route
+			rec := post(t, engine, path, uuid.NewString(), `{"question_count":5,"generation_notes":"多考应用和边界条件"}`)
+			if rec.Code != 202 {
+				t.Fatalf("%d %s", rec.Code, rec.Body.String())
+			}
+			body := jsonBody(t, rec)
+			jobID := body["job"].(map[string]any)["id"].(string)
+			if jobPayload(t, pool, jobID)["generation_notes"] != "多考应用和边界条件" {
+				t.Fatal("notes lost")
+			}
+			b, _ := json.Marshal(map[string]any{"generation_notes": strings.Repeat("字", 3001)})
+			rec = post(t, engine, path, uuid.NewString(), string(b))
+			if rec.Code != 422 {
+				t.Fatalf("long notes accepted: %d %s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

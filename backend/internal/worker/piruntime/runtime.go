@@ -1,6 +1,6 @@
-// Package claudecli resolves the gateway Key and minimal environment used by
-// Worker-owned Claude Code subprocesses.
-package claudecli
+// Package piruntime resolves the gateway Key and minimal environment used by
+// Worker-owned Pi SDK subprocesses.
+package piruntime
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 	"github.com/TSY244/ai-study-tutor/backend/internal/claudegateway"
 )
 
-// Runtime describes the shared configuration boundary for a Claude Code
+// Runtime describes the shared configuration boundary for a Pi SDK
 // subprocess. SettingsFile may be empty or absent for legacy priority fallback.
 type Runtime struct {
 	KeysFile       string
@@ -65,7 +65,7 @@ func (r Runtime) Resolve() (Selection, error) {
 		}
 		return Selection{
 			Key:     key,
-			BaseURL: claudegateway.EffectiveBaseURL(key.BaseURL, r.DefaultBaseURL),
+			BaseURL: claudegateway.EffectiveKeyBaseURL(key, r.DefaultBaseURL),
 		}, nil
 	}
 	return Selection{}, staleSettingsError()
@@ -85,7 +85,7 @@ func (r Runtime) loadSettings() (*settingsDocument, bool, error) {
 	}
 	if err != nil {
 		return nil, false, aipkg.ErrorForCode(aipkg.ErrUnavailable,
-			"无法读取 Claude Code 运行时设置；请检查文件权限后重试。")
+			"无法读取 Pi 运行时设置；请检查文件权限后重试。")
 	}
 	var doc *settingsDocument
 	if json.Unmarshal(raw, &doc) != nil || doc == nil {
@@ -101,8 +101,8 @@ func (r Runtime) settingsMatch(env map[string]string, key claudegateway.Key) boo
 	if !hasToken || !hasBaseURL || !hasModel || strings.TrimSpace(baseURL) == "" {
 		return false
 	}
-	return token == key.APIKey &&
-		claudegateway.EffectiveBaseURL(baseURL, "") == claudegateway.EffectiveBaseURL(key.BaseURL, r.DefaultBaseURL) &&
+	return claudegateway.EffectiveProtocol(env["AI_STUDY_TUTOR_AI_PROTOCOL"]) == claudegateway.EffectiveProtocol(key.Protocol) && token == key.APIKey &&
+		claudegateway.EffectiveKeyBaseURL(claudegateway.Key{BaseURL: baseURL, Protocol: key.Protocol}, "") == claudegateway.EffectiveKeyBaseURL(key, r.DefaultBaseURL) &&
 		model == key.Model
 }
 
@@ -124,13 +124,13 @@ func (r Runtime) fallback(keys []claudegateway.Key) (Selection, error) {
 	key := keys[best]
 	return Selection{
 		Key:     key,
-		BaseURL: claudegateway.EffectiveBaseURL(key.BaseURL, r.DefaultBaseURL),
+		BaseURL: claudegateway.EffectiveKeyBaseURL(key, r.DefaultBaseURL),
 	}, nil
 }
 
 func staleSettingsError() error {
 	return aipkg.ErrorForCode(aipkg.ErrNotConfigured,
-		"Claude Code 运行时设置已失效；请重新应用一个启用的 Key 后重试。")
+		"Pi 运行时设置已失效；请重新应用一个启用的 Key 后重试。")
 }
 
 // Env returns a fresh allowlisted subprocess environment for selection. It
@@ -149,13 +149,8 @@ func (r Runtime) Env(selection Selection) []string {
 	}
 	env = append(env,
 		"ANTHROPIC_MODEL="+selection.Key.Model,
-		"ANTHROPIC_DEFAULT_OPUS_MODEL="+selection.Key.Model,
-		"ANTHROPIC_DEFAULT_SONNET_MODEL="+selection.Key.Model,
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL="+selection.Key.Model,
-		"CLAUDE_CODE_SUBAGENT_MODEL="+selection.Key.Model,
+		"AI_STUDY_TUTOR_AI_PROTOCOL="+claudegateway.EffectiveProtocol(selection.Key.Protocol),
 		"AI_STUDY_TUTOR_CLAUDE_KEY_ID="+selection.Key.ID,
-		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-		"CLAUDE_CODE_ATTRIBUTION_HEADER=0",
 	)
 	return env
 }

@@ -471,3 +471,30 @@ func (Repository) getWeaknessByConceptForUpdate(ctx context.Context, q database.
 	}
 	return &w, err
 }
+
+// ListGradedScores reads the surviving grades used to recompute derived progress.
+func (Repository) ListGradedScores(ctx context.Context, q database.Querier, courseID uuid.UUID, lessonID *uuid.UUID) ([]GradedScore, error) {
+	rows, err := q.Query(ctx, `
+		SELECT a.final_score, a.max_score, a.graded_at
+		FROM attempts a
+		JOIN quizzes z ON z.id = a.quiz_id
+		JOIN lessons l ON l.id = z.lesson_id
+		WHERE l.course_id = $1
+		  AND ($2::uuid IS NULL OR z.lesson_id = $2)
+		  AND a.status = 'graded'
+		  AND a.max_score IS NOT NULL AND a.max_score > 0
+		ORDER BY a.graded_at ASC, a.id ASC`, courseID, lessonID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []GradedScore{}
+	for rows.Next() {
+		var s GradedScore
+		if err := rows.Scan(&s.Score, &s.Total, &s.GradedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}

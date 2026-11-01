@@ -66,6 +66,16 @@ describe('presentProblem', () => {
 })
 
 describe('presentJobError', () => {
+  it('区分账户额度不足和认证失败，提示恢复额度后手动重试', () => {
+    const quota = presentJobError('claude_quota_exhausted', true)
+    expect(quota.title).toContain('额度不足')
+    expect(quota.message).toContain('余额或额度不足')
+    expect(quota.message).toContain('补充额度')
+    expect(quota.message).not.toContain('Key 无效')
+    expect(presentJobError('claude_auth_failed', false).title).toContain('认证失败')
+    expect(presentJobError('claude_overloaded', true).message).toContain('等待提供方恢复')
+    expect(presentJobError('claude_rate_limited', true).title).toContain('受限')
+  })
   // 链接 + Key + prompt 片段：任何呈现文案都不得回显这类上游 detail。
   const URL_SENTINEL = 'https://www.youtube.com/watch?v=secret0&utm_source=sk-ant-leaked'
 

@@ -106,7 +106,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput,
 	var c Course
 	created := false
 	for range 5 {
-		c = Course{Slug: newSlug(in.Title), Title: in.Title, Description: in.Description}
+		title := strings.TrimSpace(in.Title)
+		pending := title == ""
+		if pending {
+			title = "待 AI 命名"
+		}
+		c = Course{Slug: newSlug(title), Title: title, Description: in.Description, TitlePending: pending}
 		err = s.repo.Create(ctx, tx, &c)
 		if errors.Is(err, ErrSlugTaken) {
 			continue
@@ -157,7 +162,8 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (Cou
 		return CourseDTO{}, err
 	}
 	if in.Title != nil {
-		c.Title = *in.Title
+		c.Title = strings.TrimSpace(*in.Title)
+		c.TitlePending = false
 	}
 	if in.Description != nil {
 		c.Description = in.Description
@@ -178,6 +184,13 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (Cou
 // Delete 物理删除课程及全部子数据；任一课时有活动 lesson_generation
 // 任务时拒绝（409 resource_busy）。
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
+	return s.DeleteMany(ctx, []uuid.UUID{id})
+}
+
+// DeleteMany 原子批量删除课程：单个事务内先对全部 id 做存在性与
+// 活动 lesson_generation 任务检查，任一失败整体回滚（404/409
+// resource_busy）；全部通过后在同一事务逐个级联删除。
+func (s *Service) DeleteMany(ctx context.Context, ids []uuid.UUID) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -186,18 +199,22 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 		return err
 	}
-	if _, err := s.repo.GetByID(ctx, tx, id); err != nil {
+	if err := s.repo.LockForDelete(ctx, tx, ids); err != nil {
 		return err
 	}
-	busy, err := s.repo.HasActiveGenerationJob(ctx, tx, id)
-	if err != nil {
-		return err
+	for _, id := range ids {
+		busy, err := s.repo.HasActiveGenerationJob(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if busy {
+			return httpx.NewProblemError(409, "resource_busy", "资源繁忙", "存在进行中的任务，不能删除。")
+		}
 	}
-	if busy {
-		return httpx.NewProblemError(409, "resource_busy", "资源繁忙", "存在进行中的任务，不能删除。")
-	}
-	if err := s.repo.DeleteCascade(ctx, tx, id); err != nil {
-		return err
+	for _, id := range ids {
+		if err := s.repo.DeleteCascade(ctx, tx, id); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }

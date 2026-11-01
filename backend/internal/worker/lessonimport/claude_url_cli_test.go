@@ -75,14 +75,14 @@ func cliEnvelopeJSON(t *testing.T, env map[string]any) *proc.Result {
 	return &proc.Result{Stdout: raw}
 }
 
-func newCLIExtractor(keysFile string, runner proc.Runner) *ClaudeURLCLIExtractor {
-	return &ClaudeURLCLIExtractor{
-		Proc:      runner,
-		KeysFile:  keysFile,
-		BaseURL:   "https://gateway.example",
-		Home:      "/var/lib/ai-study-tutor",
-		ClaudeBin: "claude",
-		Timeout:   time.Minute,
+func newCLIExtractor(keysFile string, runner proc.Runner) *PiURLExtractor {
+	return &PiURLExtractor{
+		Proc:     runner,
+		KeysFile: keysFile,
+		BaseURL:  "https://gateway.example",
+		Home:     "/var/lib/ai-study-tutor",
+		NodeBin:  "node",
+		Timeout:  time.Minute,
 	}
 }
 
@@ -108,6 +108,7 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 	}), nil))
 
 	x := newCLIExtractor(keysFile, fake)
+	x.NodeBin = "" // exercise the production default
 	x.SettingsFile = filepath.Join(t.TempDir(), "missing-settings.json")
 	resp, err := x.Extract(context.Background(), "/work/dir", cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
 	if err != nil {
@@ -139,11 +140,11 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 		t.Fatalf("应恰好一次子进程调用: %d", len(calls))
 	}
 	cmd := calls[0]
-	if cmd.Name != "claude" || cmd.Dir != "/work/dir" {
+	if cmd.Name != "node" || cmd.Dir != "/work/dir" {
 		t.Fatalf("argv/工作目录错误: %+v", cmd)
 	}
 	joined := strings.Join(cmd.Args, "\x00")
-	for _, want := range []string{"--allowedTools", "Bash Read Write WebFetch", "-p", "--output-format", "json"} {
+	for _, want := range []string{"/app/pi-runtime/agent.mjs", "--tools", "bash,read,write", "--prompt"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("argv 缺少 %q: %v", want, cmd.Args)
 		}
@@ -151,7 +152,7 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 	// prompt 含 canonical URL，且携带不可信数据与分隔标记输出约束。
 	var prompt string
 	for i, a := range cmd.Args {
-		if a == "-p" && i+1 < len(cmd.Args) {
+		if a == "--prompt" && i+1 < len(cmd.Args) {
 			prompt = cmd.Args[i+1]
 		}
 	}
@@ -166,12 +167,10 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 
 	// env 恰好是白名单变量；api_key 是优先级最高的启用 Key。
 	wantKeys := map[string]bool{
-		"HOME": false, "PATH": false, "SHELL": false, "CI": false, "NO_COLOR": false,
+		"AI_STUDY_TUTOR_AI_PROTOCOL": false,
+		"HOME":                       false, "PATH": false, "SHELL": false, "CI": false, "NO_COLOR": false,
 		"ANTHROPIC_BASE_URL": false, "ANTHROPIC_AUTH_TOKEN": false, "ANTHROPIC_MODEL": false,
-		"ANTHROPIC_DEFAULT_OPUS_MODEL": false, "ANTHROPIC_DEFAULT_SONNET_MODEL": false,
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL": false, "CLAUDE_CODE_SUBAGENT_MODEL": false,
-		"AI_STUDY_TUTOR_CLAUDE_KEY_ID": false, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": false,
-		"CLAUDE_CODE_ATTRIBUTION_HEADER": false,
+		"AI_STUDY_TUTOR_CLAUDE_KEY_ID": false,
 	}
 	if len(cmd.Env) != len(wantKeys) {
 		t.Fatalf("env 变量数量错误: got %d want %d (%v)", len(cmd.Env), len(wantKeys), cmd.Env)
@@ -193,13 +192,7 @@ func TestClaudeURLCLIExtractSuccess(t *testing.T) {
 		!containsEnv(cmd.Env, "ANTHROPIC_BASE_URL=https://gateway.example") ||
 		!containsEnv(cmd.Env, "ANTHROPIC_AUTH_TOKEN="+cliKeySentinel) ||
 		!containsEnv(cmd.Env, "ANTHROPIC_MODEL=claude-cli-test") ||
-		!containsEnv(cmd.Env, "ANTHROPIC_DEFAULT_OPUS_MODEL=claude-cli-test") ||
-		!containsEnv(cmd.Env, "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-cli-test") ||
-		!containsEnv(cmd.Env, "ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-cli-test") ||
-		!containsEnv(cmd.Env, "CLAUDE_CODE_SUBAGENT_MODEL=claude-cli-test") ||
-		!containsEnv(cmd.Env, "AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_winner") ||
-		!containsEnv(cmd.Env, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1") ||
-		!containsEnv(cmd.Env, "CLAUDE_CODE_ATTRIBUTION_HEADER=0") {
+		!containsEnv(cmd.Env, "AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_winner") {
 		t.Fatalf("env 值错误: %v", cmd.Env)
 	}
 }
@@ -243,13 +236,7 @@ func TestClaudeURLCLIRuntimeSettingsSelectAppliedKey(t *testing.T) {
 		"ANTHROPIC_AUTH_TOKEN=" + cliKeySentinel,
 		"ANTHROPIC_BASE_URL=https://selected.example/anthropic",
 		"ANTHROPIC_MODEL=claude-applied",
-		"ANTHROPIC_DEFAULT_OPUS_MODEL=claude-applied",
-		"ANTHROPIC_DEFAULT_SONNET_MODEL=claude-applied",
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-applied",
-		"CLAUDE_CODE_SUBAGENT_MODEL=claude-applied",
 		"AI_STUDY_TUTOR_CLAUDE_KEY_ID=ck_applied",
-		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-		"CLAUDE_CODE_ATTRIBUTION_HEADER=0",
 	}
 	for _, entry := range want {
 		if !containsEnv(calls[0].Env, entry) {
@@ -314,6 +301,7 @@ func TestClaudeURLCLIExtractErrorMapping(t *testing.T) {
 			"type": "result", "subtype": "error", "is_error": true,
 			"result": "upstream echoed " + cliKeySentinel,
 		}), nil), aipkg.ErrMaterialFetchFailed, false},
+		{"quota 403", proc.Static(cliEnvelopeJSON(t, map[string]any{"type": "result", "subtype": "error", "is_error": true, "api_error_status": 403, "api_error_code": aipkg.ErrQuotaExhausted}), &proc.ExitError{Code: 1}), aipkg.ErrQuotaExhausted, false},
 		{"api 401", proc.Static(cliEnvelopeJSON(t, map[string]any{
 			"type": "result", "subtype": "error", "is_error": true,
 			"api_error_status": 401, "duration_ms": 2345, "session_id": "sess-url-error",
@@ -549,7 +537,7 @@ func TestClaudeURLCLIExtractFileContract(t *testing.T) {
 		}), nil
 	})
 	x := newCLIExtractor(keysFile, fake)
-	resp, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.bilibili.com/video/BV1xx411c7mD"))
+	resp, err := x.Extract(context.Background(), t.TempDir(), cliExtractRequest(t, "https://www.youtube.com/watch?v=abc"))
 	if err != nil {
 		t.Fatal(err)
 	}

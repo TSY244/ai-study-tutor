@@ -100,6 +100,17 @@ describe('任务详情', () => {
         '80',
       ),
     )
+    // 同阶段、同百分比仍应实时显示新字符计数，无需等待终态。
+    for (const characters of [123, 456]) {
+      const frame = progressFrame(80, 'extracting')
+      const message = `Pi 正在流式生成 · 第 1 轮 · 已接收 ${characters} 字符`
+      stream.transport.emit({
+        ...frame,
+        id: String(1000 + characters),
+        data: JSON.stringify({ ...JSON.parse(frame.data), message }),
+      })
+      await screen.findAllByText(message)
+    }
   })
 })
 

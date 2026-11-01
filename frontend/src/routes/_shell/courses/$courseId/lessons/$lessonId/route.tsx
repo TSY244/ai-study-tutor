@@ -80,9 +80,6 @@ function LessonLayout() {
             </div>
             <LessonActions lesson={lessonQuery.data} />
           </div>
-
-          {/* 素材导入：draft/failed 显示导入表单；processing 显示任务进度 */}
-          <ImportPanel lesson={lessonQuery.data} />
         </>
       ) : null}
 
@@ -109,6 +106,9 @@ function LessonLayout() {
           ))}
         </ul>
       </nav>
+
+      {/* 导入表单与进度随当前栏目展示，避免在标签栏上下重复显示任务。 */}
+      {lessonQuery.isSuccess ? <ImportPanel lesson={lessonQuery.data} /> : null}
 
       <Outlet />
     </div>

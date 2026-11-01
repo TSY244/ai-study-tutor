@@ -128,17 +128,23 @@ func (r *Router) route(ctx context.Context, req aipkg.Request, allowLegacyFallba
 }
 
 func (r *Router) noEligibleError(keys []Key) error {
-	allAuthFailed := true
+	allAccountBlocked := true
+	hasQuotaFailure := false
 	for _, key := range keys {
 		if !key.Enabled {
 			continue
 		}
-		if r.State.Snapshot(key).Status != StatusAuthFailed {
-			allAuthFailed = false
-			break
+		status := r.State.Snapshot(key).Status
+		if status == StatusQuotaExhausted {
+			hasQuotaFailure = true
+		} else if status != StatusAuthFailed {
+			allAccountBlocked = false
 		}
 	}
-	if allAuthFailed {
+	if allAccountBlocked && hasQuotaFailure {
+		return aipkg.QuotaExhaustedError()
+	}
+	if allAccountBlocked {
 		return aipkg.ErrorForCode(aipkg.ErrAuthFailed,
 			"Claude 网关的已启用 Key 均未通过认证；请更新或手动测试 Key。")
 	}
@@ -218,6 +224,13 @@ func (r *Router) attempt(ctx context.Context, key Key, req aipkg.Request) (aipkg
 	if timeout <= 0 {
 		timeout = DefaultTimeoutSeconds
 	}
+	if EffectiveProtocol(key.Protocol) == ProtocolOpenAI {
+		provider := aipkg.NewOpenAIProvider(aipkg.OpenAIConfig{
+			APIKey: key.APIKey, Model: model, Endpoint: keyEndpoint(key, ""),
+			MaxOutputTokens: r.MaxOutputTokens, Timeout: time.Duration(timeout) * time.Second, HTTPClient: r.HTTPClient,
+		})
+		return provider.Generate(ctx, req)
+	}
 	endpoint := r.Endpoint
 	// Store.Load 不归一化：手改 keys.json 带入的纯空白 base_url 视为未设置。
 	if base := strings.TrimSpace(key.BaseURL); base != "" {
@@ -252,7 +265,7 @@ func (r *Router) recordOutcome(key Key, resp aipkg.Response, callErr error) {
 	}
 	perr := aipkg.AsProviderError(callErr)
 	switch {
-	case perr.Code == aipkg.ErrAuthFailed:
+	case perr.Code == aipkg.ErrAuthFailed || perr.Code == aipkg.ErrQuotaExhausted:
 		r.State.MarkAuthFailedForKey(key, perr.Code, resp.Latency)
 	case failoverEligible(perr.Code):
 		r.State.MarkTransientFailure(key, perr.Code, resp.Latency)
@@ -270,7 +283,7 @@ func (r *Router) recordTestOutcome(key Key, attemptID string, resp aipkg.Respons
 	if callErr != nil {
 		code = aipkg.AsProviderError(callErr).Code
 		switch {
-		case code == aipkg.ErrAuthFailed:
+		case code == aipkg.ErrAuthFailed || code == aipkg.ErrQuotaExhausted:
 			outcome = testAuthFailed
 		case failoverEligible(code):
 			outcome = testTransientFailure
@@ -284,7 +297,7 @@ func (r *Router) recordTestOutcome(key Key, attemptID string, resp aipkg.Respons
 // failoverEligible 报告错误码是否允许故障转移到下一个 Key。
 func failoverEligible(code string) bool {
 	switch code {
-	case aipkg.ErrAuthFailed, aipkg.ErrRateLimited, aipkg.ErrOverloaded,
+	case aipkg.ErrAuthFailed, aipkg.ErrQuotaExhausted, aipkg.ErrRateLimited, aipkg.ErrOverloaded,
 		aipkg.ErrTimeout, aipkg.ErrUnavailable:
 		return true
 	default:

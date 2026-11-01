@@ -90,6 +90,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.POST("/text", httpserver.BodyLimit(h.textLimit, http.StatusBadRequest, "bad_request"), h.createText)
 	g.POST("/upload", httpserver.BodyLimit(h.uploadLimit, http.StatusRequestEntityTooLarge, "upload_too_large"), h.upload)
 	g.GET("", httpserver.BodyLimit(h.jsonLimit, http.StatusBadRequest, "bad_request"), h.list)
+	rg.GET("/materials/:material_id", h.getMaterial)
+	rg.PATCH("/materials/:material_id", httpserver.BodyLimit(h.textLimit, http.StatusBadRequest, "bad_request"), h.editMaterial)
 	rg.DELETE("/materials/:material_id",
 		httpserver.BodyLimit(h.jsonLimit, http.StatusBadRequest, "bad_request"), h.delete)
 }

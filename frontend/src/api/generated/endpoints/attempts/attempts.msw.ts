@@ -64,6 +64,10 @@ export const getGetAttemptResponseMock200 = (overrideResponse: Partial<Extract<A
 
 export const getGetAttemptResponseMockDefault = (overrideResponse: Partial<Extract<ProblemResponse, object>> = {}): ProblemResponse => ({type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.number.int({min: 400, max: 599}), detail: faker.string.alpha({length: {min: 10, max: 20}}), instance: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), code: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), errors: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({field: faker.string.alpha({length: {min: 10, max: 20}}), code: faker.string.alpha({length: {min: 10, max: 20}}), message: faker.string.alpha({length: {min: 10, max: 20}})})), undefined]), ...overrideResponse})
 
+
+
+export const getDeleteAttemptResponseMockDefault = (overrideResponse: Partial<Extract<ProblemResponse, object>> = {}): ProblemResponse => ({type: faker.string.alpha({length: {min: 10, max: 20}}), title: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.number.int({min: 400, max: 599}), detail: faker.string.alpha({length: {min: 10, max: 20}}), instance: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), code: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), errors: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({field: faker.string.alpha({length: {min: 10, max: 20}}), code: faker.string.alpha({length: {min: 10, max: 20}}), message: faker.string.alpha({length: {min: 10, max: 20}})})), undefined]), ...overrideResponse})
+
 export const getSaveAttemptAnswerResponseMock = (overrideResponse: Partial<Extract<SavedAnswer, object>> = {}): SavedAnswer => ({attempt_id: faker.string.uuid(), question_id: faker.string.uuid(), answer: {value: {}}, answer_version: faker.number.int({min: 1}), attempt_version: faker.number.int({min: 1}), saved_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
 
@@ -214,6 +218,40 @@ export const getGetAttemptMockHandlerDefault = (overrideResponse?: ProblemRespon
   }, options)
 }
 
+export const getDeleteAttemptMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.delete('*/api/v1/attempts/:attemptId', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
+
+export const getDeleteAttemptMockHandler204 = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.delete('*/api/v1/attempts/:attemptId', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
+
+export const getDeleteAttemptMockHandlerDefault = (overrideResponse?: ProblemResponse | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<ProblemResponse> | ProblemResponse), options?: RequestHandlerOptions) => {
+  return http.delete('*/api/v1/attempts/:attemptId', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getDeleteAttemptResponseMockDefault(),
+      { status: 200
+      })
+  }, options)
+}
+
 export const getSaveAttemptAnswerMockHandler = (overrideResponse?: SavedAnswer | ((info: Parameters<Parameters<typeof http.patch>[1]>[0]) => Promise<SavedAnswer> | SavedAnswer), options?: RequestHandlerOptions) => {
   return http.patch('*/api/v1/attempts/:attemptId/answers/:questionId', async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
 
@@ -344,6 +382,7 @@ export const getAttemptsMock = () => [
   getListLessonAttemptsMockHandler(),
   getCreateAttemptMockHandler(),
   getGetAttemptMockHandler(),
+  getDeleteAttemptMockHandler(),
   getSaveAttemptAnswerMockHandler(),
   getSubmitAttemptMockHandler(),
   getCreateAttemptGradingJobMockHandler()

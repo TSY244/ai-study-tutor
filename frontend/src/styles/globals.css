@@ -49,6 +49,47 @@
    */
 }
 
+/*
+ * 深色主题：只覆盖语义 token 的值，组件类名不变（工具类全部引用 var(--color-*)）。
+ * 由 <html class="dark"> 触发，class 的加减见 lib/theme.ts 与 public/theme-init.js。
+ * 对比度同样按 WCAG AA 选值；实心彩色按钮（accent/info/danger）上的文字统一走
+ * --color-accent-contrast，两套主题各自保证可读。
+ */
+:root {
+  color-scheme: light;
+}
+
+:root.dark {
+  color-scheme: dark;
+
+  --color-canvas: #0c0a09;
+  --color-surface: #1c1917;
+  --color-surface-sunken: #292524;
+  --color-border: #332e2a;
+  --color-border-strong: #57534e;
+  --color-text: #f5f5f4;
+  --color-text-muted: #a8a29e;
+  --color-text-subtle: #8f8780;
+
+  --color-accent: #5fb3ac;
+  --color-accent-strong: #8fd0ca;
+  --color-accent-contrast: #06231f;
+  --color-accent-bg: #102825;
+  --color-accent-subtle: #17352f;
+
+  --color-ok: #4ade80;
+  --color-ok-bg: #0b2718;
+  --color-warn: #fbbf24;
+  --color-warn-bg: #2d1c07;
+  --color-danger: #f87171;
+  --color-danger-bg: #331010;
+  --color-info: #60a5fa;
+  --color-info-bg: #12233f;
+
+  --shadow-popover: 0 4px 16px rgb(0 0 0 / 0.5);
+  --shadow-dialog: 0 12px 40px rgb(0 0 0 / 0.6);
+}
+
 @layer base {
   html {
     /*
@@ -78,6 +119,10 @@
 
   ::selection {
     background: rgb(31 111 107 / 0.18);
+  }
+
+  :root.dark ::selection {
+    background: rgb(95 179 172 / 0.32);
   }
 
   h1,

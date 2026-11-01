@@ -77,7 +77,7 @@ export function CourseActions({ course }: { course: Course }) {
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title="删除课程"
-        description={`将删除「${course.title}」及其全部课时与素材，此操作不可恢复。`}
+        description={`将删除「${course.title}」及其全部课时、素材、文档、知识点、测验、作答、总结和薄弱点，此操作不可恢复。`}
         confirmLabel="删除"
         danger
         busy={deleteCourse.isPending}

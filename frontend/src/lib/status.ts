@@ -50,6 +50,7 @@ export const JOB_KIND_LABEL: Record<JobKind, string> = {
   summary_evaluate: '总结评估',
   lesson_export: '课时导出',
   bilibili_cookie_test: 'B 站 Cookie 检测',
+  bilibili_login: 'B 站扫码登录',
 }
 
 export const LESSON_STATUS_META: Record<LessonStatus, StatusMeta> = {

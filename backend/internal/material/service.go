@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/TSY244/ai-study-tutor/backend/internal/contentwrite"
 	"github.com/TSY244/ai-study-tutor/backend/internal/filestore"
 	"github.com/TSY244/ai-study-tutor/backend/internal/httpx"
 	"github.com/TSY244/ai-study-tutor/backend/internal/idempotency"
@@ -27,6 +28,7 @@ import (
 // 按 kind 可空：URL 素材输出 source_url，上传输出 original_name，
 // text 两者均为 null）。
 type DTO struct {
+	Version      int64     `json:"version"`
 	ID           uuid.UUID `json:"id"`
 	LessonID     uuid.UUID `json:"lesson_id"`
 	Kind         string    `json:"kind"`
@@ -126,7 +128,7 @@ func (s *Service) activeJobConflictErr(ctx context.Context, lessonID uuid.UUID, 
 
 // toDTO 映射领域素材到 API 表示。
 func (m *Material) toDTO() DTO {
-	return DTO{
+	return DTO{Version: m.Version,
 		ID:           m.ID,
 		LessonID:     m.LessonID,
 		Kind:         m.Kind,
@@ -149,7 +151,7 @@ func (s *Service) CreateTextMaterial(ctx context.Context, idemSvc *idempotency.S
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 		return nil, err
 	}
-	les, err := s.lessons.GetByID(ctx, tx, in.LessonID)
+	les, err := s.lessons.GetByIDForGeneration(ctx, tx, in.LessonID)
 	if err != nil {
 		return nil, mapLessonErr(err)
 	}
@@ -196,7 +198,7 @@ func (s *Service) CreateURLMaterial(ctx context.Context, idemSvc *idempotency.Se
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 		return nil, err
 	}
-	les, err := s.lessons.GetByID(ctx, tx, in.LessonID)
+	les, err := s.lessons.GetByIDForGeneration(ctx, tx, in.LessonID)
 	if err != nil {
 		return nil, mapLessonErr(err)
 	}
@@ -250,7 +252,7 @@ func (s *Service) UploadMaterial(ctx context.Context, idemSvc *idempotency.Servi
 		if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 			return err
 		}
-		les, err := s.lessons.GetByID(ctx, tx, in.LessonID)
+		les, err := s.lessons.GetByIDForGeneration(ctx, tx, in.LessonID)
 		if err != nil {
 			return mapLessonErr(err)
 		}
@@ -336,39 +338,36 @@ func (s *Service) ListMaterials(ctx context.Context, in ListInput) (*httpx.Colle
 // DeleteMaterial 删除素材：有活动 Job 引用时返回 409 resource_busy；
 // 上传素材在同一事务内把文件对象标记为 deleted。
 func (s *Service) DeleteMaterial(ctx context.Context, id uuid.UUID) error {
-	tx, err := s.pool.Begin(ctx)
+	m, err := s.repo.GetByID(ctx, s.pool, id)
+	if errors.Is(err, ErrNotFound) {
+		return contentwrite.NotFound()
+	}
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
-		return err
-	}
-	m, err := s.repo.GetByID(ctx, tx, id)
-	if err != nil {
+	return contentwrite.Run(ctx, s.pool, m.LessonID, func(tx pgx.Tx) error {
+		m, err := s.repo.GetByID(ctx, tx, id)
 		if errors.Is(err, ErrNotFound) {
-			return httpx.NewProblemError(http.StatusNotFound, "not_found",
-				"资源不存在", "请求的资源不存在或已删除。")
+			return contentwrite.NotFound()
 		}
-		return err
-	}
-	busy, err := s.repo.HasActiveJobReference(ctx, tx, id)
-	if err != nil {
-		return err
-	}
-	if busy {
-		return httpx.NewProblemError(http.StatusConflict, "resource_busy",
-			"资源繁忙", "素材正被任务使用，不能删除。")
-	}
-	if err := s.repo.Delete(ctx, tx, id); err != nil {
-		return err
-	}
-	if m.Kind == KindUpload && m.FileObjectID != nil {
-		if err := s.repo.MarkFileObjectDeleted(ctx, tx, *m.FileObjectID); err != nil {
+		if err != nil {
 			return err
 		}
-	}
-	return tx.Commit(ctx)
+		busy, err := s.repo.HasActiveJobReference(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if busy {
+			return httpx.NewProblemError(409, "resource_busy", "资源繁忙", "素材正被任务使用，不能删除。")
+		}
+		if err = s.repo.Delete(ctx, tx, id); err != nil {
+			return err
+		}
+		if m.Kind == KindUpload && m.FileObjectID != nil {
+			return s.repo.MarkFileObjectDeleted(ctx, tx, *m.FileObjectID)
+		}
+		return nil
+	})
 }
 
 // PrepareStaging 为一次上传创建暂存文件路径

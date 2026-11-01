@@ -96,6 +96,30 @@ export const getAttempt = async (attemptId: string, options?: RequestInit): Prom
 );}
 
 
+export const getDeleteAttemptUrl = (attemptId: string,) => {
+
+
+
+
+  return `/api/v1/attempts/${attemptId}`
+}
+
+/**
+ * 删除答案和该作答产生的掌握度快照，清理薄弱点中的该作答证据，并根据剩余成绩重新计算当前进度；人工维护的薄弱点状态保留。有活动批阅/生成任务时返回 409。
+ * @summary 删除作答记录
+ */
+export const deleteAttempt = async (attemptId: string, options?: RequestInit): Promise<void> => {
+
+  return apiFetch<void>(getDeleteAttemptUrl(attemptId),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
 export const getSaveAttemptAnswerUrl = (attemptId: string,
     questionId: string,) => {
 

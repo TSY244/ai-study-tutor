@@ -61,12 +61,15 @@ func (Repository) Publish(ctx context.Context, q database.Querier, id uuid.UUID)
 	if err != nil {
 		return err
 	}
-	tag, err = q.Exec(ctx, `UPDATE documents SET is_active = true WHERE id = $1`, id)
+	tag, err = q.Exec(ctx, `UPDATE documents SET is_active = true WHERE id = $1 AND deleted_at IS NULL`, id)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+	if _, err := q.Exec(ctx, `UPDATE course_knowledge_points SET active=false,version=version+1,updated_at=now() WHERE active AND lesson_id IN (SELECT lesson_id FROM documents WHERE id=$1 AND kind='raw_text')`, id); err != nil {
+		return err
 	}
 	return nil
 }
@@ -89,7 +92,7 @@ func (Repository) GetByID(ctx context.Context, q database.Querier, id uuid.UUID)
 	var d Document
 	err := q.QueryRow(ctx, `
 		SELECT id, lesson_id, kind, revision, content_md, source_job_id, is_active, created_at
-		FROM documents WHERE id = $1`, id).Scan(
+		FROM documents WHERE id = $1 AND deleted_at IS NULL`, id).Scan(
 		&d.ID, &d.LessonID, &d.Kind, &d.Revision, &d.ContentMD, &d.SourceJobID, &d.IsActive, &d.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -129,7 +132,7 @@ func (Repository) ListVersions(ctx context.Context, q database.Querier,
 	rows, err := q.Query(ctx, `
 		SELECT id, lesson_id, kind, revision, content_md, source_job_id, is_active, created_at
 		FROM documents
-		WHERE lesson_id = $1 AND kind = $2
+		WHERE lesson_id = $1 AND kind = $2 AND deleted_at IS NULL
 		  AND ($3::int IS NULL OR revision < $3)
 		ORDER BY revision DESC
 		LIMIT $4`, lessonID, kind, beforeRevision, limit)

@@ -19,12 +19,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	aipkg "github.com/TSY244/ai-study-tutor/backend/internal/ai"
+	"github.com/TSY244/ai-study-tutor/backend/internal/course"
 	"github.com/TSY244/ai-study-tutor/backend/internal/document"
 	"github.com/TSY244/ai-study-tutor/backend/internal/filestore"
 	"github.com/TSY244/ai-study-tutor/backend/internal/job"
 	"github.com/TSY244/ai-study-tutor/backend/internal/lesson"
 	"github.com/TSY244/ai-study-tutor/backend/internal/material"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker"
+	"github.com/TSY244/ai-study-tutor/backend/internal/worker/piruntime"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker/proc"
 )
 
@@ -117,8 +119,7 @@ type Handler struct {
 	// CLI 提取的凭证来源）；nil 视为可用（测试便捷）。
 	URLImportAvailable func() bool
 
-	// URLExtractor 是 URL 素材的链接内容提取器（worker 容器内 Claude
-	// Code CLI + WebFetch 客户端抓取，凭证取自 claudegateway keys.json）。
+	// URLExtractor 是 URL 素材的 Pi SDK 提取器，凭证取自网关 keys.json。
 	// nil 时 URL 导入同样以非重试 claude_not_configured 失败。
 	URLExtractor URLExtractor
 
@@ -192,8 +193,8 @@ func (h *Handler) Execute(ctx context.Context, ex *worker.Execution) (*worker.Ou
 		return nil, worker.WrapError(worker.ErrCodeInternal, "读取素材失败，将自动重试。", true, err)
 	}
 
-	// URL 素材在通用文件获取序列之前分支：走 Claude Web Fetch 提取管线，
-	// 不经过本地 DNS、重定向预检、yt-dlp、FFmpeg 或 Whisper。
+	// URL 素材单独分支：B 站由 bili-cli 获取图文并总结，其他站点由
+	// Pi SDK 提取；均不经过旧的通用文件下载管线。
 	if p.Kind == material.KindURL {
 		return h.executeURL(ctx, ex, p, m)
 	}
@@ -312,10 +313,9 @@ func (h *Handler) acquire(ctx context.Context, ex *worker.Execution, p payload, 
 }
 
 // executeURL 运行 URL 素材的 Claude 提取管线：canonical 再校验 ->
-// worker 容器内 Claude Code CLI（WebFetch 客户端抓取）提取 -> 规范化/切分
+// worker 容器内提取（B 站 bili-cli 图文总结，其他站点 Pi SDK）-> 规范化/切分
 // -> 同一网关限定 Provider 生成两份文档 -> 一次性发布（publishFunc 事务
-// 保持 all-or-nothing）。全程不经过本地 DNS、重定向预检、yt-dlp、FFmpeg
-// 或 Whisper。
+// 保持 all-or-nothing）。不经过旧的 DNS/重定向预检与本地下载管线。
 func (h *Handler) executeURL(ctx context.Context, ex *worker.Execution, p payload, m *material.Material) (*worker.Outcome, error) {
 	if h.URLExtractor == nil || h.URLImportAI == nil || (h.URLImportAvailable != nil && !h.URLImportAvailable()) {
 		return nil, worker.NewError(worker.ErrCodeClaudeNotConfigured,
@@ -343,7 +343,14 @@ func (h *Handler) executeURL(ctx context.Context, ex *worker.Execution, p payloa
 	if err := ex.Stage(ctx, StageExtracting, progressExtracting, "Claude 提取链接内容"); err != nil {
 		return nil, err
 	}
-	res, err := h.generateClaudeURL(ctx, ex.Job.ID, ex.WorkDir, req)
+	var res claudeURLResult
+	err = piruntime.WithProgress(ctx, func(ctx context.Context, message string) error {
+		return ex.Stage(ctx, StageExtracting, progressExtracting, message)
+	}, func(ctx context.Context) error {
+		var callErr error
+		res, callErr = h.generateClaudeURL(ctx, ex.Job.ID, ex.WorkDir, req)
+		return callErr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -386,13 +393,17 @@ func (h *Handler) executeURL(ctx context.Context, ex *worker.Execution, p payloa
 	if err := ex.Stage(ctx, StagePublishing, progressPublishing, "发布文档版本"); err != nil {
 		return nil, err
 	}
+	parserVersion := claudeURLParserVersion
+	if isBilibiliURL(canonical) {
+		parserVersion = biliParserVersion
+	}
 	return &worker.Outcome{
-		Publish: h.publishFunc(ex.Job, p, m, norm, TypeTXT, claudeURLParserVersion,
+		Publish: h.publishFunc(ex.Job, p, m, norm, TypeTXT, parserVersion,
 			claudeURLSourceInfo(res, canonical), chunks, generated),
 	}, nil
 }
 
-// generateClaudeURL 经 worker 容器内的 Claude Code CLI 提取链接正文，并按
+// generateClaudeURL 经 worker 容器内的 Pi SDK 提取链接正文，并按
 // generateMarkdown 同款模式恰好记录一条 purpose=lesson_url_extract 的
 // 脱敏 ai_run；提取错误经 claudeWorkerError 保留错误码与重试标志
 // （ErrMaterialFetchFailed -> worker.ErrCodeMaterialFetchFailed）。
@@ -473,8 +484,8 @@ func (h *Handler) generateMarkdown(ctx context.Context, jobID uuid.UUID, req aip
 	if callErr == nil {
 		if err := json.Unmarshal(resp.JSON, &parsed); err != nil {
 			runErr = aipkg.WrapError(aipkg.ErrInvalidJSON, "Claude 返回的 JSON 无法解析，请重试。", err)
-		} else if strings.TrimSpace(parsed.Markdown) == "" {
-			runErr = aipkg.ErrorForCode(aipkg.ErrDomainInvalid, "Claude 返回的文档内容为空，请重试。")
+		} else {
+			_, runErr = aipkg.StudySummaryTitle(parsed.Markdown)
 		}
 	}
 	if err := h.aiRuns.Create(ctx, h.Pool, aipkg.NewRun(jobID, req, resp, runErr)); err != nil {
@@ -497,6 +508,15 @@ func claudeWorkerError(err error) error {
 func (h *Handler) publishFunc(j *job.Job, p payload, m *material.Material, norm, dtype, parserVersion string,
 	source *sourceInfo, chunks []Chunk, generated map[string]string) worker.PublishFunc {
 	return func(ctx context.Context, tx pgx.Tx) ([]byte, error) {
+		if md := generated[document.KindTeacherOutline]; md != "" {
+			title, err := aipkg.StudySummaryTitle(md)
+			if err != nil {
+				return nil, err
+			}
+			if err := (course.Repository{}).ApplyGeneratedTitle(ctx, tx, p.LessonID, title); err != nil {
+				return nil, err
+			}
+		}
 		d := &document.Document{
 			LessonID:    p.LessonID,
 			Kind:        document.KindRawText,

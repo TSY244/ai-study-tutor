@@ -12,6 +12,7 @@ export const ClaudeKeyStatus = {
   healthy: 'healthy',
   cooling_down: 'cooling_down',
   auth_failed: 'auth_failed',
+  quota_exhausted: 'quota_exhausted',
   disabled: 'disabled',
   testing: 'testing',
 } as const;

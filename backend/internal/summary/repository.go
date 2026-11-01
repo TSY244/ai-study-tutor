@@ -112,3 +112,20 @@ func (Repository) GetSummaryText(ctx context.Context, q database.Querier, id uui
 	}
 	return lessonID, summary, err
 }
+
+func (Repository) List(ctx context.Context, q database.Querier, lessonID uuid.UUID, before *time.Time, beforeID *uuid.UUID, limit int) ([]Evaluation, error) {
+	rows, err := q.Query(ctx, `SELECT se.id,se.lesson_id,se.summary_text,se.result,se.status,se.job_id,j.error_code,j.error_detail,j.error_retryable,se.created_at,se.completed_at FROM summary_evaluations se LEFT JOIN jobs j ON j.id=se.job_id WHERE se.lesson_id=$1 AND ($2::timestamptz IS NULL OR (se.created_at,se.id)<($2,$3::uuid)) ORDER BY se.created_at DESC,se.id DESC LIMIT $4`, lessonID, before, beforeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Evaluation{}
+	for rows.Next() {
+		var e Evaluation
+		if err = rows.Scan(&e.ID, &e.LessonID, &e.SummaryText, &e.Result, &e.Status, &e.JobID, &e.ErrorCode, &e.ErrorDetail, &e.ErrorRetryable, &e.CreatedAt, &e.CompletedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

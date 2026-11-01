@@ -1,19 +1,24 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { BookOpen, ChevronRight } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { listCourses } from '@/api/generated/endpoints/courses/courses'
 import { listJobs } from '@/api/generated/endpoints/jobs/jobs'
+import { getLesson } from '@/api/generated/endpoints/lessons/lessons'
 import { getSystemStatus } from '@/api/generated/endpoints/system/system'
 import type { SystemStatus } from '@/api/generated/model'
+import { isApiProblemError } from '@/api/problem'
 import { queryKeys } from '@/api/query-client'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/error-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton, SkeletonRows } from '@/components/ui/skeleton'
-import { loadRecentLearning } from '@/features/learning/recent-learning'
+import {
+  loadRecentLearning,
+  removeRecentLearningEntries,
+} from '@/features/learning/recent-learning'
 import { formatDateTime } from '@/lib/format'
 import { JOB_KIND_LABEL, JOB_STATUS_META, systemStatusMeta } from '@/lib/status'
 
@@ -63,9 +68,32 @@ function ContinueLearningSection() {
   // 每次导航回本页组件都会重新挂载，挂载时读取即可拿到最新记录
   const [entries] = useState(() => loadRecentLearning())
 
+  // 记录指向的课时可能已被删除（其他入口/其他标签页）：逐条校验，
+  // 仅 404 判定为失效并从展示与本地记录中清理；网络等瞬时错误不清。
+  const validation = useQueries({
+    queries: entries.map((entry) => ({
+      queryKey: queryKeys.lesson(entry.lessonId),
+      queryFn: () => getLesson(entry.lessonId),
+      retry: false,
+    })),
+  })
+  const isStaleEntry = (index: number): boolean => {
+    const query = validation[index]
+    return Boolean(query?.isError && isApiProblemError(query.error) && query.error.status === 404)
+  }
+  const visibleEntries = entries.filter((_, index) => !isStaleEntry(index))
+  const staleKey = entries
+    .filter((_, index) => isStaleEntry(index))
+    .map((entry) => entry.lessonId)
+    .join('\n')
+  useEffect(() => {
+    if (!staleKey) return
+    staleKey.split('\n').forEach((lessonId) => removeRecentLearningEntries({ lessonId }))
+  }, [staleKey])
+
   return (
     <SectionCard id="continue-learning-heading" title="继续学习">
-      {entries.length === 0 ? (
+      {visibleEntries.length === 0 ? (
         <EmptyState
           icon={BookOpen}
           title="还没有学习记录"
@@ -81,7 +109,7 @@ function ContinueLearningSection() {
         />
       ) : (
         <ul className="divide-y divide-border">
-          {entries.map((entry) => (
+          {visibleEntries.map((entry) => (
             <li key={entry.lessonId}>
               <Link
                 to="/courses/$courseId/lessons/$lessonId"

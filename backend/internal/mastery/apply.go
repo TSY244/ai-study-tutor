@@ -27,9 +27,14 @@ type GradedScore struct {
 	GradedAt time.Time
 }
 
-// ScoreReader 是掌握度/出题策略所需的成绩读取端口（attempt.Repository 实现）。
-type ScoreReader interface {
+// GradedScoreReader 提供重新计算掌握度所需的成绩。
+type GradedScoreReader interface {
 	ListGradedScores(ctx context.Context, q database.Querier, courseID uuid.UUID, lessonID *uuid.UUID) ([]GradedScore, error)
+}
+
+// ScoreReader adds the policy inputs to the progress score reader.
+type ScoreReader interface {
+	GradedScoreReader
 	CountGraded(ctx context.Context, q database.Querier, courseID uuid.UUID, lessonID *uuid.UUID) (int, error)
 	ConsecutiveAnswers(ctx context.Context, q database.Querier, attemptID uuid.UUID) ([]*bool, error)
 	LatestGradedAttemptID(ctx context.Context, q database.Querier, lessonID uuid.UUID) (*uuid.UUID, error)
@@ -58,10 +63,10 @@ type ApplyInput struct {
 // ApplyService 应用判分结果；Repository 提供 SQL，公式为纯函数。
 type ApplyService struct {
 	repo   Repository
-	scores ScoreReader
+	scores GradedScoreReader
 }
 
-func NewApplyService(scores ScoreReader) *ApplyService {
+func NewApplyService(scores GradedScoreReader) *ApplyService {
 	return &ApplyService{repo: Repository{}, scores: scores}
 }
 
@@ -252,4 +257,14 @@ func (e *PracticeEvaluator) Needed(ctx context.Context, q database.Querier, less
 	}
 	correct, wrong, _ := ConsecutiveStats(flags)
 	return policy.DetermineQuestionCount("normal", wrong, correct, masteryValue, nil) > 0, nil
+}
+
+// Refresh appends current derived progress after a manual content change.
+func (s *ApplyService) Refresh(ctx context.Context, q database.Querier, courseID uuid.UUID, lessonID *uuid.UUID) error {
+	if lessonID != nil {
+		if err := s.appendScopeSnapshot(ctx, q, "lesson", courseID, lessonID, nil); err != nil {
+			return err
+		}
+	}
+	return s.appendScopeSnapshot(ctx, q, "course", courseID, nil, nil)
 }

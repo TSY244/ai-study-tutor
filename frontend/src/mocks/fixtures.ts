@@ -45,6 +45,7 @@ export const systemStatusDegraded: SystemStatus = {
 export const demoClaudeKeys: ClaudeKey[] = [
   {
     id: 'ck_demo_primary',
+    protocol: 'anthropic',
     name: '主线路',
     masked_key: 'sk-ant-...7K2P',
     fingerprint: 'sha256:4f91a7c2d310',
@@ -68,6 +69,7 @@ export const demoClaudeKeys: ClaudeKey[] = [
   },
   {
     id: 'ck_demo_backup',
+    protocol: 'anthropic',
     name: '备用线路',
     masked_key: 'sk-ant-...3M8Q',
     fingerprint: 'sha256:9b3078d14ace',

@@ -115,6 +115,7 @@ type Response struct {
 const (
 	ErrNotConfigured       = "claude_not_configured"
 	ErrAuthFailed          = "claude_auth_failed"
+	ErrQuotaExhausted      = "claude_quota_exhausted"
 	ErrRateLimited         = "claude_rate_limited"
 	ErrTimeout             = "claude_timeout"
 	ErrOverloaded          = "claude_overloaded"
@@ -150,6 +151,10 @@ func (e *ProviderError) Unwrap() error { return e.cause }
 // ErrorForCode returns the stable retry classification for a Claude failure.
 func ErrorForCode(code, detail string) *ProviderError {
 	return &ProviderError{Code: code, Detail: detail, Retryable: retryableCode(code)}
+}
+
+func QuotaExhaustedError() *ProviderError {
+	return ErrorForCode(ErrQuotaExhausted, "模型网关账户余额或额度不足；请在上游账户补充额度，或切换有可用额度的 Key 后重试。")
 }
 
 func WrapError(code, detail string, cause error) *ProviderError {

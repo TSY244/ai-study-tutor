@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react'
 
 import { getJob } from '@/api/generated/endpoints/jobs/jobs'
 import {
+  invalidateCourseChanged,
   invalidateDocumentsChanged,
   invalidateJobChanged,
   invalidateLessonChanged,
@@ -43,6 +44,7 @@ export function ActiveJobCard({
     if (status && !isJobActive(status) && settledRef.current !== status) {
       settledRef.current = status
       void invalidateLessonChanged(queryClient, lessonId, courseId)
+      void invalidateCourseChanged(queryClient, courseId)
       void invalidateJobChanged(queryClient, jobId)
       // 生成任务结束后文档可能已重写：阅读页收到精确失效后只提示、不打断阅读。
       void invalidateDocumentsChanged(queryClient, lessonId)
@@ -106,6 +108,11 @@ export function ActiveJobCard({
           <p className="mt-1 text-sm text-text-muted">
             {job.stage} · {job.progress}% · 离开页面任务仍继续，进度也会显示在任务中心。
           </p>
+          {job.message ? (
+            <p role="status" className="mt-1 text-sm text-text-muted">
+              {job.message}
+            </p>
+          ) : null}
         </>
       ) : (
         <p className="mt-1 text-sm text-text-muted">

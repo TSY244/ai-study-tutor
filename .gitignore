@@ -18,4 +18,5 @@ video_summary_report.md
 
 # Local build artifacts
 /worker
+backend/pi-runtime/node_modules/
 deploy/cookies/

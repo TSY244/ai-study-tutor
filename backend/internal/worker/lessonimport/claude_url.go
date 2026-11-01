@@ -14,16 +14,16 @@ import (
 //
 //   - canonicalClaudeURL 是纯函数：重新解析持久化 URL、复用白名单判定、
 //     剥离追踪参数并重编码；不解析 DNS、不发 HTTP、不调用任何本地工具；
-//   - URL 提取不经 Resolver/Transport/proc.Runner/yt-dlp/FFmpeg/Whisper，
-//     抓取发生在 Claude 服务端（web_fetch server tool）；
+//   - B 站由 bili-cli 获取文字和画面后交给 Pi SDK 总结，其他站点由
+//     Pi SDK 获取；均不经过旧的 Resolver/Transport 下载管线；
 //   - 结果解析失败一律归为 Claude 错误（claude_invalid_json /
 //     claude_schema_invalid），错误详情不回带上游原文。
 
 const (
 	// claudeURLExtractor 与 claudeURLParserVersion 写入素材 metadata，
 	// 标记原文由 Claude Web Fetch 提取而非本地下载管线。
-	claudeURLExtractor       = "claude_web_fetch"
-	claudeURLParserVersion   = "claude-web-fetch/v1"
+	claudeURLExtractor       = "pi_sdk_fetch"
+	claudeURLParserVersion   = "pi-sdk-fetch/v1"
 	maxCanonicalClaudeURLLen = 250
 )
 
@@ -142,10 +142,14 @@ func parseClaudeURLResult(raw json.RawMessage) (claudeURLResult, error) {
 // claudeURLSourceInfo 生成 Claude 提取路径的来源摘要：仅标题、canonical
 // URL 与非敏感的提取说明，不含正文，也不携带本地下载工具元数据。
 func claudeURLSourceInfo(res claudeURLResult, canonicalURL string) *sourceInfo {
+	extractor := claudeURLExtractor
+	if isBilibiliURL(canonicalURL) {
+		extractor = "bili-cli"
+	}
 	return &sourceInfo{
 		Title:          strings.TrimSpace(res.Title),
 		WebpageURL:     canonicalURL,
-		Extractor:      claudeURLExtractor,
+		Extractor:      extractor,
 		ExtractionNote: strings.TrimSpace(res.ExtractionNote),
 	}
 }

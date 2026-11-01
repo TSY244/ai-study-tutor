@@ -295,10 +295,17 @@ export class JobStreamClient {
       const lessonId = job.aggregate_id
       await Promise.all([
         this.queryClient.invalidateQueries({ queryKey: queryKeys.lesson(lessonId) }),
+        this.queryClient.invalidateQueries({
+          queryKey: ['knowledge-points'],
+          refetchType: 'active',
+        }),
+        this.queryClient.invalidateQueries({ queryKey: ['course'], refetchType: 'active' }),
+        this.queryClient.invalidateQueries({ queryKey: ['courses'], refetchType: 'active' }),
         // 课程未知时用资源前缀失效各课程的课时列表（仅活跃查询会重取）。
         this.queryClient.invalidateQueries({ queryKey: ['lessons'], refetchType: 'active' }),
         this.queryClient.invalidateQueries({ queryKey: queryKeys.quizzes(lessonId) }),
         invalidateDocumentsChanged(this.queryClient, lessonId),
+        this.queryClient.invalidateQueries({ queryKey: ['materials', lessonId] }),
       ])
     } else if (job.aggregate_type === 'attempt') {
       await Promise.all([
@@ -313,9 +320,15 @@ export class JobStreamClient {
         }),
       ])
     } else if (job.aggregate_type === 'summary_evaluation') {
-      await this.queryClient.invalidateQueries({
-        queryKey: queryKeys.summaryEvaluation(job.aggregate_id),
-      })
+      await Promise.all([
+        this.queryClient.invalidateQueries({
+          queryKey: queryKeys.summaryEvaluation(job.aggregate_id),
+        }),
+        this.queryClient.invalidateQueries({
+          queryKey: ['summary-evaluations'],
+          refetchType: 'active',
+        }),
+      ])
     }
   }
 
@@ -341,12 +354,24 @@ export class JobStreamClient {
     await Promise.all([
       this.queryClient.invalidateQueries({ queryKey: ['jobs'], refetchType: 'active' }),
       this.queryClient.invalidateQueries({ queryKey: ['job'], refetchType: 'active' }),
+      this.queryClient.invalidateQueries({ queryKey: ['knowledge-points'], refetchType: 'active' }),
+      this.queryClient.invalidateQueries({ queryKey: ['course'], refetchType: 'active' }),
+      this.queryClient.invalidateQueries({ queryKey: ['courses'], refetchType: 'active' }),
       this.queryClient.invalidateQueries({ queryKey: ['lesson'], refetchType: 'active' }),
       this.queryClient.invalidateQueries({ queryKey: ['lessons'], refetchType: 'active' }),
       this.queryClient.invalidateQueries({ queryKey: ['documents'], refetchType: 'active' }),
       this.queryClient.invalidateQueries({ queryKey: ['document'], refetchType: 'active' }),
       this.queryClient.invalidateQueries({ queryKey: ['quizzes'], refetchType: 'active' }),
       this.queryClient.invalidateQueries({ queryKey: ['attempt'], refetchType: 'active' }),
+      this.queryClient.invalidateQueries({ queryKey: ['materials'], refetchType: 'active' }),
+      this.queryClient.invalidateQueries({
+        queryKey: ['summary-evaluations'],
+        refetchType: 'active',
+      }),
+      this.queryClient.invalidateQueries({
+        queryKey: ['summary-evaluation'],
+        refetchType: 'active',
+      }),
       this.queryClient
         .prefetchQuery({
           queryKey: queryKeys.jobs({ active: true }),

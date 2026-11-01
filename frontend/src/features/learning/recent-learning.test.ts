@@ -5,6 +5,7 @@ import {
   recordRecentLearning,
   RECENT_LEARNING_LIMIT,
   RECENT_LEARNING_STORAGE_KEY,
+  removeRecentLearningEntries,
 } from '@/features/learning/recent-learning'
 
 describe('最近学习记录', () => {
@@ -66,5 +67,34 @@ describe('最近学习记录', () => {
     const entries = loadRecentLearning()
     expect(entries).toHaveLength(1)
     expect(entries[0]?.lessonId).toBe('l1')
+  })
+
+  it('按 courseId 清理：删除课程后其课时的记录全部移除', () => {
+    recordRecentLearning({ courseId: 'c1', lessonId: 'l1', lessonTitle: '第一课' })
+    recordRecentLearning({ courseId: 'c2', lessonId: 'l2', lessonTitle: '第二课' })
+
+    removeRecentLearningEntries({ courseId: 'c1' })
+
+    const entries = loadRecentLearning()
+    expect(entries.map((entry) => entry.lessonId)).toEqual(['l2'])
+  })
+
+  it('按 lessonId 清理：删除课时后仅移除该课时的记录', () => {
+    recordRecentLearning({ courseId: 'c1', lessonId: 'l1', lessonTitle: '第一课' })
+    recordRecentLearning({ courseId: 'c1', lessonId: 'l2', lessonTitle: '第二课' })
+
+    removeRecentLearningEntries({ lessonId: 'l1' })
+
+    const entries = loadRecentLearning()
+    expect(entries.map((entry) => entry.lessonId)).toEqual(['l2'])
+  })
+
+  it('清理后无剩余记录时移除存储键', () => {
+    recordRecentLearning({ courseId: 'c1', lessonId: 'l1', lessonTitle: '第一课' })
+
+    removeRecentLearningEntries({ courseId: 'c1' })
+
+    expect(loadRecentLearning()).toEqual([])
+    expect(window.localStorage.getItem(RECENT_LEARNING_STORAGE_KEY)).toBeNull()
   })
 })

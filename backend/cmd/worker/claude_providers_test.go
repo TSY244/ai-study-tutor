@@ -158,11 +158,11 @@ func TestBuildClaudeProvidersWiresRuntimeSettingsAndHome(t *testing.T) {
 		runtimeHome := filepath.Join(t.TempDir(), "runtime-home")
 		t.Setenv("HOME", "  "+runtimeHome+"  ")
 		providers := buildClaudeProviders(cfg, "", false, nil)
-		urlExtractor, ok := providers.URLExtractor.(*lessonimport.ClaudeURLCLIExtractor)
+		urlExtractor, ok := providers.URLExtractor.(*lessonimport.PiURLExtractor)
 		if !ok {
 			t.Fatalf("URLExtractor 类型错误: %T", providers.URLExtractor)
 		}
-		quizGenerator, ok := providers.QuizCLI.(*aihandlers.ClaudeQuizCLIGenerator)
+		quizGenerator, ok := providers.QuizCLI.(*aihandlers.PiQuizGenerator)
 		if !ok {
 			t.Fatalf("QuizCLI 类型错误: %T", providers.QuizCLI)
 		}
@@ -182,8 +182,8 @@ func TestBuildClaudeProvidersWiresRuntimeSettingsAndHome(t *testing.T) {
 		}
 
 		providers := buildClaudeProviders(cfg, "", false, nil)
-		urlExtractor := providers.URLExtractor.(*lessonimport.ClaudeURLCLIExtractor)
-		quizGenerator := providers.QuizCLI.(*aihandlers.ClaudeQuizCLIGenerator)
+		urlExtractor := providers.URLExtractor.(*lessonimport.PiURLExtractor)
+		quizGenerator := providers.QuizCLI.(*aihandlers.PiQuizGenerator)
 		if urlExtractor.Home != wantHome || quizGenerator.Home != wantHome {
 			t.Fatalf("相对 HOME 应规范为绝对路径: URL=%q Quiz=%q want=%q", urlExtractor.Home, quizGenerator.Home, wantHome)
 		}
@@ -200,8 +200,8 @@ func TestBuildClaudeProvidersWiresRuntimeSettingsAndHome(t *testing.T) {
 		wantSettings := filepath.Join(runtimeHome, ".claude", "settings.json")
 
 		providers := buildClaudeProviders(derivedCfg, "", false, nil)
-		urlExtractor := providers.URLExtractor.(*lessonimport.ClaudeURLCLIExtractor)
-		quizGenerator := providers.QuizCLI.(*aihandlers.ClaudeQuizCLIGenerator)
+		urlExtractor := providers.URLExtractor.(*lessonimport.PiURLExtractor)
+		quizGenerator := providers.QuizCLI.(*aihandlers.PiQuizGenerator)
 		if urlExtractor.Home != runtimeHome || quizGenerator.Home != runtimeHome {
 			t.Fatalf("非空 HOME 应保持规范绝对路径: URL=%q Quiz=%q want=%q", urlExtractor.Home, quizGenerator.Home, runtimeHome)
 		}
@@ -222,8 +222,8 @@ func TestBuildClaudeProvidersWiresRuntimeSettingsAndHome(t *testing.T) {
 		wantSettings := filepath.Join(wantHome, ".claude", "settings.json")
 
 		providers := buildClaudeProviders(fallbackCfg, "", false, nil)
-		urlExtractor := providers.URLExtractor.(*lessonimport.ClaudeURLCLIExtractor)
-		quizGenerator := providers.QuizCLI.(*aihandlers.ClaudeQuizCLIGenerator)
+		urlExtractor := providers.URLExtractor.(*lessonimport.PiURLExtractor)
+		quizGenerator := providers.QuizCLI.(*aihandlers.PiQuizGenerator)
 		if urlExtractor.Home != wantHome || quizGenerator.Home != wantHome {
 			t.Fatalf("空 HOME 应回退绝对数据目录: URL=%q Quiz=%q want=%q", urlExtractor.Home, quizGenerator.Home, wantHome)
 		}

@@ -7,6 +7,8 @@ import type { MaterialKind } from './materialKind';
 import type { MaterialStatus } from './materialStatus';
 
 export interface Material {
+  /** @minimum 1 */
+  version?: number;
   id: string;
   lesson_id: string;
   kind: MaterialKind;

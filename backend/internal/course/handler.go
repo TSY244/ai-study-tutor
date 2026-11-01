@@ -30,15 +30,24 @@ func NewHandler(svc *Service, idem *httpx.IdemExecutor) *Handler {
 	return &Handler{svc: svc, idem: idem}
 }
 
-// RegisterRoutes 注册 GET/POST /courses 与 GET/PATCH/DELETE
-// /courses/{course_id}；全部挂载 jsonLimit body 限制中间件。
+// RegisterRoutes 注册 GET/POST /courses、GET/PATCH/DELETE
+// /courses/{course_id} 与 POST /courses:batch-delete；
+// 全部挂载 jsonLimit body 限制中间件。
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, jsonLimit gin.HandlerFunc) {
 	g := rg.Group("/courses", jsonLimit)
 	g.GET("", h.list)
 	g.POST("", h.create)
 	g.GET("/:course_id", h.get)
+	g.GET("/:course_id/knowledge-points", h.listKnowledge)
 	g.PATCH("/:course_id", h.update)
 	g.DELETE("/:course_id", h.delete)
+	// 批量删除挂在 /courses 组外："courses:batch-delete" 整体是静态段，
+	// 避免与 "/courses/:course_id" 的参数段冲突。
+	rg.POST("/courses:batch-delete", jsonLimit, h.batchDelete)
+	rg.POST("/lessons/:lesson_id/knowledge-points", jsonLimit, h.createKnowledge)
+	rg.GET("/knowledge-points/:knowledge_point_id", h.getKnowledge)
+	rg.PATCH("/knowledge-points/:knowledge_point_id", jsonLimit, h.editKnowledge)
+	rg.DELETE("/knowledge-points/:knowledge_point_id", h.deleteKnowledge)
 }
 
 // createRequest 对齐 CourseCreate Schema（additionalProperties:false）。
@@ -55,6 +64,14 @@ type updateRequest struct {
 	Version     *int64  `json:"version"`
 }
 
+// batchDeleteRequest 对齐 BatchDelete Schema（additionalProperties:false）。
+type batchDeleteRequest struct {
+	IDs []string `json:"ids"`
+}
+
+// maxBatchDeleteIDs 是单次批量删除的 id 上限（与 limit 上限 100 一致）。
+const maxBatchDeleteIDs = 100
+
 func (h *Handler) create(c *gin.Context) {
 	var req createRequest
 	if !httpx.BindJSON(c, &req) {
@@ -62,7 +79,9 @@ func (h *Handler) create(c *gin.Context) {
 		return
 	}
 	var errs []httpserver.FieldError
-	errs = append(errs, titleFieldErrs(&req.Title, true)...)
+	if utf8.RuneCountInString(req.Title) > 200 {
+		errs = append(errs, httpx.FieldErr("title", "too_long", "课程名称不能超过 200 字符"))
+	}
 	errs = append(errs, descriptionFieldErrs(req.Description)...)
 	if len(errs) > 0 {
 		httpx.WriteValidation(c, errs)
@@ -205,6 +224,32 @@ func (h *Handler) delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func (h *Handler) batchDelete(c *gin.Context) {
+	var req batchDeleteRequest
+	if !httpx.BindJSON(c, &req) {
+		badRequest(c, "请求体不是有效的 JSON。")
+		return
+	}
+	if len(req.IDs) == 0 {
+		badRequest(c, "ids 不能为空。")
+		return
+	}
+	if len(req.IDs) > maxBatchDeleteIDs {
+		badRequest(c, "ids 一次最多 "+strconv.Itoa(maxBatchDeleteIDs)+" 个。")
+		return
+	}
+	ids, ok := httpx.ParseBatchUUIDs(req.IDs)
+	if !ok {
+		badRequest(c, "ids 必须是 UUID 列表。")
+		return
+	}
+	if err := h.svc.DeleteMany(c.Request.Context(), ids); err != nil {
+		writeError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
 // writeError 映射本模块哨兵错误；其余交给 httpx.WriteError。
 // 本映射必须与 httpx.WriteError 中其他模块的响应形状保持一致
 // （httpx 不能 import 本包，故映射留在本模块，见 httpx 包注释）。
@@ -278,4 +323,31 @@ func descriptionFieldErrs(v *string) []httpserver.FieldError {
 		return []httpserver.FieldError{httpx.FieldErr("description", "too_long", "课程描述不能超过 5000 字符")}
 	}
 	return nil
+}
+
+func (h *Handler) listKnowledge(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("course_id"))
+	if err != nil {
+		writeError(c, ErrNotFound)
+		return
+	}
+	if _, err = h.svc.Get(c.Request.Context(), id); err != nil {
+		writeError(c, err)
+		return
+	}
+	var lessonID *uuid.UUID
+	if raw := c.Query("lesson_id"); raw != "" {
+		v, e := uuid.Parse(raw)
+		if e != nil {
+			badRequest(c, "lesson_id 必须是 UUID。")
+			return
+		}
+		lessonID = &v
+	}
+	points, err := (Repository{}).ListKnowledge(c.Request.Context(), h.svc.pool, id, lessonID)
+	if err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"items": points})
 }

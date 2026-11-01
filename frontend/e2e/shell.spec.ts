@@ -124,8 +124,8 @@ test.describe('App Shell 导航', () => {
     await expect(page).toHaveURL(new RegExp(`/jobs/${JOB_FAILED_ID}$`))
 
     await expect(page.getByRole('heading', { name: '测验生成' })).toBeVisible()
-    await expect(page.getByRole('alert')).toContainText('Claude 服务暂时不可用')
-    await expect(page.getByText('claude_unavailable')).toBeVisible()
+    await expect(page.getByRole('alert')).toContainText('claude_unavailable')
+    await expect(page.getByRole('button', { name: '重试任务' })).toBeVisible()
   })
 
   test('作答专注模式：无全局导航与任务中心，保留退出链路', async ({ page }) => {

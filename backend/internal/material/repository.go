@@ -39,6 +39,7 @@ var ErrNotFound = errors.New("素材不存在")
 // 由查询 LEFT JOIN file_objects 填充，或上传发布时由发布输入填充
 // （仅用于 DTO 展示）。
 type Material struct {
+	Version      int64
 	ID           uuid.UUID
 	LessonID     uuid.UUID
 	Kind         string
@@ -58,14 +59,14 @@ type Repository struct{}
 // selectSQL 关联 file_objects 取上传文件的展示名。
 const selectSQL = `
 	SELECT m.id, m.lesson_id, m.kind, m.source_url, m.file_object_id, m.inline_text,
-	       m.metadata, m.status, m.created_at, f.original_name
+	       m.metadata, m.status, m.created_at, f.original_name,m.version
 	FROM materials m
 	LEFT JOIN file_objects f ON f.id = m.file_object_id`
 
 func scanMaterial(row pgx.Row) (*Material, error) {
 	var m Material
 	err := row.Scan(&m.ID, &m.LessonID, &m.Kind, &m.SourceURL, &m.FileObjectID,
-		&m.InlineText, &m.Metadata, &m.Status, &m.CreatedAt, &m.OriginalName)
+		&m.InlineText, &m.Metadata, &m.Status, &m.CreatedAt, &m.OriginalName, &m.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +84,9 @@ func (Repository) Create(ctx context.Context, q database.Querier, m *Material) e
 	return q.QueryRow(ctx, `
 		INSERT INTO materials (id, lesson_id, kind, source_url, file_object_id, inline_text, metadata)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
-		RETURNING status, created_at`,
+		RETURNING status, created_at,version`,
 		m.ID, m.LessonID, m.Kind, m.SourceURL, m.FileObjectID, m.InlineText, m.Metadata).
-		Scan(&m.Status, &m.CreatedAt)
+		Scan(&m.Status, &m.CreatedAt, &m.Version)
 }
 
 // GetByID 读取素材（含上传文件展示名）。
@@ -116,7 +117,7 @@ func (Repository) ListByLesson(ctx context.Context, q database.Querier, lessonID
 	for rows.Next() {
 		var m Material
 		if err := rows.Scan(&m.ID, &m.LessonID, &m.Kind, &m.SourceURL, &m.FileObjectID,
-			&m.InlineText, &m.Metadata, &m.Status, &m.CreatedAt, &m.OriginalName); err != nil {
+			&m.InlineText, &m.Metadata, &m.Status, &m.CreatedAt, &m.OriginalName, &m.Version); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

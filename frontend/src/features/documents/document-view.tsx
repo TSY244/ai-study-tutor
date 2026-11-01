@@ -1,3 +1,5 @@
+import { DeleteContentButton } from '@/features/content/delete-content-button'
+import { MaterialList } from '@/features/materials/material-list'
 import { FileText, History } from 'lucide-react'
 import { useState } from 'react'
 
@@ -11,6 +13,8 @@ import { SkeletonText } from '@/components/ui/skeleton'
 import { DocumentVersionsDialog } from '@/features/documents/document-versions-dialog'
 import { MarkdownReader } from '@/features/documents/markdown/markdown-reader'
 import { useCurrentDocument, useCurrentDocuments } from '@/features/documents/use-documents'
+import { ResourceJobs } from '@/features/jobs/resource-jobs'
+import { useActiveResourceJobs } from '@/features/jobs/use-active-resource-jobs'
 import { formatDateTime } from '@/lib/format'
 import { DOCUMENT_KIND_LABEL } from '@/lib/status'
 
@@ -23,6 +27,40 @@ import { DOCUMENT_KIND_LABEL } from '@/lib/status'
  * 历史版本以只读快照查看，可随时回到当前版本。
  */
 export function DocumentView({ lessonId, kind }: { lessonId: string; kind: DocumentKind }) {
+  const jobsQuery = useActiveResourceJobs('lesson', lessonId, [
+    'lesson_import',
+    'lesson_regenerate',
+  ])
+
+  return (
+    <div className="space-y-4">
+      <ResourceJobs
+        query={{
+          ...jobsQuery,
+          // 导入任务由课时布局中的 ImportPanel 在标签栏下统一展示。
+          jobs: jobsQuery.jobs.filter((job) => job.kind !== 'lesson_import'),
+        }}
+        title={`${DOCUMENT_KIND_LABEL[kind]}正在生成`}
+      />
+      <DocumentContent
+        lessonId={lessonId}
+        kind={kind}
+        generating={jobsQuery.isLoading || jobsQuery.jobs.length > 0}
+      />
+      {kind === 'raw_text' ? <MaterialList lessonId={lessonId} /> : null}
+    </div>
+  )
+}
+
+function DocumentContent({
+  lessonId,
+  kind,
+  generating,
+}: {
+  lessonId: string
+  kind: DocumentKind
+  generating: boolean
+}) {
   const docQuery = useCurrentDocument(lessonId, kind)
   const [pinned, setPinned] = useState<Document | null>(null)
   const [historical, setHistorical] = useState<Document | null>(null)
@@ -30,7 +68,7 @@ export function DocumentView({ lessonId, kind }: { lessonId: string; kind: Docum
   const [versionsOpen, setVersionsOpen] = useState(false)
 
   // 首次拿到当前文档时固定为阅读版本（渲染期调整 state，仅执行一次）。
-  if (docQuery.data && pinned === null) {
+  if (docQuery.isSuccess && docQuery.data && pinned === null) {
     setPinned(docQuery.data)
   }
 
@@ -44,23 +82,45 @@ export function DocumentView({ lessonId, kind }: { lessonId: string; kind: Docum
 
   if (docQuery.isError) {
     if (isApiProblemError(docQuery.error) && docQuery.error.status === 404) {
-      return <DocumentEmptyState lessonId={lessonId} kind={kind} />
-    }
-    return (
-      <ErrorState
-        title={`${DOCUMENT_KIND_LABEL[kind]}加载失败`}
-        error={docQuery.error}
-        onRetry={() => void docQuery.refetch()}
-      />
-    )
+      if (!historical)
+        return (
+          <div className="space-y-3">
+            {generating ? null : <DocumentEmptyState lessonId={lessonId} kind={kind} />}
+            <Button variant="ghost" size="sm" onClick={() => setVersionsOpen(true)}>
+              <History aria-hidden="true" className="h-4 w-4" />
+              历史版本
+            </Button>
+            <DocumentVersionsDialog
+              lessonId={lessonId}
+              kind={kind}
+              open={versionsOpen}
+              onOpenChange={setVersionsOpen}
+              onView={(doc) => {
+                setVersionsOpen(false)
+                setHistorical(doc)
+              }}
+            />
+          </div>
+        )
+    } else
+      return (
+        <ErrorState
+          title={`${DOCUMENT_KIND_LABEL[kind]}加载失败`}
+          error={docQuery.error}
+          onRetry={() => void docQuery.refetch()}
+        />
+      )
   }
 
-  const latest = docQuery.data
+  const latest = docQuery.isSuccess ? docQuery.data : null
   const displayed = historical ?? pinned
   if (!displayed) return null
 
   const updateAvailable =
-    historical === null && latest.id !== displayed.id && dismissedUpdateId !== latest.id
+    latest !== null &&
+    historical === null &&
+    latest.id !== displayed.id &&
+    dismissedUpdateId !== latest.id
 
   function viewVersion(doc: Document) {
     setVersionsOpen(false)
@@ -78,13 +138,26 @@ export function DocumentView({ lessonId, kind }: { lessonId: string; kind: Docum
             更新于 {formatDateTime(displayed.created_at)}
           </span>
         </p>
-        <Button variant="ghost" size="sm" onClick={() => setVersionsOpen(true)}>
-          <History aria-hidden="true" className="h-4 w-4" />
-          历史版本
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setVersionsOpen(true)}>
+            <History aria-hidden="true" className="h-4 w-4" />
+            历史版本
+          </Button>
+          <DeleteContentButton
+            kind="document"
+            id={displayed.id}
+            name={`${DOCUMENT_KIND_LABEL[kind]} R${displayed.revision}`}
+            lessonId={lessonId}
+            onDeleted={() => {
+              setPinned(null)
+              setHistorical(null)
+              setDismissedUpdateId(null)
+            }}
+          />
+        </div>
       </div>
 
-      {updateAvailable ? (
+      {updateAvailable && latest ? (
         <div
           role="status"
           className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-info/30 bg-info-bg px-3 py-2 text-sm text-text"
@@ -135,7 +208,7 @@ export function DocumentView({ lessonId, kind }: { lessonId: string; kind: Docum
 
 /**
  * 文档未生成（404）时的空状态。用 DocumentSummaryCollection 说明哪些
- * 类型已就绪，引导到已有内容；不猜生成进度（那是任务中心的职责）。
+ * 类型已就绪，引导到已有内容；进行中的任务由上方任务卡显示。
  */
 function DocumentEmptyState({ lessonId, kind }: { lessonId: string; kind: DocumentKind }) {
   const collectionQuery = useCurrentDocuments(lessonId)

@@ -90,6 +90,7 @@ func TestJobRESTContractListDetailEventsAndCancel(t *testing.T) {
 
 	activeJob := createHTTPJob(t, pool, job.KindLessonImport, "lesson")
 	failedJob := createHTTPJob(t, pool, job.KindAttemptGrade, "attempt")
+	seedRetryTarget(t, pool, "attempt", failedJob.AggregateID)
 	if _, err := pool.Exec(context.Background(), `UPDATE jobs SET max_attempts = 1 WHERE id = $1`, failedJob.ID); err != nil {
 		t.Fatal(err)
 	}

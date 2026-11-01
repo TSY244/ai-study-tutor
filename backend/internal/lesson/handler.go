@@ -3,6 +3,7 @@ package lesson
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -27,14 +28,17 @@ func NewHandler(svc *Service, idem *httpx.IdemExecutor) *Handler {
 	return &Handler{svc: svc, idem: idem}
 }
 
-// RegisterRoutes 注册 GET/POST /courses/{course_id}/lessons 与
-// GET/PATCH/DELETE /lessons/{lesson_id}；写端点挂 jsonLimit。
+// RegisterRoutes 注册 GET/POST /courses/{course_id}/lessons、
+// GET/PATCH/DELETE /lessons/{lesson_id} 与 POST /lessons:batch-delete；
+// 写端点挂 jsonLimit。"lessons:batch-delete" 整体是静态段，
+// 避免与 "/lessons/:lesson_id" 的参数段冲突。
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, jsonLimit gin.HandlerFunc) {
 	rg.GET("/courses/:course_id/lessons", h.list)
 	rg.POST("/courses/:course_id/lessons", jsonLimit, h.create)
 	rg.GET("/lessons/:lesson_id", h.get)
 	rg.PATCH("/lessons/:lesson_id", jsonLimit, h.update)
 	rg.DELETE("/lessons/:lesson_id", h.delete)
+	rg.POST("/lessons:batch-delete", jsonLimit, h.batchDelete)
 }
 
 // createRequest 对齐 LessonCreate Schema（additionalProperties:false）。
@@ -51,6 +55,14 @@ type updateRequest struct {
 	Description *string `json:"description"`
 	Version     *int64  `json:"version"`
 }
+
+// batchDeleteRequest 对齐 BatchDelete Schema（additionalProperties:false）。
+type batchDeleteRequest struct {
+	IDs []string `json:"ids"`
+}
+
+// maxBatchDeleteIDs 是单次批量删除的 id 上限（与 limit 上限 100 一致）。
+const maxBatchDeleteIDs = 100
 
 func (h *Handler) create(c *gin.Context) {
 	courseID, ok := courseUUID(c)
@@ -184,6 +196,32 @@ func (h *Handler) delete(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Delete(c.Request.Context(), id); err != nil {
+		writeError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) batchDelete(c *gin.Context) {
+	var req batchDeleteRequest
+	if !httpx.BindJSON(c, &req) {
+		badRequest(c, "请求体不是有效的 JSON。")
+		return
+	}
+	if len(req.IDs) == 0 {
+		badRequest(c, "ids 不能为空。")
+		return
+	}
+	if len(req.IDs) > maxBatchDeleteIDs {
+		badRequest(c, "ids 一次最多 "+strconv.Itoa(maxBatchDeleteIDs)+" 个。")
+		return
+	}
+	ids, ok := httpx.ParseBatchUUIDs(req.IDs)
+	if !ok {
+		badRequest(c, "ids 必须是 UUID 列表。")
+		return
+	}
+	if err := h.svc.DeleteMany(c.Request.Context(), ids); err != nil {
 		writeError(c, err)
 		return
 	}

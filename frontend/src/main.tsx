@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 
 import { App } from '@/app'
 import { env } from '@/env'
+// 所有入口（含直接打开专注作答页）都需要接收跨标签页主题变化。
+import '@/lib/theme'
 import '@/styles/globals.css'
 
 async function bootstrap(): Promise<void> {

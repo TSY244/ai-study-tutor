@@ -3,11 +3,13 @@
  * Source: api/openapi.yaml (发布契约)
  * Regenerate: npm run api:gen
  */
+import type { GatewayProtocol } from './gatewayProtocol';
 
 /**
  * 全部字段可选；省略 api_key 表示保留原 Key，提供则替换。
  */
 export interface ClaudeKeyUpdate {
+  protocol?: GatewayProtocol;
   /**
      * 提供时替换完整 Key；任何响应都不会回读。
      * @minLength 1
@@ -23,7 +25,7 @@ export interface ClaudeKeyUpdate {
      * @maxLength 100
      */
   model?: string;
-  /** 可选；省略保持不变，空字符串表示清除（回退部署侧 ANTHROPIC_BASE_URL）。 */
+  /** 可选；省略保持不变，空字符串表示清除（回退所选协议的默认地址）。 */
   base_url?: string;
   enabled?: boolean;
   /** @minimum 0 */

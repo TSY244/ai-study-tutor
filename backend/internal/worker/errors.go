@@ -35,6 +35,7 @@ const (
 	// Claude/AI 阶段（B6）。这些值与 internal/ai.ProviderError.Code 保持一致。
 	ErrCodeClaudeNotConfigured   = "claude_not_configured"
 	ErrCodeClaudeAuthFailed      = "claude_auth_failed"
+	ErrCodeClaudeQuotaExhausted  = "claude_quota_exhausted"
 	ErrCodeClaudeRateLimited     = "claude_rate_limited"
 	ErrCodeClaudeTimeout         = "claude_timeout"
 	ErrCodeClaudeOverloaded      = "claude_overloaded"

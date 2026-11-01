@@ -194,8 +194,8 @@ func TestClaudeURLSourceInfo(t *testing.T) {
 		ExtractionNote:  " 含字幕原文 ",
 	}
 	info := claudeURLSourceInfo(res, "https://www.youtube.com/watch?v=abc")
-	if info.Extractor != "claude_web_fetch" {
-		t.Fatalf("extractor 期望 claude_web_fetch，得到 %q", info.Extractor)
+	if info.Extractor != "pi_sdk_fetch" {
+		t.Fatalf("extractor 期望 pi_sdk_fetch，得到 %q", info.Extractor)
 	}
 	if info.Title != "课程视频" || info.ExtractionNote != "含字幕原文" {
 		t.Fatalf("来源摘要字段未清洗: %+v", info)
@@ -206,8 +206,8 @@ func TestClaudeURLSourceInfo(t *testing.T) {
 	if info.SubtitleOrigin != "" || info.YtDlpVersion != "" {
 		t.Fatalf("Claude 路径不应携带本地下载元数据: %+v", info)
 	}
-	if claudeURLParserVersion != "claude-web-fetch/v1" {
-		t.Fatalf("parser version 期望 claude-web-fetch/v1，得到 %q", claudeURLParserVersion)
+	if claudeURLParserVersion != "pi-sdk-fetch/v1" {
+		t.Fatalf("parser version 期望 pi-sdk-fetch/v1，得到 %q", claudeURLParserVersion)
 	}
 }
 

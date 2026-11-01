@@ -62,6 +62,10 @@ func (s *Service) CreateBilibiliCookieTest(ctx context.Context, rec *idempotency
 	return s.createSystemJob(ctx, rec, KindBilibiliCookieTest, []byte(`{}`))
 }
 
+func (s *Service) CreateBilibiliLogin(ctx context.Context, rec *idempotency.Record) (int, *Accepted, error) {
+	return s.createSystemJob(ctx, rec, KindBilibiliLogin, []byte(`{}`))
+}
+
 func (s *Service) createSystemJob(ctx context.Context, rec *idempotency.Record, kind string, payload []byte) (int, *Accepted, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -164,6 +168,24 @@ func (s *Service) Retry(ctx context.Context, rec *idempotency.Record, jobID uuid
 	if err := gate.AssertBusinessOpen(ctx, tx); err != nil {
 		return 0, nil, err
 	}
+	orig, err := s.repo.GetByID(ctx, tx, jobID)
+	if errors.Is(err, ErrNotFound) {
+		return 0, nil, httpx.NewProblemError(http.StatusNotFound, "not_found",
+			"资源不存在", "请求的资源不存在或已删除。")
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	if orig.Status != StatusFailed {
+		return 0, nil, notRetryableProblem(&ErrNotRetryable{Status: orig.Status})
+	}
+	if err := s.repo.LockRetryTarget(ctx, tx, orig); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return 0, nil, httpx.NewProblemError(http.StatusNotFound, "not_found",
+				"资源不存在", "任务关联的学习内容已删除，不能重试。")
+		}
+		return 0, nil, err
+	}
 	nj, err := s.repo.RetryFailed(ctx, tx, jobID, &rec.Scope, &rec.Key)
 	if err != nil {
 		var nr *ErrNotRetryable
@@ -173,6 +195,17 @@ func (s *Service) Retry(ctx context.Context, rec *idempotency.Record, jobID uuid
 				"资源不存在", "请求的资源不存在或已删除。")
 		case errors.As(err, &nr):
 			return 0, nil, notRetryableProblem(nr)
+		case errors.Is(err, ErrActiveGenerationJobExists):
+			// 唯一冲突已中止当前事务，用连接池查询已有任务。
+			active, readErr := s.repo.GetActiveGenerationJob(ctx, s.pool, orig.AggregateID)
+			if readErr == nil && active != nil {
+				return 0, nil, ResourceBusyError(active.ID)
+			}
+			return 0, nil, httpx.NewProblemError(http.StatusConflict, "resource_busy",
+				"资源繁忙", "该课时已有进行中的生成任务，暂时不能重试。")
+		case errors.Is(err, ErrActiveAttemptGradeExists):
+			return 0, nil, httpx.NewProblemError(http.StatusConflict, "resource_busy",
+				"资源繁忙", "该作答已有进行中的批阅任务，暂时不能重试。")
 		default:
 			return 0, nil, err
 		}

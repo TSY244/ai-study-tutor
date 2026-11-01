@@ -12,6 +12,7 @@ import (
 
 	aipkg "github.com/TSY244/ai-study-tutor/backend/internal/ai"
 	"github.com/TSY244/ai-study-tutor/backend/internal/attempt"
+	"github.com/TSY244/ai-study-tutor/backend/internal/course"
 	"github.com/TSY244/ai-study-tutor/backend/internal/document"
 	"github.com/TSY244/ai-study-tutor/backend/internal/job"
 	"github.com/TSY244/ai-study-tutor/backend/internal/lesson"
@@ -19,12 +20,13 @@ import (
 	"github.com/TSY244/ai-study-tutor/backend/internal/quiz"
 	"github.com/TSY244/ai-study-tutor/backend/internal/summary"
 	"github.com/TSY244/ai-study-tutor/backend/internal/worker"
+	"github.com/TSY244/ai-study-tutor/backend/internal/worker/piruntime"
 )
 
 type Deps struct {
 	Pool     *pgxpool.Pool
 	Provider aipkg.Provider
-	// QuizCLI 非 nil 时测验/复习测验生成走 Claude Code CLI 文件契约；
+	// QuizCLI 非 nil 时测验/复习测验生成走 Pi SDK 文件契约；
 	// nil 保持 Messages API 路径。
 	QuizCLI QuizGenerator
 }
@@ -220,6 +222,17 @@ func (h lessonRegenerateHandler) Execute(ctx context.Context, ex *worker.Executi
 func (h lessonRegenerateHandler) publishDocs(jobID, lessonID uuid.UUID, generated map[string]string) worker.PublishFunc {
 	return func(ctx context.Context, tx pgx.Tx) ([]byte, error) {
 		docIDs := map[string]string{}
+		md := generated[document.KindTeacherOutline]
+		if md == "" {
+			md = generated[document.KindStudentNotes]
+		}
+		title, err := aipkg.StudySummaryTitle(md)
+		if err != nil {
+			return nil, err
+		}
+		if err := (course.Repository{}).ApplyGeneratedTitle(ctx, tx, lessonID, title); err != nil {
+			return nil, err
+		}
 		for kind, md := range generated {
 			d := &document.Document{LessonID: lessonID, Kind: kind, ContentMD: md, SourceJobID: &jobID}
 			if err := h.docs.CreateVersion(ctx, tx, d); err != nil {
@@ -278,9 +291,10 @@ type quizGenerateHandler struct {
 }
 
 type quizPayload struct {
-	LessonID      uuid.UUID `json:"lesson_id"`
-	QuestionCount *int32    `json:"question_count"`
-	Title         *string   `json:"title"`
+	LessonID        uuid.UUID `json:"lesson_id"`
+	QuestionCount   *int32    `json:"question_count"`
+	Title           *string   `json:"title"`
+	GenerationNotes string    `json:"generation_notes"`
 }
 
 type quizResult struct {
@@ -319,14 +333,16 @@ func (h quizGenerateHandler) Execute(ctx context.Context, ex *worker.Execution) 
 	if err := ex.Stage(ctx, choose(h.Review, "planning_review", "planning"), 25, "生成出题计划"); err != nil {
 		return nil, err
 	}
+	points, err := h.analyzeKnowledge(ctx, ex, les, raw, student, int(count))
+	if err != nil {
+		return nil, err
+	}
+	knowledgeJSON, _ := json.Marshal(map[string]any{"points": points})
 	var req aipkg.Request
 	generate := h.Provider.Generate
 	if h.QuizCLI != nil {
-		if err := writeQuizCLIInputs(ex.WorkDir, raw, student); err != nil {
-			return nil, worker.WrapError(worker.ErrCodeInternal, "写入出题上下文失败，将自动重试。", true, err)
-		}
 		req = buildQuizCLIRequest(ex.WorkDir, quizCLIPromptInput{
-			LessonTitle: les.Title, QuestionCount: int(count), Review: h.Review,
+			LessonTitle: les.Title, QuestionCount: int(count), Review: h.Review, GenerationNotes: p.GenerationNotes,
 		})
 		quizCLI := h.QuizCLI
 		workDir := ex.WorkDir
@@ -335,16 +351,24 @@ func (h quizGenerateHandler) Execute(ctx context.Context, ex *worker.Execution) 
 		}
 	} else {
 		req, err = aipkg.BuildQuizRequest(aipkg.QuizPromptInput{
-			LessonTitle: les.Title, RawText: raw, StudentNotes: student, QuestionCount: int(count), Review: h.Review,
+			LessonTitle: les.Title, RawText: raw, StudentNotes: student, QuestionCount: int(count), Review: h.Review, KnowledgeJSON: string(knowledgeJSON), GenerationNotes: p.GenerationNotes,
 		})
 		if err != nil {
 			return nil, err
 		}
 	}
-	if err := ex.Stage(ctx, "generating_questions", 55, "调用 Claude 生成题目"); err != nil {
+	if err := ex.Stage(ctx, "generating_questions", 55, "AI 正在针对知识点生成题目"); err != nil {
 		return nil, err
 	}
-	resp, runID, err := h.callWith(ctx, ex, req, generate)
+	var resp aipkg.Response
+	var runID uuid.UUID
+	err = piruntime.WithProgress(ctx, func(ctx context.Context, message string) error {
+		return ex.Stage(ctx, "generating_questions", 55, message)
+	}, func(ctx context.Context) error {
+		var callErr error
+		resp, runID, callErr = h.callWith(ctx, ex, req, generate)
+		return callErr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -355,6 +379,9 @@ func (h quizGenerateHandler) Execute(ctx context.Context, ex *worker.Execution) 
 	}
 	if err := ex.Stage(ctx, "validating", 85, "校验题目结果"); err != nil {
 		return nil, err
+	}
+	if err := validateKnowledgeQuestions(result, points, int(count), p.GenerationNotes); err != nil {
+		return nil, h.markRunFailure(ctx, ex, runID, err)
 	}
 	input, err := quizAssembleInput(p, h.Review, ex.Job.ID, result)
 	if err != nil {
@@ -367,7 +394,16 @@ func (h quizGenerateHandler) Execute(ctx context.Context, ex *worker.Execution) 
 	if err := ex.Stage(ctx, "publishing", 95, "发布试卷"); err != nil {
 		return nil, err
 	}
+	var policy map[string]any
+	_ = json.Unmarshal(input.PolicySnapshot, &policy)
+	policy["knowledge_points"] = points
+	policy["generation_notes"] = p.GenerationNotes
+	policy["knowledge_schema_version"] = knowledgeSchemaVersion
+	input.PolicySnapshot, _ = json.Marshal(policy)
 	return &worker.Outcome{Publish: func(ctx context.Context, tx pgx.Tx) ([]byte, error) {
+		if err := (course.Repository{}).ReplaceKnowledge(ctx, tx, p.LessonID, ex.Job.ID, points); err != nil {
+			return nil, err
+		}
 		service := h.quiz
 		if service == nil {
 			service = quiz.NewAssemblyService(h.Pool)
@@ -736,6 +772,9 @@ func parseMarkdownResult(raw json.RawMessage) (string, error) {
 	}
 	if out.Markdown == "" {
 		return "", worker.NewError(worker.ErrCodeClaudeSchemaInvalid, "Claude 文档结果缺少 markdown。", true)
+	}
+	if _, err := aipkg.StudySummaryTitle(out.Markdown); err != nil {
+		return "", worker.NewError(worker.ErrCodeClaudeSchemaInvalid, aipkg.AsProviderError(err).Detail, true)
 	}
 	return out.Markdown, nil
 }

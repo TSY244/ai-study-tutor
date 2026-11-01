@@ -17,6 +17,7 @@ interface ClaudeKeyDialogProps {
 }
 
 interface KeyDraft {
+  protocol: ClaudeKey['protocol']
   name: string
   apiKey: string
   model: string
@@ -30,6 +31,7 @@ interface KeyDraft {
 }
 
 const emptyDraft: KeyDraft = {
+  protocol: 'anthropic',
   name: '',
   apiKey: '',
   model: '',
@@ -45,6 +47,7 @@ const emptyDraft: KeyDraft = {
 function draftFor(keyRecord: ClaudeKey | null): KeyDraft {
   if (!keyRecord) return { ...emptyDraft }
   return {
+    protocol: keyRecord.protocol ?? 'anthropic',
     name: keyRecord.name,
     apiKey: '',
     model: keyRecord.model,
@@ -113,7 +116,7 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
       return
     }
     if (!editing && !apiKey) {
-      setFormError('请输入 Anthropic API Key。')
+      setFormError('请输入 API Key。')
       return
     }
     if (
@@ -128,6 +131,7 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
     }
 
     const common: ClaudeKeyUpdate = {
+      protocol: draft.protocol,
       name,
       model,
       base_url: baseUrl,
@@ -162,7 +166,7 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        title={editing ? '编辑 Claude Key' : '添加 Claude Key'}
+        title={editing ? '编辑模型 Key' : '添加模型 Key'}
         description={
           editing
             ? '密钥留空会保留原值；保存后 API 仍只返回脱敏视图。'
@@ -171,7 +175,7 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
         className="max-w-2xl"
       >
         <form className="space-y-4" onSubmit={(event) => void submit(event)}>
-          {formError ? <FormAlert title="无法保存 Claude Key" description={formError} /> : null}
+          {formError ? <FormAlert title="无法保存模型 Key" description={formError} /> : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -196,7 +200,7 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
                 required
                 maxLength={100}
                 autoComplete="off"
-                placeholder="claude-sonnet-4-5"
+                placeholder={draft.protocol === 'openai' ? '模型 ID' : 'claude-sonnet-4-5'}
                 value={draft.model}
                 onChange={(event) => change('model', event.target.value)}
               />
@@ -204,20 +208,44 @@ export function ClaudeKeyDialog({ open, keyRecord, onOpenChange, onSave }: Claud
           </div>
 
           <div className="space-y-1.5">
+            <Label htmlFor="gateway-protocol">协议</Label>
+            <select
+              id="gateway-protocol"
+              value={draft.protocol}
+              onChange={(event) => change('protocol', event.target.value as KeyDraft['protocol'])}
+              className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm text-text"
+            >
+              <option value="anthropic">Anthropic（Messages）</option>
+              <option value="openai">OpenAI（Chat Completions）</option>
+            </select>
+            <p className="text-xs text-text-subtle">
+              修改后请重新应用到 Pi，让后续链接提取和测验使用新配置。
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
             <Label htmlFor="claude-key-base-url">Base URL</Label>
             <Input
               id="claude-key-base-url"
               autoComplete="off"
-              placeholder="https://api.anthropic.com"
+              placeholder={
+                draft.protocol === 'openai'
+                  ? 'https://api.openai.com/v1'
+                  : 'https://api.anthropic.com'
+              }
               value={draft.baseUrl}
               onChange={(event) => change('baseUrl', event.target.value)}
             />
-            <p className="text-xs text-text-subtle">留空使用部署环境变量 ANTHROPIC_BASE_URL。</p>
+            <p className="text-xs text-text-subtle">
+              {draft.protocol === 'openai'
+                ? '留空使用 https://api.openai.com/v1；兼容网关请填写其 API 基础地址。'
+                : '留空使用部署环境变量 ANTHROPIC_BASE_URL。'}
+            </p>
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="claude-key-secret" required={!editing}>
-              {editing ? 'Anthropic API Key（可选）' : 'Anthropic API Key'}
+              {editing ? 'API Key（可选）' : 'API Key'}
             </Label>
             <div className="flex gap-2">
               <Input

@@ -131,6 +131,25 @@ func main() {
 		Store:   sitecookie.NewStore(cfg.SiteCookiesFile),
 		Checker: sitecookie.NewChecker(nil),
 	})
+	loginSessions := sitecookie.NewLoginSessions(cfg.DataDir)
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := loginSessions.Prune(); err != nil {
+					logger.Warn("bilibili_login_cleanup_failed")
+				}
+			}
+		}
+	}()
+	registry.Register(job.KindBilibiliLogin, &cookiecheck.LoginHandler{
+		Sessions: loginSessions,
+		Proc:     proc.ExecRunner{},
+	})
 	runner := &worker.Runner{
 		Pool:       pool,
 		Registry:   registry,
@@ -174,10 +193,10 @@ type claudeProviders struct {
 	// fake/非 Anthropic Provider 永不是 URL 导入替代品（字段保持 nil）。
 	URLImportAI        aipkg.Provider
 	URLImportAvailable func() bool
-	// URLExtractor 是 URL 素材的 Claude Code CLI 提取器；除网关配置外还
+	// URLExtractor 是 URL 素材的 Pi SDK 提取器；除网关配置外还
 	// 要求有效的运行时 HOME/settings 路径对。
 	URLExtractor lessonimport.URLExtractor
-	// QuizCLI 是测验生成的 Claude Code CLI 生成器（与 URLExtractor 同条件
+	// QuizCLI 是测验生成的 Pi SDK 生成器（与 URLExtractor 同条件
 	// 装配；运行时选择同样从 settings.json/网关 keys.json 解析）。
 	QuizCLI aihandlers.QuizGenerator
 }
@@ -228,27 +247,29 @@ func buildClaudeProviders(cfg config.Config, anthropicKey string, claudeOK bool,
 		providers.URLImportAvailable = func() bool {
 			return gateway.EnabledKeyCount() > 0
 		}
-		// URL 提取走 worker 容器内 Claude Code CLI（WebFetch 客户端抓取）：
+		// B 站先用 bili-cli 获取文字和画面，再由 Pi SDK 总结；其他 URL
+		// 继续由 Pi SDK 获取。站点 Cookie 每次从只读挂载热加载。
 		// 凭证由已应用 settings.json 选择（缺失时按网关优先级回退），
 		// HOME 使用进程运行时 HOME，空值才回退可写数据目录。
 		if runtimeOK {
-			providers.URLExtractor = &lessonimport.ClaudeURLCLIExtractor{
-				Proc:         proc.ExecRunner{},
-				KeysFile:     cfg.Claude.GatewayConfigFile,
-				SettingsFile: runtimeSettingsFile,
-				BaseURL:      cfg.Claude.AnthropicBaseURL,
-				Home:         runtimeHome,
-				ClaudeBin:    "claude",
+			providers.URLExtractor = &lessonimport.PiURLExtractor{
+				Proc:            proc.ExecRunner{},
+				KeysFile:        cfg.Claude.GatewayConfigFile,
+				SettingsFile:    runtimeSettingsFile,
+				BaseURL:         cfg.Claude.AnthropicBaseURL,
+				Home:            runtimeHome,
+				NodeBin:         "node",
+				SiteCookiesFile: cfg.SiteCookiesFile,
 			}
-			// 测验生成走 worker 容器内 Claude Code CLI 文件契约（资料落盘、
+			// 测验生成走 worker 容器内 Pi SDK 文件契约（资料落盘、
 			// agent 自读、quiz.json 产出），绕开单响应 max_tokens 截断。
-			providers.QuizCLI = &aihandlers.ClaudeQuizCLIGenerator{
+			providers.QuizCLI = &aihandlers.PiQuizGenerator{
 				Proc:         proc.ExecRunner{},
 				KeysFile:     cfg.Claude.GatewayConfigFile,
 				SettingsFile: runtimeSettingsFile,
 				BaseURL:      cfg.Claude.AnthropicBaseURL,
 				Home:         runtimeHome,
-				ClaudeBin:    "claude",
+				NodeBin:      "node",
 			}
 		}
 		return providers

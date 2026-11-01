@@ -17,6 +17,8 @@ import (
 	"github.com/TSY244/ai-study-tutor/backend/internal/course"
 	"github.com/TSY244/ai-study-tutor/backend/internal/httpx"
 	"github.com/TSY244/ai-study-tutor/backend/internal/idempotency"
+	"github.com/TSY244/ai-study-tutor/backend/internal/job"
+	"github.com/TSY244/ai-study-tutor/backend/internal/lesson"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/databasetest"
 	"github.com/TSY244/ai-study-tutor/backend/internal/platform/httpserver"
 )
@@ -118,9 +120,11 @@ func TestCreateCourseValidation(t *testing.T) {
 		"Content-Type": "application/json", "Idempotency-Key": uuid.NewString(),
 	}
 
-	// 缺 title → 422 validation_error（field=title）
+	// 未填写标题可创建，等待 AI 命名。
 	rec := apitest.Do(t, e, http.MethodPost, coursesPath, hdr, `{"description":"x"}`)
-	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusUnprocessableEntity, "validation_error")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("optional title: %d %s", rec.Code, rec.Body.String())
+	}
 
 	// title 超长 → 422
 	rec = apitest.Do(t, e, http.MethodPost, coursesPath, hdr, `{"title":"`+strings.Repeat("长", 201)+`"}`)
@@ -287,3 +291,134 @@ func TestDeleteCourseCascade(t *testing.T) {
 		t.Fatalf("课程删除后课时残留 %d 条", n)
 	}
 }
+
+func TestBatchDeleteCourses(t *testing.T) {
+	pool := databasetest.New(t)
+	e := newEngine(t, pool)
+	contract := apitest.Load(t)
+	url := coursesPath + ":batch-delete"
+	hdr := map[string]string{"Content-Type": "application/json"}
+
+	// 空 ids / 缺 ids / 非法 UUID / 超上限 → 400 bad_request
+	rec := apitest.Do(t, e, http.MethodPost, url, hdr, `{"ids":[]}`)
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
+	rec = apitest.Do(t, e, http.MethodPost, url, hdr, `{}`)
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
+	rec = apitest.Do(t, e, http.MethodPost, url, hdr, `{"ids":["not-a-uuid"]}`)
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
+	many := make([]string, 101)
+	for i := range many {
+		many[i] = uuid.NewString()
+	}
+	body, _ := json.Marshal(map[string]any{"ids": many})
+	rec = apitest.Do(t, e, http.MethodPost, url, hdr, string(body))
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusBadRequest, "bad_request")
+
+	// 成功删除多个（重复 id 去重后仍全部删除）
+	a := createCourse(t, e, uuid.NewString(), `{"title":"批删甲"}`)["id"].(string)
+	b := createCourse(t, e, uuid.NewString(), `{"title":"批删乙"}`)["id"].(string)
+	body, _ = json.Marshal(map[string]any{"ids": []string{a, b, a}})
+	rec = apitest.Do(t, e, http.MethodPost, url, hdr, string(body))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, id := range []string{a, b} {
+		rec = apitest.Do(t, e, http.MethodGet, coursesPath+"/"+id, nil, "")
+		contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusNotFound, "not_found")
+	}
+}
+
+func TestBatchDeleteCoursesRollback(t *testing.T) {
+	pool := databasetest.New(t)
+	e := newEngine(t, pool)
+	contract := apitest.Load(t)
+	ctx := context.Background()
+	url := coursesPath + ":batch-delete"
+	hdr := map[string]string{"Content-Type": "application/json"}
+
+	// 含不存在 id → 404 且整体回滚（其余课程仍在）
+	keep := createCourse(t, e, uuid.NewString(), `{"title":"保留"}`)["id"].(string)
+	body, _ := json.Marshal(map[string]any{"ids": []string{keep, uuid.NewString()}})
+	rec := apitest.Do(t, e, http.MethodPost, url, hdr, string(body))
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusNotFound, "not_found")
+	rec = apitest.Do(t, e, http.MethodGet, coursesPath+"/"+keep, nil, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("404 回滚后课程应保留：status=%d", rec.Code)
+	}
+
+	// 含活动 lesson_generation 任务的课程 → 409 resource_busy 且整体回滚
+	busy := createCourse(t, e, uuid.NewString(), `{"title":"繁忙"}`)["id"].(string)
+	lessonID := uuid.New()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO lessons (id, course_id, ordinal, title) VALUES ($1,$2,1,'课时')`,
+		lessonID, busy); err != nil {
+		t.Fatal(err)
+	}
+	fam := job.GenerationFamilyLessonGeneration
+	j := &job.Job{
+		Kind:             job.KindLessonImport,
+		AggregateType:    "lesson",
+		AggregateID:      lessonID,
+		GenerationFamily: &fam,
+		Payload:          []byte(`{}`),
+	}
+	if err := (&job.Repository{}).Create(ctx, pool, j); err != nil {
+		t.Fatal(err)
+	}
+	keep2 := createCourse(t, e, uuid.NewString(), `{"title":"保留二"}`)["id"].(string)
+	body, _ = json.Marshal(map[string]any{"ids": []string{keep2, busy}})
+	rec = apitest.Do(t, e, http.MethodPost, url, hdr, string(body))
+	contract.ValidateProblem(t, rec.Body.Bytes(), http.StatusConflict, "resource_busy")
+	for _, id := range []string{keep2, busy} {
+		rec = apitest.Do(t, e, http.MethodGet, coursesPath+"/"+id, nil, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("409 回滚后课程应保留：id=%s status=%d", id, rec.Code)
+		}
+	}
+}
+
+func TestCourseAutoTitleAndManualRenameProtection(t *testing.T) {
+	pool := databasetest.New(t)
+	e := newEngine(t, pool)
+	ctx := context.Background()
+	for _, body := range []string{`{}`, `{"title":""}`, `{"title":"   "}`} {
+		dto := createCourse(t, e, uuid.NewString(), body)
+		id := uuid.MustParse(dto["id"].(string))
+		c, err := (course.Repository{}).GetByID(ctx, pool, id)
+		if err != nil || !c.TitlePending || c.Title != "待 AI 命名" {
+			t.Fatalf("pending course: %+v %v", c, err)
+		}
+		l := &lesson.Lesson{CourseID: id, Ordinal: 1, Title: "导入课时"}
+		if err := (lesson.Repository{}).Create(ctx, pool, l); err != nil {
+			t.Fatal(err)
+		}
+		if err := (course.Repository{}).ApplyGeneratedTitle(ctx, pool, l.ID, "极限与连续"); err != nil {
+			t.Fatal(err)
+		}
+		if err := (course.Repository{}).ApplyGeneratedTitle(ctx, pool, l.ID, "另一份总结"); err != nil {
+			t.Fatal(err)
+		}
+		c, err = (course.Repository{}).GetByID(ctx, pool, id)
+		if err != nil || c.TitlePending || c.Title != "极限与连续" || c.Version != 2 {
+			t.Fatalf("AI title: %+v %v", c, err)
+		}
+	}
+	dto := createCourse(t, e, uuid.NewString(), `{}`)
+	id := uuid.MustParse(dto["id"].(string))
+	_, err := course.NewService(pool).Update(ctx, id, course.UpdateInput{Title: ptrTitle("手动命名"), Version: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &lesson.Lesson{CourseID: id, Ordinal: 1, Title: "课时"}
+	if err := (lesson.Repository{}).Create(ctx, pool, l); err != nil {
+		t.Fatal(err)
+	}
+	if err := (course.Repository{}).ApplyGeneratedTitle(ctx, pool, l.ID, "AI 名称"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := (course.Repository{}).GetByID(ctx, pool, id)
+	if err != nil || c.TitlePending || c.Title != "手动命名" {
+		t.Fatalf("manual title overwritten: %+v %v", c, err)
+	}
+}
+func ptrTitle(s string) *string { return &s }
