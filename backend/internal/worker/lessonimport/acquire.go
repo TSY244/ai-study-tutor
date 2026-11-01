@@ -202,15 +202,23 @@ func pickSubtitleFile(workDir, langs string) (string, string, error) {
 
 // runWhisper 调用本地 Whisper CLI 转写 wav 文件，返回清洗文本。
 // 保留给上传音视频的 whisper_local 转写（extract.go），URL 路径不再使用。
-func (h *Handler) runWhisper(ctx context.Context, wavPath, workDir string) (string, error) {
+func (h *Handler) runWhisper(ctx context.Context, wavPath, workDir, language string) (string, error) {
 	if strings.TrimSpace(h.WhisperModelPath) == "" {
 		return "", worker.NewError(worker.ErrCodeToolMissing,
 			"TRANSCRIPTION_MODE=whisper_local 已启用但 WHISPER_MODEL_PATH 未配置。", false)
 	}
+	language = strings.ToLower(strings.TrimSpace(language))
+	if language == "" {
+		language = "auto"
+	}
+	// Whisper accepts base language codes, e.g. zh rather than zh-CN.
+	language = strings.SplitN(language, "-", 2)[0]
 	outPrefix := filepath.Join(workDir, "transcript")
 	args := []string{
 		"-m", h.WhisperModelPath,
 		"-f", wavPath,
+		"-l", language,
+		"-t", "4",
 		"-otxt",
 		"-of", outPrefix,
 	}

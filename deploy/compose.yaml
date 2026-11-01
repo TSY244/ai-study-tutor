@@ -128,7 +128,7 @@ services:
       MAX_DOWNLOAD_BYTES: ${MAX_DOWNLOAD_BYTES}
       URL_ALLOWLIST: ${URL_ALLOWLIST:-youtube.com,bilibili.com}
       TRANSCRIPTION_MODE: ${TRANSCRIPTION_MODE}
-      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH}
+      WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/opt/whisper/models/ggml-base.bin}
       SITE_COOKIES_FILE: /config/cookies/bilibili.txt
     secrets:
       - postgres_password

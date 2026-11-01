@@ -142,14 +142,14 @@ make docker-verify-secrets # 可选：运行单元测试并校验渲染后的 Co
 | `CLAUDE_REQUEST_TIMEOUT` | `300s` | 单次 AI 请求超时 |
 | `CLAUDE_MAX_OUTPUT_TOKENS` | `8192` | AI 输出上限 |
 | `WORKER_CONCURRENCY` | `1` | Worker 并行处理的任务数 |
-| `WORKER_JOB_TIMEOUT` | `30m` | 单个任务总超时 |
+| `WORKER_JOB_TIMEOUT` | `30m`（当前部署与示例为 `4h`） | 单个任务总超时；本地音频转写需按录音时长留出时间。 |
 | `JOB_LEASE_DURATION` | `60s` | 任务租约时长（Worker 崩溃后回收依据） |
 | `MAINTENANCE_LEASE_DURATION` / `MAINTENANCE_HEARTBEAT_INTERVAL` | `45s` / `10s` | 备份期间维护锁的租约与心跳 |
 | `MAX_UPLOAD_BYTES` / `MAX_DOWNLOAD_BYTES` | `2147483648` | 上传素材 / 下载远程素材上限（2 GB） |
 | `URL_ALLOWLIST` | `youtube.com,bilibili.com` | URL 素材主机白名单，逗号分隔；父域条目允许其子域，API 与 Worker 使用同一值；Worker 侧另做 canonicalClaudeURL 规范化（剥离追踪参数、拒绝 userinfo/端口、250 字符上限）后提取；B 站仅接受 `/video/BV…` 或 `/video/av…` 链接并保留 `p` 分 P，其余站点沿用 Pi SDK（Worker 需出网访问这些站点） |
 | `URL_API_DNS_VALIDATION` | `false` | 标准 Compose 的 API 无出网能力，因此只做协议/白名单校验；URL 实际抓取由 Worker 内 bili-cli（B 站）或 Pi SDK（其他站点）完成（抓取在 Job 内直接对白名单站点出网，不做预检），不再依赖 API 侧 DNS/重定向链校验 |
-| `TRANSCRIPTION_MODE` | `subtitle_only` | 上传音视频的转写策略；`subtitle_only` 只用已有字幕不做本地转写；URL 素材不适用（B 站使用 bili-cli 自己的字幕/ASR 策略） |
-| `WHISPER_MODEL_PATH` | 空 | 本地 Whisper 模型路径（启用本地转写时用，仅上传音视频） |
+| `TRANSCRIPTION_MODE` | `subtitle_only`（新部署示例为 `whisper_local`） | 上传音视频的默认策略；音频专用入口会显式启用本地转写。`subtitle_only` 仅使用已有字幕；URL 素材不适用。 |
+| `WHISPER_MODEL_PATH` | `/opt/whisper/models/ggml-base.bin` | Worker 镜像内置的多语言 Whisper 模型；可改为容器内其他兼容模型路径，仅上传音视频使用。 |
 | `BACKUP_DIR` / `IMPORT_REPORT_DIR` / `LEGACY_SOURCE_DIR` | `../backups` 等 | 一次性工具容器挂载的宿主机目录，相对 `deploy/` |
 | `CLAUDE_GATEWAY_CONFIG_DIR` | `../data/claude-gateway` | Claude 多 Key 网关配置目录（`keys.json`），只挂载进 `api`/`worker`，init 脚本创建为 0700 |
 | `COOKIES_CONFIG_DIR` | `../data/cookies` | 站点登录 Cookie 目录（`bilibili.txt` 放 B 站 `SESSDATA`，Netscape 格式，0600），`api` 读写挂载、`worker` 只读挂载到 `/config/cookies`；推荐在 Web 设置页「B 站 Cookie」保存/替换/删除并「检测可用性」（Worker 请求 B 站 nav 端点验证登录状态），也可手动放文件；B 站 AI 字幕通常需登录才能获取（如 ai-zh），Worker 每次读取后转换为任务独立的 bili-cli 凭证，获取完成即删除；无 Cookie 时尝试匿名获取，字幕不可用会明确标注，不回退页面简介 |
@@ -329,3 +329,7 @@ Pi 会话、凭证和模型目录仅存内存，关闭插件、技能和项目�
 Pi SDK 对 Anthropic 和 OpenAI 均使用流式模型请求。桥接进程通过 stderr 的有界 NDJSON 实时发送启动、生成字符计数及 read/write/bash 工具状态；stdout 保持一个最终结果信封。Worker 在进程结束前解析这些状态，写入已有 `job.progress` 事件，前端任务页和进度卡经现有 SSE 自动刷新，不需要等待整次生成结束。
 
 生成字符数是已接收的文本/工具参数增量计数，不是完成百分比。正文、思考过程、工具参数和工具结果不会进入任务事件；最终文档或试卷仍按原文件契约校验后发布。任务取消、超时或进度更新丢失租约时会中止子进程。部署本次变更需重建并启动 Worker/Web；继续使用现有 API 和 SSE 协议。
+
+音频导入入口和流程见 [音频创建课程](audio-course-import.md)。当前 Worker 镜像已内置转写程序与多语言 base 模型，首次构建需要下载模型，运行时转写不依赖云端语音服务。
+
+图片、扫描 PDF、PPTX 和批量文件的入口、限制与解析方式见[文件课程导入](file-course-import.md)。Worker 镜像内置 Tesseract 中英文语言包，部署此功能须更新 Worker、API 和前端，无需迁移数据库。

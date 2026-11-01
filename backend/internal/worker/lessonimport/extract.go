@@ -16,12 +16,12 @@ const (
 	txtVersion   = "txt/v1"
 	srtVersion   = "srt/v1"
 	vttVersion   = "vtt/v1"
-	pdfVersion   = "pdf/v1"
-	mediaVersion = "media/v1"
+	pdfVersion   = "pdf-ocr/v2"
+	mediaVersion = "whisper-local/v2"
 )
 
 // extract 按检测类型提取文本，返回（可能未归一化的）文本与提取器版本。
-func (h *Handler) extract(ctx context.Context, path, dtype, effectiveMode, workDir string) (string, string, error) {
+func (h *Handler) extract(ctx context.Context, path, dtype, effectiveMode, workDir, language string) (string, string, error) {
 	switch dtype {
 	case TypeTXT, TypeMD:
 		text, err := readTextFile(path)
@@ -51,13 +51,19 @@ func (h *Handler) extract(ctx context.Context, path, dtype, effectiveMode, workD
 				"DOCX 文件解析失败，文件可能损坏。", false, err)
 		}
 		return text, DocxVersion, nil
+	case TypeImage:
+		text, err := h.extractImage(ctx, path, workDir)
+		return text, "image-ocr/v1", err
+	case TypePPTX:
+		text, err := h.extractPPTX(ctx, path, workDir)
+		return text, "pptx/v1", err
 	case TypePDF:
 		return h.extractPDF(ctx, path, workDir)
 	case TypeAudio, TypeVideo:
-		return h.extractMedia(ctx, path, dtype, effectiveMode, workDir)
+		return h.extractMedia(ctx, path, dtype, effectiveMode, workDir, language)
 	default:
 		return "", "", worker.NewError(worker.ErrCodeUnsupportedType,
-			"无法识别的文件类型。支持：PDF/DOCX/TXT/Markdown/SRT/VTT/HTML 及常见音视频。", false)
+			"无法识别的文件类型。支持：图片/PDF/PPTX/DOCX/TXT/Markdown/SRT/VTT/HTML 及常见音视频。", false)
 	}
 }
 
@@ -74,28 +80,13 @@ func readTextFile(path string) (string, error) {
 	return string(raw), nil
 }
 
-// extractPDF 经 pdftotext（poppler，参数数组）提取文本。
-func (h *Handler) extractPDF(ctx context.Context, path, workDir string) (string, string, error) {
-	args := []string{"-layout", "-enc", "UTF-8", path, "-"}
-	res, err := h.Proc.Run(ctx, proc.Cmd{Name: h.PdftotextBin, Args: args, Dir: workDir})
-	if err != nil {
-		var exitErr *proc.ExitError
-		if errors.As(err, &exitErr) {
-			return "", "", worker.NewError(worker.ErrCodeParseFailed,
-				"PDF 文件解析失败，文件可能损坏或加密。", false)
-		}
-		return "", "", classifyProcErr(h.PdftotextBin, err)
-	}
-	return string(res.Stdout), pdfVersion, nil
-}
-
 // extractMedia 音视频管线：内嵌字幕优先（ffmpeg -map 0:s:0），否则按
 // 转写模式 whisper_local 转写或返回可行动 transcript_required（03 §8.4）。
 // 同目录字幕不适用：上传是单文件，任务目录按 job_id 隔离。
-func (h *Handler) extractMedia(ctx context.Context, path, dtype, effectiveMode, workDir string) (string, string, error) {
+func (h *Handler) extractMedia(ctx context.Context, path, dtype, effectiveMode, workDir, language string) (string, string, error) {
 	// 1) 内嵌字幕。
 	subPath := filepath.Join(workDir, "embedded.srt")
-	args := []string{"-i", path, "-map", "0:s:0", "-f", "srt", subPath, "-y"}
+	args := []string{"-nostdin", "-i", path, "-map", "0:s:0", "-f", "srt", subPath, "-y"}
 	if _, err := h.Proc.Run(ctx, proc.Cmd{Name: h.FFmpegBin, Args: args, Dir: workDir}); err == nil {
 		if raw, rerr := os.ReadFile(subPath); rerr == nil {
 			if text := CleanSubtitle(string(raw)); text != "" {
@@ -117,11 +108,11 @@ func (h *Handler) extractMedia(ctx context.Context, path, dtype, effectiveMode, 
 	}
 	// 3) whisper_local：ffmpeg 提取 16kHz 单声道音轨（与 legacy 参数一致）。
 	wavPath := filepath.Join(workDir, "audio.wav")
-	args = []string{"-i", path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", wavPath, "-y"}
+	args = []string{"-nostdin", "-i", path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", wavPath, "-y"}
 	if _, err := h.Proc.Run(ctx, proc.Cmd{Name: h.FFmpegBin, Args: args, Dir: workDir}); err != nil {
 		return "", "", classifyProcErr(h.FFmpegBin, err)
 	}
-	text, err := h.runWhisper(ctx, wavPath, workDir)
+	text, err := h.runWhisper(ctx, wavPath, workDir, language)
 	if err != nil {
 		return "", "", err
 	}

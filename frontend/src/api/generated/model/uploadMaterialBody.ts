@@ -7,6 +7,7 @@ import type { UploadMaterialBodyTranscriptionMode } from './uploadMaterialBodyTr
 
 export type UploadMaterialBody = {
   file: Blob;
+  /** 音频识别语言，如 zh、en；留空时自动识别。 */
   preferred_language?: string;
   transcription_mode?: UploadMaterialBodyTranscriptionMode;
 };

@@ -723,3 +723,40 @@ func TestMaintenanceMode(t *testing.T) {
 	}
 	apitest.Load(t).ValidateProblem(t, body, 503, "maintenance_mode")
 }
+
+func TestUploadFormatsUseContentSignatures(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		head []byte
+		mime string
+	}{
+		{"scan.png", []byte("\x89PNG\r\n\x1a\n"), "image/png"},
+		{"scan.jpg", []byte{0xff, 0xd8, 0xff}, "image/jpeg"},
+		{"scan.webp", []byte("RIFFxxxxWEBPVP8 "), "image/webp"},
+		{"scan.tiff", []byte("II\x2a\x00"), "image/tiff"},
+		{"scan-be.tiff", []byte("MM\x00\x2a"), "image/tiff"},
+		{"scan.bmp", []byte("BM"), "image/bmp"},
+		{"scan.gif", []byte("GIF89a"), "image/gif"},
+		{"deck.pptx", []byte("PK\x03\x04"), "application/zip"},
+		{"lecture.m4a", []byte("\x00\x00\x00\x1cftypM4A \x00\x00\x02\x00M4A isomiso2"), "audio/mp4"},
+		{"lecture.flac", []byte("fLaC\x00\x00\x00\x22"), "audio/flac"},
+		{"lecture.ogg", []byte("OggS\x00\x02"), "application/ogg"},
+		{"lecture.opus", []byte("OggS\x00\x02"), "application/ogg"},
+		{"lecture.mp3", []byte{0xff, 0xfb, 0x90, 0x64}, "audio/mpeg"},
+		{"lecture.aac", []byte{0xff, 0xf1, 0x50, 0x80}, "audio/aac"},
+		{"lecture.wav", []byte("RIFF\x00\x00\x00\x00WAVE"), "audio/wave"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newEnv(t, 0)
+			lid := e.newLesson(t)
+			code, body, _ := e.postMultipart(t, "/api/v1/lessons/"+lid.String()+"/materials/upload", map[string]string{"transcription_mode": "whisper_local", "preferred_language": "zh"}, "file", c.name, append(c.head, make([]byte, 1024)...), uuid.NewString())
+			if code != 202 {
+				t.Fatalf("audio rejected %d %s", code, body)
+			}
+			var actual string
+			if err := e.pool.QueryRow(context.Background(), `SELECT f.media_type FROM materials m JOIN file_objects f ON f.id=m.file_object_id WHERE m.id=$1`, materialOf(t, body)["id"]).Scan(&actual); err != nil || actual != c.mime {
+				t.Fatalf("MIME %q %v", actual, err)
+			}
+		})
+	}
+}

@@ -11,6 +11,7 @@ const SOURCES = [
   { value: 'text', label: '文本' },
   { value: 'url', label: '链接' },
   { value: 'upload', label: '文件' },
+  { value: 'audio', label: '音频' },
 ] as const
 
 /**
@@ -41,7 +42,8 @@ export function ImportPanel({ lesson }: { lesson: Lesson }) {
         导入素材
       </h2>
       <p className="mt-1 text-sm text-text-muted">
-        文本、链接或文件都会创建后台生成任务，产出学生笔记与教师教纲。离开页面任务不中断。
+        文本、链接、图片、扫描 PDF、PPTX 或音频均可导入。先提取原文，再由 AI
+        总结并生成笔记与教纲；离开页面任务不中断。
       </p>
       {lesson.status === 'failed' ? (
         <p className="mt-2 rounded-md bg-warn-bg px-3 py-2 text-sm text-warn">
@@ -72,6 +74,9 @@ export function ImportPanel({ lesson }: { lesson: Lesson }) {
         </Content>
         <Content value="upload" className="pt-4">
           <UploadImportForm lesson={lesson} />
+        </Content>
+        <Content value="audio" className="pt-4">
+          <UploadImportForm lesson={lesson} audioOnly />
         </Content>
       </Root>
     </section>

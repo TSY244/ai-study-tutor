@@ -217,10 +217,18 @@ func (h *Handler) Execute(ctx context.Context, ex *worker.Execution) (*worker.Ou
 		}
 	}
 
-	if err := ex.Stage(ctx, StageExtracting, progressExtracting, "提取文本内容"); err != nil {
+	extractMessage := "提取文本内容"
+	if dtype == TypeImage || dtype == TypePDF {
+		extractMessage = "提取文字，自动识别图片和扫描页（OCR）"
+	} else if dtype == TypePPTX {
+		extractMessage = "按幻灯片提取文字、备注、图表及图片文字"
+	} else if dtype == TypeAudio {
+		extractMessage = "将音频转写为文本"
+	}
+	if err := ex.Stage(ctx, StageExtracting, progressExtracting, extractMessage); err != nil {
 		return nil, err
 	}
-	rawText, parserVersion, err := h.extract(ctx, acq.path, dtype, effectiveMode(h, p), ex.WorkDir)
+	rawText, parserVersion, err := h.extract(ctx, acq.path, dtype, effectiveMode(h, p), ex.WorkDir, p.PreferredLanguage)
 	if err != nil {
 		return nil, err
 	}

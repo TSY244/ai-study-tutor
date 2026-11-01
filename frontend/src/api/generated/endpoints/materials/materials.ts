@@ -73,6 +73,7 @@ export const getUploadMaterialUrl = (lessonId: string,) => {
 }
 
 /**
+ * 支持图片（PNG/JPEG/WebP/TIFF/BMP/GIF）、PDF（含扫描页 OCR）、PPTX（幻灯片文字、备注、图表、图片 OCR）、DOCX、文本及音视频。PDF/PPTX 最多 300 页。音频 MP3/WAV/M4A/FLAC/OGG/OPUS/AAC 使用 transcription_mode=whisper_local。所有来源先提取原文，再生成 AI 笔记和教纲。批量导入逐文件创建课时并调用本接口，每个课时的上传使用独立 Idempotency-Key。
  * @summary 上传文件素材并创建导入任务
  */
 export const uploadMaterial = async (lessonId: string,

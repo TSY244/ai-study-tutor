@@ -1,6 +1,7 @@
 package material
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -37,10 +38,20 @@ const (
 // 中的 audio/x-wav 在更早工具链上使用），两者都接受。
 var allowedMIME = map[string]bool{
 	"application/pdf": true,
+	"image/png":       true,
+	"image/jpeg":      true,
+	"image/gif":       true,
+	"image/bmp":       true,
+	"image/tiff":      true,
+	"image/webp":      true,
 	"application/zip": true,
 	"text/plain":      true,
 	"text/html":       true,
 	"audio/mpeg":      true,
+	"audio/aac":       true,
+	"audio/flac":      true,
+	"audio/ogg":       true,
+	"application/ogg": true,
 	"audio/mp4":       true,
 	"audio/x-wav":     true,
 	"audio/wave":      true,
@@ -341,7 +352,7 @@ func (h *Handler) streamUpload(mr *multipart.Reader, stagedPath string) (*upload
 	if err != nil || !allowedMIME[base] {
 		return nil, httpx.NewProblemError(http.StatusUnsupportedMediaType,
 			"unsupported_media_type", "不支持的文件类型",
-			"仅支持 PDF/DOCX/文本/字幕/HTML/常见音视频素材。")
+			"仅支持 图片/PDF/PPTX/DOCX/文本/字幕/HTML/常见音视频素材。")
 	}
 	if form.transcriptionMode != "" &&
 		form.transcriptionMode != TranscriptionSubtitleOnly &&
@@ -374,6 +385,21 @@ func stageFile(part *multipart.Part, stagedPath string) (mediaType, shaHex strin
 	}
 	head = head[:n]
 	mediaType = http.DetectContentType(head)
+	// Go's standard sniffer misses FLAC, some M4A containers and headerless MP3/AAC.
+	// Match actual signatures; never trust the browser MIME or filename.
+	if bytes.HasPrefix(head, []byte("II\x2a\x00")) || bytes.HasPrefix(head, []byte("MM\x00\x2a")) {
+		mediaType = "image/tiff"
+	} else if bytes.HasPrefix(head, []byte("fLaC")) {
+		mediaType = "audio/flac"
+	} else if len(head) >= 12 && string(head[4:8]) == "ftyp" && (string(head[8:11]) == "M4A" || string(head[8:11]) == "M4B") {
+		mediaType = "audio/mp4"
+	} else if len(head) >= 2 && head[0] == 0xff && head[1]&0xe0 == 0xe0 {
+		if head[1]&0xf6 == 0xf0 {
+			mediaType = "audio/aac"
+		} else {
+			mediaType = "audio/mpeg"
+		}
+	}
 	h := sha256.New()
 	w := io.MultiWriter(f, h)
 	if _, err := w.Write(head); err != nil {

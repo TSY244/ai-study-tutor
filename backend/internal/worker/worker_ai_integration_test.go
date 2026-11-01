@@ -3,6 +3,9 @@ package worker_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/TSY244/ai-study-tutor/backend/internal/worker/proc"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -60,5 +63,58 @@ func TestLessonImportWithAIProviderPublishesAllDocuments(t *testing.T) {
 		if !strings.Contains(stages, want) {
 			t.Fatalf("阶段事件缺少 %s: %s", want, stages)
 		}
+	}
+}
+
+func TestAudioTranscriptFeedsAISummaryAndIsRetainedAsRawDocument(t *testing.T) {
+	e := newEnv(t)
+	lid := e.newLesson(t)
+	e.handler.WhisperModelPath = "/models/base.bin"
+	transcript := "二分查找要求有序输入。每次比较中间元素，排除一半范围。"
+	transcribed := false
+	e.fake.OnRun = func(ctx context.Context, cmd proc.Cmd) (*proc.Result, error) {
+		switch cmd.Name {
+		case "ffmpeg":
+			if strings.Contains(strings.Join(cmd.Args, " "), "0:s:0") {
+				return nil, &proc.ExitError{Code: 1}
+			}
+			return &proc.Result{}, nil
+		case "whisper-cli":
+			if err := os.WriteFile(filepath.Join(cmd.Dir, "transcript.txt"), []byte(transcript), 0600); err != nil {
+				t.Fatal(err)
+			}
+			transcribed = true
+			return &proc.Result{}, nil
+		default:
+			t.Fatalf("unexpected command %s", cmd.Name)
+			return nil, nil
+		}
+	}
+	fakeAI := ai.NewFakeProvider()
+	e.handler.AI = fakeAI
+	fakeAI.OnGenerate = func(ctx context.Context, req ai.Request) (ai.Response, error) {
+		if !transcribed || !strings.Contains(req.User, transcript) {
+			t.Fatal("AI must receive ASR text only after transcription")
+		}
+		markdown := "# 二分查找\n\n## 综合总结\n\n### 内容概览\n学习二分查找。\n\n### 核心知识点\n输入有序。\n\n### 知识结构\n比较后缩小范围。\n\n### 示例与应用\n资料未提供示例。\n\n### 结论与复习\n复习二分查找的前提。\n\n### 来源与局限\n依据音频转写，识别可能有误。"
+		raw, _ := json.Marshal(map[string]string{"markdown": markdown})
+		return ai.Response{JSON: raw, Model: "test"}, nil
+	}
+	_, jid := e.newUploadImport(t, lid, "讲课.mp3", append([]byte("ID3"), make([]byte, 512)...), map[string]any{"transcription_mode": "whisper_local", "preferred_language": "zh"})
+	e.runOnce(t)
+	if j := getJob(t, e.pool, jid); j.Status != "succeeded" {
+		t.Fatalf("audio import failed %s %v", j.Status, j.ErrorCode)
+	}
+	raw, err := (document.Repository{}).GetActive(context.Background(), e.pool, lid, document.KindRawText)
+	if err != nil || !strings.Contains(raw.ContentMD, transcript) {
+		t.Fatalf("transcript was lost: %v %v", raw, err)
+	}
+	for _, kind := range []string{document.KindStudentNotes, document.KindTeacherOutline} {
+		if _, err := (document.Repository{}).GetActive(context.Background(), e.pool, lid, kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(fakeAI.Requests()) != 2 {
+		t.Fatal("must generate both notes and outline")
 	}
 }

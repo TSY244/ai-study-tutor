@@ -12,6 +12,8 @@ import (
 const (
 	TypePDF     = "pdf"
 	TypeDOCX    = "docx"
+	TypePPTX    = "pptx"
+	TypeImage   = "image"
 	TypeTXT     = "txt"
 	TypeMD      = "md"
 	TypeSRT     = "srt"
@@ -24,7 +26,7 @@ const (
 
 // 音视频容器 Magic -> 类型。audio/video 的区分结合扩展名提示
 // （Magic 只能给出容器，如 ftyp 同时覆盖 mp4/m4a）。
-var audioExts = map[string]bool{".mp3": true, ".wav": true, ".flac": true, ".m4a": true, ".ogg": true}
+var audioExts = map[string]bool{".mp3": true, ".wav": true, ".flac": true, ".m4a": true, ".ogg": true, ".opus": true, ".aac": true}
 var videoExts = map[string]bool{".mp4": true, ".mkv": true, ".avi": true, ".mov": true}
 
 // DetectType 以内容 Magic 为主、扩展名为辅判定素材类型。
@@ -55,10 +57,16 @@ func detectType(head []byte, ext string) Type {
 		return TypePDF
 	}
 	if bytes.HasPrefix(head, []byte("PK\x03\x04")) {
+		if ext == ".pptx" || bytes.Contains(head, []byte("ppt/presentation.xml")) {
+			return TypePPTX
+		}
 		if isDocxBytes(head) || ext == ".docx" || ext == ".doc" {
 			return TypeDOCX
 		}
 		return TypeUnknown
+	}
+	if isImageMagic(head) {
+		return TypeImage
 	}
 	if isMediaMagic(head) {
 		switch {
@@ -159,4 +167,13 @@ func looksLikeHTML(text string) bool {
 	return strings.Contains(lower, "<!doctype html") ||
 		strings.Contains(lower, "<html") ||
 		(strings.Contains(lower, "<head") && strings.Contains(lower, "<body"))
+}
+
+func isImageMagic(head []byte) bool {
+	return bytes.HasPrefix(head, []byte("\x89PNG\r\n\x1a\n")) ||
+		bytes.HasPrefix(head, []byte{0xff, 0xd8, 0xff}) ||
+		bytes.HasPrefix(head, []byte("GIF87a")) || bytes.HasPrefix(head, []byte("GIF89a")) ||
+		bytes.HasPrefix(head, []byte("BM")) || bytes.HasPrefix(head, []byte("II\x2a\x00")) ||
+		bytes.HasPrefix(head, []byte("MM\x00\x2a")) ||
+		(len(head) >= 12 && string(head[:4]) == "RIFF" && string(head[8:12]) == "WEBP")
 }

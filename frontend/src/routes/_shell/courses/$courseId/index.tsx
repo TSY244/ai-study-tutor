@@ -1,3 +1,5 @@
+import { FileCourseForm } from '@/features/courses/file-course-form'
+import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog'
 import { DeleteContentButton } from '@/features/content/delete-content-button'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
@@ -134,7 +136,21 @@ function CourseDetailPage() {
           <h2 id="lessons-heading" className="text-base font-medium text-text">
             课时
           </h2>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="secondary" size="sm">
+                  批量导入
+                </Button>
+              </DialogTrigger>
+              <DialogContent
+                title="导入课程文件"
+                description="支持图片、扫描 PDF、PPTX 及其他课程资料，每个文件创建一个课时。"
+                className="max-w-2xl"
+              >
+                <FileCourseForm courseId={courseId} />
+              </DialogContent>
+            </Dialog>
             {lessonsQuery.isSuccess && lessons.length > 0 && !selecting ? (
               <Button variant="secondary" size="sm" onClick={() => setSelecting(true)}>
                 选择
